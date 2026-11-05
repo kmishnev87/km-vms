@@ -327,7 +327,7 @@ compose_with_archive_roots() {
 }
 
 archive_roots_compose_file() {
-  printf '%s\n' "$APP_DIR/data/install-control/docker-compose.archive-roots.yml"
+  printf '%s\n' "$APP_DIR/data/install-control/archive-roots-runtime.json"
 }
 
 archive_roots_compose_present() {

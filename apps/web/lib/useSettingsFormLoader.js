@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiFetch } from "./api";
+import { apiFetch, captureAuthSession } from "./api";
+import { useCurrentUser } from "./currentUser";
 import { normalizeLocale } from "./i18n";
 import { languageOf, settingsDraftFromApi } from "./settingsPageHelpers";
 
@@ -12,7 +13,7 @@ export default function useSettingsFormLoader({ showToast, normalizedError }) {
   const [savedDraft, setSavedDraft] = useState(null);
   const [hardware, setHardware] = useState(null);
   const [formatStatus, setFormatStatus] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
+  const { currentUser } = useCurrentUser();
   const lang = languageOf(draft || savedDraft);
 
   useEffect(() => {
@@ -32,7 +33,8 @@ export default function useSettingsFormLoader({ showToast, normalizedError }) {
 
   async function load() {
     const generation = ++loadGenerationRef.current;
-    const ownsLoad = () => generation === loadGenerationRef.current;
+    const ownsSession = captureAuthSession();
+    const ownsLoad = () => ownsSession() && generation === loadGenerationRef.current;
     const failed = (err) => { if (ownsLoad()) showToast(normalizedError(err, lang)); };
     await Promise.allSettled([
       apiFetch("/settings").then((settingsData) => {
@@ -43,10 +45,6 @@ export default function useSettingsFormLoader({ showToast, normalizedError }) {
         setFormatStatus(settingsData.recording_format_change);
       }).catch(failed),
       apiFetch("/hardware/capabilities").then((data) => { if (ownsLoad()) setHardware(data); }).catch(failed),
-      apiFetch("/users/me").then((meData) => {
-        if (!ownsLoad()) return;
-        setCurrentUser(meData);
-      }).catch(failed),
     ]);
   }
 
@@ -54,5 +52,5 @@ export default function useSettingsFormLoader({ showToast, normalizedError }) {
     setDraft((current) => current ? ({ ...current, [key]: value }) : current);
   }
 
-  return { draft, setDraft, savedDraft, setSavedDraft, hardware, setHardware, formatStatus, setFormatStatus, currentUser, setCurrentUser, pendingLanguageRef, patch, load, lang };
+  return { draft, setDraft, savedDraft, setSavedDraft, hardware, setHardware, formatStatus, setFormatStatus, currentUser, pendingLanguageRef, patch, load, lang };
 }

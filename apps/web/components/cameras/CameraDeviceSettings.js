@@ -152,7 +152,7 @@ export default function CameraDeviceSettings({ cameraId, form, profiles, copy, o
                   {meta.options.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               : <input className="input" type={numeric ? "number" : "text"} min={meta.range?.min} max={meta.range?.max}
-                  step={meta.range?.step || (key === "quality" || key === "fps" ? "any" : 1)} value={value} onChange={change} disabled={busy} aria-labelledby={`${fieldId}-${key}`} aria-invalid={invalidField === key} />
+                  step={meta.range?.step || (meta.number_type === "integer" ? 1 : key === "quality" || key === "fps" ? "any" : 1)} value={value} onChange={change} disabled={busy} aria-labelledby={`${fieldId}-${key}`} aria-invalid={invalidField === key} />
               : <span className="cameraFlowReadonly">{value === "" ? copy.notReceived : value}</span>}
           </label>;
         })}

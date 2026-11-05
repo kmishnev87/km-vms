@@ -32,6 +32,7 @@ from app.services.current_db_restore import (
     current_restore_preflight,
     read_current_restore_status,
     request_current_restore,
+    reconcile_current_restore,
 )
 from app.services.upgrade_report import build_upgrade_report
 
@@ -509,6 +510,24 @@ class CurrentRestoreApplyRequest(BaseModel):
     submission_id: str = Field(min_length=36, max_length=36)
     confirm: bool
     confirmation_phrase: str = Field(min_length=1, max_length=32)
+
+
+class CurrentRestoreReconcileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    artifact_id: str = Field(min_length=1, max_length=80)
+    submission_id: str = Field(min_length=36, max_length=36)
+
+
+@restore_router.post("/current/reconcile")
+def current_restore_reconcile_route(
+    payload: CurrentRestoreReconcileRequest,
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        return reconcile_current_restore(submission_id=payload.submission_id,
+            artifact_id=payload.artifact_id, actor=current_user)
+    except CurrentRestoreBlocked as exc:
+        raise _current_restore_error(exc)
 
 
 def _current_restore_error(exc: CurrentRestoreBlocked) -> HTTPException:

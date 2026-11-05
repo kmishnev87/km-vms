@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.core.request_limits import RequestBodyLimitMiddleware
 from app.core.sanitization import redact_text
 from app.core.version import APP_VERSION
 from app.db.session import SessionLocal
@@ -134,6 +135,7 @@ app = FastAPI(
     version=APP_VERSION,
 )
 
+app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins(),

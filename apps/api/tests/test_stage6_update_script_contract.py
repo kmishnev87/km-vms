@@ -714,6 +714,7 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     )
 
     expected = "d" * 40
+    monkeypatch.setattr(helper, "authorize_update_source", lambda source: dict(source))
     commands = []
 
     def fake_run_child(command, request_arg, update_dir, env, **kwargs):
@@ -753,8 +754,8 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
             "channel": "stable",
             "version": "0.8.0",
             "source_type": "github_tarball",
-            "repo": "owner/repo",
-            "ref": "main",
+            "repo": "kmishnev87/km-vms",
+            "ref": "v0.8.0",
             "commit": expected,
             "apply_ref": expected,
         },
@@ -768,11 +769,11 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
         "sh",
         str(active_source_dir / "scripts" / "update.sh"),
         "--github-repo",
-        "owner/repo",
+        "kmishnev87/km-vms",
         "--branch",
         expected,
     ]
-    assert "main" not in commands[0]
+    assert "v0.8.0" not in commands[0]
     trusted_index = commands[0].index("--trusted-commit")
     assert commands[0][trusted_index + 1] == expected
     status = published[0][1]
@@ -938,6 +939,7 @@ def test_update_helper_drops_unavailable_container_and_host_compose_overrides(tm
 
     expected = "e" * 40
     seen_compose_values = []
+    monkeypatch.setattr(helper, "authorize_update_source", lambda source: dict(source))
     monkeypatch.setenv("KM_VMS_DOCKER_COMPOSE", "/Volume1/@apps/DockerEngine/dockerd/bin/docker-compose")
     monkeypatch.setenv("KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE", "docker-compose")
     monkeypatch.setattr(helper.shutil, "which", lambda _command: None)
@@ -979,8 +981,8 @@ def test_update_helper_drops_unavailable_container_and_host_compose_overrides(tm
             "channel": "stable",
             "version": "0.8.0",
             "source_type": "github_tarball",
-            "repo": "owner/repo",
-            "ref": expected,
+            "repo": "kmishnev87/km-vms",
+            "ref": "v0.8.0",
             "commit": expected,
             "apply_ref": expected,
         },

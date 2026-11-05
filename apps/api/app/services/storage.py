@@ -9,10 +9,11 @@ from app.models.camera import Camera
 
 def slugify_camera_name(name: str) -> str:
     value = name.strip()
-    value = re.sub(r"[\\\\/:*?\"<>|]+", "_", value)
+    value = re.sub(r"[\x00-\x1f\x7f%\\\\/:*?\"<>|]+", "_", value)
     value = re.sub(r"\s+", "_", value)
     value = re.sub(r"_+", "_", value)
-    return value[:120].strip("_") or "camera"
+    value = value[:120].encode("utf-8")[:231].decode("utf-8", errors="ignore")
+    return value.strip("_") or "camera"
 
 
 def build_unique_folder_name(db: Session, camera_name: str) -> str:
@@ -21,7 +22,8 @@ def build_unique_folder_name(db: Session, camera_name: str) -> str:
     counter = 2
 
     while db.query(Camera).filter(Camera.storage_folder_name == candidate).first():
-        candidate = f"{base}_{counter}"
+        suffix = f"_{counter}"
+        candidate = base.encode("utf-8")[:255 - len(suffix)].decode("utf-8", errors="ignore") + suffix
         counter += 1
 
     return candidate

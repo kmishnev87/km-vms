@@ -23,9 +23,12 @@ class UpdateOperationHandler:
     update_child_env: Callable
     verify_installed_commit: Callable
     write_json: Callable
+    authorize_source: Callable
 
     def run_update(self, request: dict[str, Any]) -> int:
-        source = request["source"]
+        # Independent installed-helper authority must precede every target or
+        # source-acquisition child, including the target's permission gate.
+        source = self.authorize_source(request["source"])
         update_dir = self.compose_app_dir()
         update_source_dir = self.resolve_update_source_dir(update_dir)
         expected_commit = str(source["commit"])

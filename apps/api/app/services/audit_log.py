@@ -10,6 +10,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.sanitization import redact_text
+from app.core.request_client import request_client_ip
 from app.db.session import SessionLocal
 from app.models.audit_event import AuditEvent
 from app.services.timezone_contract import (
@@ -47,13 +48,7 @@ SENSITIVE_KEY_RE = re.compile(
 
 
 def request_ip(request) -> str | None:
-    if request is None:
-        return None
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:100]
-    client = getattr(request, "client", None)
-    return getattr(client, "host", None)
+    return request_client_ip(request)
 
 
 def request_user_agent(request) -> str | None:

@@ -788,14 +788,26 @@ acquire_github_tarball() {
   prepare_github_token_config
   SOURCE_MODE="github-tarball"
   SOURCE_PROVENANCE_KIND="github-tarball"
+  # Resolve the moving ref once, then fetch that exact commit. Otherwise a
+  # branch advance during download can bind one tree to another tree's SHA.
+  resolve_github_commit_sha
+  case "$SOURCE_COMMIT_SHA" in
+    *[!0-9a-fA-F]*|"")
+      clear_github_token
+      acquisition_fail "Cannot resolve the selected GitHub ref to an immutable commit."
+      ;;
+  esac
+  if [ "${#SOURCE_COMMIT_SHA}" -ne 40 ]; then
+    clear_github_token
+    acquisition_fail "Cannot resolve the selected GitHub ref to an immutable commit."
+  fi
   km_vms_command_exists mktemp || fail "mktemp is required for GitHub tarball acquisition."
   archive=$(mktemp "${TMPDIR:-/tmp}/km-vms-source.XXXXXX.tar.gz")
-  tarball_url="https://api.github.com/repos/$GITHUB_REPO/tarball/$BRANCH"
+  tarball_url="https://api.github.com/repos/$GITHUB_REPO/tarball/$SOURCE_COMMIT_SHA"
   if ! http_download "$tarball_url" "$archive"; then
     clear_github_token
     acquisition_fail "GitHub tarball acquisition failed. If the repository is private, rerun with --github-private and a secure token source."
   fi
-  resolve_github_commit_sha
   safe_extract_tarball "$archive" "$APP_DIR"
   rm -f "$archive"
   clear_github_token

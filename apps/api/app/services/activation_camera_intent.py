@@ -147,8 +147,6 @@ class CameraPauseCoordinator:
     ) -> tuple[list[int], list[dict[str, Any]]]:
         snapshots = [dict(item) for item in state.get("camera_snapshots") or [] if isinstance(item, dict)]
         snapshot_by_id = {int(item["camera_id"]): item for item in snapshots}
-        if not snapshots:
-            return [], []
         with self._worker_side_effect_fence(worker_session):
             operation = self._pause_owner(db, state)
             progress = dict(operation.progress or {})
@@ -165,7 +163,7 @@ class CameraPauseCoordinator:
                 if int(camera.id) in changed:
                     snapshot["changed_by_operation"] = True
             operation.progress = bounded_payload(
-                {**progress, "activation_paused_camera_ids": sorted(changed)},
+                {**progress, "activation_paused_camera_ids": sorted(changed), "activation_writer_fenced": True},
                 max_bytes=OPERATION_PROGRESS_MAX_BYTES, field="progress",
             )
             db.add(operation)
@@ -207,8 +205,6 @@ class CameraPauseCoordinator:
         snapshots = [item for item in state.get("camera_snapshots") or [] if isinstance(item, dict)]
         by_id = {int(item["camera_id"]): item for item in snapshots}
         with self._worker_side_effect_fence(worker_session):
-            if not snapshots and not state.get("paused_camera_ids"):
-                return {"restored": [], "failed": []}
             operation = self._pause_owner(db, state, required=False)
             # A pre-existing completed JSON proof remains readable; all newly
             # performed pauses require the transactionally persisted owner above.
@@ -234,6 +230,9 @@ class CameraPauseCoordinator:
                     **progress,
                     "activation_paused_camera_ids": [item for item in camera_ids if item not in result["restored"]],
                     "activation_restored_camera_ids": sorted(previous_restored),
+                    # Called only after a verified target/rollback or proof that
+                    # the previous physical binding was never changed.
+                    "activation_writer_fenced": False,
                 }, max_bytes=OPERATION_PROGRESS_MAX_BYTES, field="progress")
                 db.add(operation)
             db.commit()

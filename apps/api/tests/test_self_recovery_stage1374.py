@@ -76,6 +76,8 @@ def worker(monkeypatch, tmp_path):
     monkeypatch.setattr(module, "update_camera_status_from_job", lambda job: None)
     monkeypatch.setattr(module, "update_recording_job", lambda *a, **kw: None)
     monkeypatch.setattr(module, "clear_recording_job_error", lambda job: None)
+    # Tests below isolate lifecycle failures, not archive-switch admission.
+    monkeypatch.setattr(module, "recording_start_allowed", lambda _engine: True)
     return module
 
 

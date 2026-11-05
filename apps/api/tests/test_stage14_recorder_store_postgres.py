@@ -12,11 +12,31 @@ from app.models.recording import ArchiveRoot
 from recorder_core.contracts import UNSET
 from recorder_core.job_store import RecordingJobStore
 from recorder_core.segment_accounting import SegmentAccounting
+from recorder_core.storage_activation import recording_start_allowed
+from app.models.storage_operation import StorageOperation
 from test_stage14_history_large_totals_postgres import history_database
 
 pytestmark = pytest.mark.skipif(
     not os.getenv('KMVMS_STAGE2_POSTGRES_URL'), reason='owned isolated PostgreSQL required'
 )
+
+
+def test_real_postgres_storage_admission_json_and_partial_recovery(history_database):
+    with Session(history_database) as db:
+        operation = StorageOperation(id='root-admission', operation_type='archive_root_activation',
+            actor_kind='system', actor_key='system:root-admission', system_owner='root-admission',
+            idempotency_key='root-admission', request_fingerprint='a' * 64,
+            status='queued', scope={}, progress={})
+        db.add(operation)
+        db.commit()
+        assert recording_start_allowed(history_database) is False
+        operation.status = 'partial'
+        operation.progress = {'activation_writer_fenced': True}
+        db.commit()
+        assert recording_start_allowed(history_database) is False
+        operation.progress = {'activation_writer_fenced': False}
+        db.commit()
+        assert recording_start_allowed(history_database) is True
 
 
 def recording_context(engine, tmp_path):

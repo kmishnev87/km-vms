@@ -144,11 +144,6 @@ class BackupCreateRequest(BaseModel):
     submission_id: str = Field(min_length=36, max_length=36)
 
 
-class StorageValidateRequest(BaseModel):
-    storage_path: str
-    create: bool = True
-
-
 class SetupStorageSelectionRequest(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=200)
     folder_name: str = Field(min_length=1, max_length=100)
@@ -889,14 +884,6 @@ def patch_settings(
             user_agent=request_user_agent(request),
         )
     return {**serialize_settings(system), "recording_format_change": format_change_status(db, system)}
-
-
-@router.post("/settings/storage/validate")
-def validate_storage(
-    payload: StorageValidateRequest,
-    current_user: User = Depends(require_permission("manage_settings")),
-):
-    return validate_storage_path(payload.storage_path, create=payload.create)
 
 
 def iter_log_files() -> list[Path]:

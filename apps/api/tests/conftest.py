@@ -1,7 +1,23 @@
 import sqlite3
+import sys
+
+import pytest
 
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+
+
+@pytest.fixture(autouse=True)
+def _isolate_login_throttle():
+    # Each test is a separate synthetic client history. Production keeps its
+    # real rolling budget; there is no APP_ENV/test bypass in the login route.
+    module = sys.modules.get("app.core.login_throttle")
+    if module is not None:
+        module.login_throttle.clear()
+    yield
+    module = sys.modules.get("app.core.login_throttle")
+    if module is not None:
+        module.login_throttle.clear()
 
 
 @event.listens_for(Engine, "connect")

@@ -66,7 +66,7 @@ def test_install_script_exposes_private_github_no_git_contract():
         "--github-private",
         "--github-token-file",
         "--github-token-env",
-        "https://api.github.com/repos/$GITHUB_REPO/tarball/$BRANCH",
+        "https://api.github.com/repos/$GITHUB_REPO/tarball/$SOURCE_COMMIT_SHA",
         ".km-vms-source.json",
     ):
         assert required in script

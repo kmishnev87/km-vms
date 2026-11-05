@@ -92,7 +92,8 @@ export function invalidOnvifConfigField(draft = {}, baseline = null) {
     if (meta.options?.length && !meta.options.some((option) => onvifConfigValuesEqual(name, value, option))) return true;
     if (!NUMERIC_FIELDS.has(name)) return false;
     const number = Number(value);
-    return !Number.isFinite(number) || ["bitrate", "iframe_interval"].includes(name) && !Number.isInteger(number)
+    return !Number.isFinite(number)
+      || (["bitrate", "iframe_interval"].includes(name) || meta.number_type === "integer") && !Number.isInteger(number)
       || meta.range?.min != null && number < Number(meta.range.min)
       || meta.range?.max != null && number > Number(meta.range.max);
   }) || null;

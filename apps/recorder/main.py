@@ -46,6 +46,7 @@ from recorder_core.contracts import (
     EXIT_CODE_CLEARING_STATES,
 )
 from recorder_core.job_store import RecordingJobStore
+from recorder_core.storage_activation import recording_start_allowed
 from recorder_core.segment_accounting import SegmentAccounting, bounded_file_fingerprint, receipt_object_identity
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -141,6 +142,7 @@ class RecordingJob:
     current_media_relative_path: str | None = None
     stalled_samples: int = 0
     stable_progress_since: float | None = None
+    waiting_for_storage_activation: bool = False
 
     def set_state(self, state: str, error: str | None = None, error_type: str | None = None) -> None:
         if self.state != state:
@@ -199,10 +201,12 @@ def iso_ts(value: float | None) -> str | None:
 
 def safe_name(value: str) -> str:
     value = (value or "").strip()
-    value = re.sub(r'[\\\\/:*?"<>|]+', "_", value)
+    value = re.sub(r'[\x00-\x1f\x7f%\\\\/:*?"<>|]+', "_", value)
     value = re.sub(r"\s+", "_", value)
     value = re.sub(r"_+", "_", value)
-    return value[:120].strip("_") or "camera"
+    # NAME_MAX is a byte limit: reserve 24 bytes for '-' + timestamp + '.mkv'.
+    value = value[:120].encode("utf-8")[:231].decode("utf-8", errors="ignore")
+    return value.strip("_") or "camera"
 
 
 def truncate_error(value: str | None) -> str:
@@ -780,7 +784,9 @@ def capture_segment_baseline(output_pattern: str | None, camera_id: int, camera_
         return set()
     prefix = segment_prefix(camera_id, camera_name)
     baseline: set[str] = set()
-    for file_path in dir_path.glob(f"{prefix}*.*"):
+    for file_path in dir_path.iterdir():
+        if not file_path.name.startswith(prefix) or file_path.suffix.lower() not in {".mp4", ".mkv"}:
+            continue
         rel_path = storage_relative_path(file_path, root=root)
         if rel_path:
             baseline.add(rel_path)
@@ -1391,6 +1397,22 @@ def start_camera(row) -> None:
             metadata={"pid": job.pid},
         )
         return
+
+    try:
+        admitted = recording_start_allowed(engine)
+    except Exception as exc:
+        # Unknown binding/admission is not permission to start a new writer.
+        admitted = False
+        if not job.waiting_for_storage_activation:
+            log_event("warning", "storage_start_admission_unavailable", error=redact_text(str(exc)))
+    if not admitted:
+        if not job.waiting_for_storage_activation:
+            log_event("info", "recording_waits_for_storage_activation", camera_id=job.camera_id)
+        job.waiting_for_storage_activation = True
+        job.set_state(RecorderState.IDLE)
+        update_camera_status_from_job(job)
+        return
+    job.waiting_for_storage_activation = False
 
     if job.db_job_id and job.stopped_at is None:
         close_recording_job(job, state=RecorderState.STOPPED, reason="retry_replaced", error=job.last_error)

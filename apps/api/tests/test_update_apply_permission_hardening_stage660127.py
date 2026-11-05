@@ -37,6 +37,7 @@ PRIVILEGED_EXECUTABLES = (
 )
 
 PRIVILEGED_NON_EXECUTABLES = (
+    "scripts/km-vms-archive-policy.py",
     "scripts/km_vms_slot_core/__init__.py",
     "scripts/km_vms_slot_core/contracts.py",
     "scripts/km_vms_slot_core/description.py",
@@ -49,6 +50,7 @@ PRIVILEGED_NON_EXECUTABLES = (
     "scripts/km_vms_bridge/handoff.py",
     "scripts/km_vms_helper_handlers/__init__.py",
     "scripts/km_vms_helper_handlers/update.py",
+    "scripts/km_vms_helper_handlers/publisher.py",
     "scripts/km_vms_helper_handlers/restore.py",
     "scripts/km_vms_helper_handlers/rollback.py",
     "scripts/km_vms_helper_handlers/restore_executor.py",

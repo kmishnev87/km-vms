@@ -282,6 +282,43 @@ km_vms_slot_image_override() {
   printf '%s\n' "$image_override"
 }
 
+km_vms_archive_override() {
+  archive_app_dir="$1"
+  archive_project="$2"
+  archive_source_dir="$3"
+  archive_policy="$archive_app_dir/data/update-runtime/bootstrap/current/km-vms-archive-policy.py"
+  # During upgrade the old bundle may not contain the new policy yet. The
+  # caller's source is already permission/inventory checked, never API input.
+  [ -f "$archive_policy" ] || archive_policy="$archive_source_dir/scripts/km-vms-archive-policy.py"
+  [ -f "$archive_policy" ] && [ ! -L "$archive_policy" ] ||
+    km_vms_compose_fail "Trusted archive policy is unavailable."
+  if km_vms_command_exists python3; then
+    protected_archive_override=$(python3 -B "$archive_policy" \
+      --app-dir "$archive_app_dir" --project-name "$archive_project") ||
+      km_vms_compose_fail "Archive bindings could not be validated."
+  else
+    km_vms_command_exists docker ||
+      km_vms_compose_fail "Python or Docker is required to validate archive bindings."
+    archive_helper_ids=$(docker ps -q \
+      --filter "label=com.docker.compose.project=$archive_project" \
+      --filter "label=com.docker.compose.service=update-helper")
+    [ "$(printf '%s\n' "$archive_helper_ids" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] ||
+      km_vms_compose_fail "Canonical archive validation owner is unavailable."
+    archive_helper_id=$(printf '%s\n' "$archive_helper_ids" | sed -n '1p')
+    protected_archive_override=$(docker exec "$archive_helper_id" python3 -B \
+      "$archive_policy" --app-dir "$archive_app_dir" --project-name "$archive_project") ||
+      km_vms_compose_fail "Archive bindings could not be validated."
+  fi
+  [ -n "$protected_archive_override" ] || return 0
+  case "$protected_archive_override" in
+    "$archive_app_dir"/data/update-runtime/archive-authority/docker-compose.archive-roots.yml) ;;
+    *) km_vms_compose_fail "Archive override escaped its protected authority." ;;
+  esac
+  [ -f "$protected_archive_override" ] && [ ! -L "$protected_archive_override" ] ||
+    km_vms_compose_fail "Protected archive override is unsafe."
+  printf '%s\n' "$protected_archive_override"
+}
+
 km_vms_compose_for_source() {
   stable_app_dir="$1"
   source_dir="$2"
@@ -321,7 +358,8 @@ km_vms_compose_for_source() {
   else
     set -- -p "$project_name" "$@"
   fi
-  archive_override="$stable_app_dir/data/install-control/docker-compose.archive-roots.yml"
+  archive_override=$(km_vms_archive_override "$stable_app_dir" "$project_name" "$source_dir") ||
+    km_vms_compose_fail "Archive bindings could not be materialized."
   lifecycle_override=$(km_vms_lifecycle_override "$stable_app_dir")
   slot_runtime_override=""
   slot_image_override=""

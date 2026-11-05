@@ -54,6 +54,7 @@ SOURCE_FILES = (
     "km_vms_slot_core/inventory.py",
     "km_vms_slot_core/state.py",
     "km-vms-compose-common.sh",
+    "km-vms-archive-policy.py",
     "km-vms-restart.sh",
     "km-vms-update-launcher.sh",
     "km-vms-storage-apply.sh",

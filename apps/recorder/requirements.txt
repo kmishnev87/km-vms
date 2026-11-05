@@ -3,4 +3,3 @@ psycopg[binary]==3.2.7
 redis==5.2.1
 pydantic==2.11.3
 pydantic-settings==2.8.1
-requests==2.32.3

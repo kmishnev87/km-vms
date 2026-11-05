@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -384,15 +385,21 @@ def test_safe_restart_reconciles_only_persistent_services(tmp_path: Path) -> Non
         "else: raise SystemExit(3)\n"
     )
     (bundle / 'docker-compose.lifecycle.yml').write_text('services: {}\n')
+    shutil.copy2(ROOT / "scripts/km-vms-archive-policy.py", bundle)
     (bundle / 'bootstrap-files.sha256').write_text(''.join(
         hashlib.sha256((bundle/name).read_bytes()).hexdigest() + '  ' + name + '\n'
-        for name in ['km-vms-bootstrap.py','docker-compose.lifecycle.yml']))
+        for name in ['km-vms-bootstrap.py','docker-compose.lifecycle.yml','km-vms-archive-policy.py']))
     control_dir = app / "data/install-control"
     control_dir.mkdir(parents=True)
     (control_dir / "docker-compose.archive-roots.yml").write_text(
         "services:\n  api:\n    volumes: []\n",
         encoding="utf-8",
     )
+    (control_dir / "archive-roots-runtime.json").write_text(json.dumps({
+        "schema_version": 1, "runtime_base": "/storage/archive-roots",
+        "compose_override_file": "docker-compose.archive-roots.yml",
+        "items": [], "raw_runtime_paths_user_visible": False,
+    }))
     compose_log = tmp_path / "compose.log"
     fake_compose = tmp_path / "fake-compose"
     fake_compose.write_text(

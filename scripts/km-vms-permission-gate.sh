@@ -111,6 +111,7 @@ scripts/km-vms-bootstrap-dispatch.sh
 "
 
 TARGET_ONLY_PRIVILEGED_FILES="
+scripts/km-vms-archive-policy.py
 scripts/km_vms_slot_core/__init__.py
 scripts/km_vms_slot_core/contracts.py
 scripts/km_vms_slot_core/description.py
@@ -118,6 +119,7 @@ scripts/km_vms_slot_core/inventory.py
 scripts/km_vms_slot_core/state.py
 scripts/km_vms_helper_handlers/__init__.py
 scripts/km_vms_helper_handlers/update.py
+scripts/km_vms_helper_handlers/publisher.py
 scripts/km_vms_helper_handlers/restore.py
 scripts/km_vms_helper_handlers/rollback.py
 scripts/km_vms_helper_handlers/restore_executor.py
@@ -489,6 +491,11 @@ if [ "$CONTRACT" = "stable-runtime" ]; then
   for name in km-vms-bootstrap.py km-vms-bootstrap-dispatch.sh km-vms-release-slots.py km-vms-compose-common.sh km-vms-restart.sh km-vms-update-launcher.sh km-vms-storage-apply.sh km-vms-setup-activation-helper.sh bootstrap-manifest.json bootstrap-files.sha256 docker-compose.lifecycle.yml; do
     check_secure_path "$bundle_real/$name" "data/update-runtime/bootstrap/current/$name" file
   done
+  # Old authentic bundles predate archive policy. Their own manifest remains
+  # authoritative; a new bundle requires it in SOURCE_FILES/checksums below.
+  if [ -e "$bundle_real/km-vms-archive-policy.py" ] || [ -L "$bundle_real/km-vms-archive-policy.py" ]; then
+    check_secure_path "$bundle_real/km-vms-archive-policy.py" "data/update-runtime/bootstrap/current/km-vms-archive-policy.py" file
+  fi
   python3 -B "$bundle/km-vms-bootstrap.py" validate-bundle --app-dir "$APP_DIR" >/dev/null ||
     fail "Stable bootstrap manifest or lifecycle digest is invalid"
   python3 -B "$bundle/km-vms-release-slots.py" resolve-active --app-dir "$APP_DIR" >/dev/null ||

@@ -138,7 +138,7 @@ compose_with_archive_roots() {
 }
 
 archive_roots_compose_present() {
-  [ -f "$ARCHIVE_ROOTS_COMPOSE_FILE" ]
+  [ -f "$ARCHIVE_ROOTS_MANIFEST_FILE" ]
 }
 
 wait_for_archive_roots_compose_file() {
@@ -333,6 +333,7 @@ SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.json"
 SELECTION_CONTROL_FILE="$APP_DIR/data/install-control/storage-selection.control"
 STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"
 ARCHIVE_ROOTS_COMPOSE_FILE="$APP_DIR/data/install-control/docker-compose.archive-roots.yml"
+ARCHIVE_ROOTS_MANIFEST_FILE="$APP_DIR/data/install-control/archive-roots-runtime.json"
 
 detect_compose
 

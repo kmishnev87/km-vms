@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.permissions import get_permissions_for_role
+from app.core.login_throttle import LoginThrottled, login_throttle
+from app.core.request_client import ClientIdentityUnavailable, request_client_ip
 from app.core.security import create_access_token, verify_password
 from app.db.session import get_db
 from app.models.user import User
@@ -18,6 +20,29 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    try:
+        source_ip = request_client_ip(request, strict=True)
+    except ClientIdentityUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Не удалось подтвердить адрес подключения. Повторите вход через несколько секунд.",
+            headers={"Retry-After": "2"},
+        ) from None
+    try:
+        attempt = login_throttle.acquire(source_ip)
+    except LoginThrottled as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Слишком много попыток входа с этого адреса. Повторите немного позже.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from None
+    try:
+        return _authenticate_login(payload, request, db, attempt)
+    finally:
+        login_throttle.finish(attempt)
+
+
+def _authenticate_login(payload, request, db, attempt):
     user = db.query(User).filter(User.username == payload.username).first()
     if user and not getattr(user, "is_active", True):
         create_event(
@@ -57,6 +82,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             detail="Неверный логин или пароль",
         )
 
+    attempt.failed = False
     expires_at = None
     if payload.stay_signed_in:
         system = get_system_settings(db)

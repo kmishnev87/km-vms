@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -198,7 +199,8 @@ def active_recording_jobs_count(db: Session) -> int:
 
 
 def validate_storage_path(path_value: str, create: bool = True) -> dict:
-    path = Path(str(path_value or "").strip())
+    path_text = str(path_value or "").strip()
+    path = Path(path_text)
     result = {
         "path": str(path),
         "path_role": "container_runtime_or_reference_path",
@@ -211,7 +213,7 @@ def validate_storage_path(path_value: str, create: bool = True) -> dict:
         "ok": False,
         "error": None,
     }
-    if not str(path):
+    if not path_text:
         result["error"] = "storage_path is required"
         return result
 
@@ -224,9 +226,12 @@ def validate_storage_path(path_value: str, create: bool = True) -> dict:
             result["error"] = "path does not exist"
             return result
 
-        probe = path / ".km_vms_write_test"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
+        # Internal deploy-controlled root only, not an arbitrary-path HTTP API.
+        # Exclusive temporary creation cannot overwrite a pre-existing file or
+        # follow a planted probe symlink; context cleanup owns only this probe.
+        with tempfile.TemporaryFile(dir=path, prefix=".km_vms_write_test.") as probe:
+            probe.write(b"ok")
+            probe.flush()
         result["writable"] = True
 
         usage = shutil.disk_usage(path)

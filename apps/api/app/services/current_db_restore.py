@@ -40,6 +40,7 @@ from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, SAFE_STATUSES
 RESTORE_REQUEST_SCHEMA = "stage13.7.8.current-restore-request.v1"
 RESTORE_PUBLIC_SCHEMA = "stage13.7.8.current-restore-public.v1"
 RESTORE_RECEIPT_SCHEMA = "stage13.7.8.current-restore-receipt.v1"
+NOT_ADMITTED_SCHEMA = "current-restore.not-admitted.v1"
 RESTORE_CONFIRMATION_PHRASE = "RESTORE KM VMS"
 ACTIVE_REQUEST_STATES = {"admitted", "claimed"}
 TERMINAL_RESULTS = {
@@ -496,10 +497,83 @@ def _prune_receipts() -> None:
     for path in paths[MAX_RECEIPTS:]:
         try:
             payload, state = read_bounded_json(path)
-            if state == "valid" and payload and payload.get("state") == "terminal":
+            if state == "valid" and payload and (
+                payload.get("state") == "terminal"
+                or (payload.get("schema") == NOT_ADMITTED_SCHEMA
+                    and time.time() - path.stat().st_mtime > 24 * 60 * 60)
+            ):
                 path.unlink()
         except OSError:
             continue
+
+
+def _check_retired_submission(payload, *, submission_id, artifact_id, actor_info):
+    if not payload or payload.get("schema") != NOT_ADMITTED_SCHEMA:
+        return
+    if (payload.get("submission_id") != submission_id
+            or payload.get("artifact_id") != artifact_id
+            or payload.get("actor_user_id") != actor_info["user_id"]
+            or payload.get("actor_binding") != actor_info["binding"]):
+        raise CurrentRestoreBlocked("submission_binding_conflict")
+    raise CurrentRestoreBlocked("restore_submission_not_admitted")
+
+
+def reconcile_current_restore(*, submission_id: str, artifact_id: str, actor: Any) -> dict[str, Any]:
+    """Resolve one lost reply; atomically retire only an unadmitted submission.
+
+    A missing public projection is not evidence of absence. The durable receipt
+    and request share this guard with BOTH admission checks, including after
+    slow preflight. A retired request cannot be admitted later.
+    """
+    try:
+        submission_id = validate_submission_id(submission_id)
+        artifact_id = validate_artifact_id(artifact_id)
+        actor_info = _actor_snapshot(actor)
+        with maintenance_admission_guard():
+            receipt, receipt_state = read_bounded_json(restore_receipt_path(submission_id))
+            request, request_state = read_bounded_json(restore_request_path())
+            if "invalid" in {receipt_state, request_state}:
+                raise CurrentRestoreBlocked("restore_status_unavailable")
+            if receipt and receipt.get("schema") == NOT_ADMITTED_SCHEMA:
+                try:
+                    _check_retired_submission(receipt, submission_id=submission_id,
+                        artifact_id=artifact_id, actor_info=actor_info)
+                except CurrentRestoreBlocked as exc:
+                    if exc.code != "restore_submission_not_admitted":
+                        raise
+                return {"admission": "not_admitted", "submission_id": submission_id}
+            candidate = request if request and request.get("submission_id") == submission_id else receipt
+            if candidate:
+                candidate = restore_request_contract(candidate)
+                if candidate is None:
+                    raise CurrentRestoreBlocked("restore_status_contract_invalid")
+                if (candidate["requested_by"]["user_id"] != actor_info["user_id"]
+                        or candidate["requested_by"]["binding"] != actor_info["binding"]
+                        or candidate["artifact"]["artifact_id"] != artifact_id
+                        or candidate["submission_id"] != submission_id):
+                    raise CurrentRestoreBlocked("submission_binding_conflict")
+                result = _safe_receipt(candidate, replayed=True)["restore_status"]
+                public, public_state = read_bounded_json(restore_public_status_path())
+                if public_state == "invalid":
+                    raise CurrentRestoreBlocked("restore_status_unavailable")
+                if public and public.get("operation_id") == candidate["operation_id"]:
+                    public = restore_public_contract(public)
+                    if public is None or public.get("submission_id") != submission_id:
+                        raise CurrentRestoreBlocked("restore_status_contract_invalid")
+                    result = {key: value for key, value in public.items() if key not in {"schema", "actor_subject"}}
+                return {"admission": "admitted", "submission_id": submission_id, "restore_status": result}
+            write_bounded_json_atomic(restore_receipt_path(submission_id), {
+                "schema": NOT_ADMITTED_SCHEMA, "state": "not_admitted",
+                "submission_id": submission_id, "artifact_id": artifact_id,
+                "actor_user_id": actor_info["user_id"], "actor_binding": actor_info["binding"],
+                "created_at": utc_iso(),
+            })
+            _prune_receipts()
+            return {"admission": "not_admitted", "submission_id": submission_id}
+    except BackupManagerBlocked as exc:
+        raise CurrentRestoreBlocked(exc.code) from exc
+    except MaintenanceAdmissionBlocked as exc:
+        raise CurrentRestoreBlocked(exc.code) from exc
 
 
 def request_current_restore(
@@ -532,6 +606,8 @@ def request_current_restore(
                     "restore_receipt_state_unavailable"
                 )
             if existing_payload:
+                _check_retired_submission(existing_payload, submission_id=safe_submission,
+                    artifact_id=safe_artifact, actor_info=actor_info)
                 existing = restore_request_contract(existing_payload)
                 existing_fingerprint = str(
                     existing_payload.get("artifact", {}).get("fingerprint")
@@ -652,6 +728,8 @@ def request_current_restore(
             if receipt_state == "invalid":
                 raise MaintenanceAdmissionBlocked("restore_receipt_state_unavailable")
             if receipt_payload:
+                _check_retired_submission(receipt_payload, submission_id=safe_submission,
+                    artifact_id=safe_artifact, actor_info=actor_info)
                 receipt = restore_request_contract(receipt_payload)
                 if (
                     receipt is None

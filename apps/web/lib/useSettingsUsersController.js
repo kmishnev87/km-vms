@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, clearAuthToken } from "./api";
+import { apiFetch, clearAuthToken, captureAuthSession } from "./api";
 import { passwordConfirmMessage, passwordLengthMessage, roleOptionsFor,
   sortedUsersForTable, userCanBeDeleted, userCanBeManaged } from "./settingsPageHelpers";
 
@@ -106,6 +106,8 @@ export default function useSettingsUsersController({ currentUser, lang, t, showT
 
   async function submitUserModal(event) {
     event.preventDefault();
+    const ownsAction = captureAuthSession();
+    if (!ownsAction()) return;
     if (!userModal || userBusyRef.current) return;
     if (!userModal.username.trim()) {
       patchUserModal("error", t.usernameRequired);
@@ -159,6 +161,7 @@ export default function useSettingsUsersController({ currentUser, lang, t, showT
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+        if (!ownsAction()) return;
         showToast({ variant: "success", title: t.toasts.userCreatedTitle, text: userModal.username.trim() });
       } else {
         await apiFetch(`/users/${userModal.id}`, {
@@ -166,6 +169,7 @@ export default function useSettingsUsersController({ currentUser, lang, t, showT
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+        if (!ownsAction()) return;
         if (changesOwnCredentials) {
           setUserModal(null);
           try {
@@ -180,6 +184,7 @@ export default function useSettingsUsersController({ currentUser, lang, t, showT
       setUserModal(null);
       await loadUsers();
     } catch (err) {
+      if (!ownsAction()) return;
       const errorToast = normalizedError(err, lang, "users");
       showToast(errorToast);
     } finally {

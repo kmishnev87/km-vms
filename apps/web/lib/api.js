@@ -82,16 +82,28 @@ function dispatchAuthChanged() {
   window.dispatchEvent(new CustomEvent("km-vms-auth-changed"));
 }
 
+export function captureAuthSession() {
+  const token = getAuthToken();
+  const revision = authRevision;
+  return () => Boolean(token && getAuthToken() === token && authRevision === revision);
+}
+
 export function saveAuthToken(token, { persistent = false, expiresAt = null } = {}) {
   if (typeof window === "undefined") return;
-  clearAuthToken();
   if (persistent) {
-    localStorage.setItem(TOKEN_KEY, token);
+    // Other tabs can react between storage writes. Publish expiry BEFORE the
+    // token and avoid an intermediate logout notification while replacing a
+    // valid session. Otherwise a reader can remove the new, not-yet-dated token.
     if (expiresAt) localStorage.setItem(TOKEN_EXPIRES_KEY, expiresAt);
-    dispatchAuthChanged();
-    return;
+    else localStorage.removeItem(TOKEN_EXPIRES_KEY);
+    localStorage.setItem(TOKEN_KEY, token);
+    sessionStorage.removeItem(TOKEN_KEY);
+  } else {
+    sessionStorage.setItem(TOKEN_KEY, token);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_EXPIRES_KEY);
   }
-  sessionStorage.setItem(TOKEN_KEY, token);
+  sessionStorage.removeItem(TOKEN_EXPIRES_KEY);
   dispatchAuthChanged();
 }
 

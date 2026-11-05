@@ -12,7 +12,7 @@ from onvif import ONVIFCamera as _LibraryCamera
 import requests
 from requests.auth import HTTPDigestAuth
 from zeep.transports import Transport
-from app.services.onvif_media2 import MEDIA1_NS, MEDIA2_NS, Media2Service
+from app.services.onvif_media2 import MEDIA1_NS, MEDIA2_NS, EncoderConfiguration, Media2Service
 
 MEDIA_XADDR_KEYS = (
     "media",
@@ -1068,7 +1068,7 @@ def _validate_profile_config_request(config: dict, supported: dict) -> dict:
             numeric = _safe_number(value)
             if isinstance(value, bool) or numeric is None:
                 raise ValueError(f"{key} must be a finite number")
-            if key in {"bitrate", "iframe_interval"} and not float(numeric).is_integer():
+            if (key in {"bitrate", "iframe_interval"} or meta.get("number_type") == "integer") and not float(numeric).is_integer():
                 raise ValueError(f"{key} must be an integer")
         _value_in_range(key, value, meta.get("range"))
         validated[key] = value
@@ -1165,6 +1165,15 @@ def _encoder_options(media, cfg, profile_token=None):
     return options
 
 
+def _integer_frame_rate(media, cfg) -> bool:
+    # Media1 VideoRateControl is xs:int; Media2 permits xs:float. Keep this
+    # distinction even when options are unavailable or tests pass a bare config.
+    return not (
+        _safe_attr(media, "protocol") == "media2"
+        or isinstance(cfg, EncoderConfiguration)
+    )
+
+
 def _supported_video_fields(
     media,
     cfg,
@@ -1192,6 +1201,9 @@ def _supported_video_fields(
     resolution_options = _resolution_options(all_encoding_options)
     fps_options = _common_options(encoding_options, "FrameRatesSupported", numeric=True)
     fps_range = _single_range(encoding_options, "FrameRateRange")
+    integer_fps = _integer_frame_rate(media, cfg)
+    if fps_range and integer_fps:
+        fps_range = {**fps_range, "step": 1}
     bitrate_range = _single_range(encoding_options, "BitrateRange")
     iframe_range = _single_range(
         encoding_options,
@@ -1246,6 +1258,8 @@ def _supported_video_fields(
             state=state,
             reason_codes=reasons,
         )
+        if name == "fps":
+            result[name]["number_type"] = "integer" if integer_fps else "float"
     return result
 
 
@@ -1394,7 +1408,7 @@ def _config_values_equal(name: str, left, right) -> bool:
     return str(left).strip().lower() == str(right).strip().lower()
 
 
-def _apply_video_config_diff(cfg, requested: dict) -> None:
+def _apply_video_config_diff(cfg, requested: dict, *, media=None) -> None:
     if "codec" in requested:
         old_values = _config_values(cfg)
         _safe_set(cfg, "Encoding", str(requested["codec"]))
@@ -1432,7 +1446,12 @@ def _apply_video_config_diff(cfg, requested: dict) -> None:
             "The camera did not return a writable rate-control object.",
         )
     if "fps" in requested:
-        _safe_set(rate_control, "FrameRateLimit", _safe_number(requested["fps"]))
+        fps = _safe_number(requested["fps"])
+        if _integer_frame_rate(media, cfg):
+            if fps is None or isinstance(requested["fps"], bool) or not float(fps).is_integer():
+                raise ValueError("fps must be an integer for ONVIF Media1")
+            fps = int(fps)
+        _safe_set(rate_control, "FrameRateLimit", fps)
     if "bitrate" in requested:
         _safe_set(rate_control, "BitrateLimit", int(requested["bitrate"]))
     if "iframe_interval" in requested:
@@ -1533,7 +1552,7 @@ def update_onvif_profile(host, port, username, password, profile_token, config, 
         vendor_configuration = copy.deepcopy(cfg)
     except Exception:
         vendor_configuration = cfg
-    _apply_video_config_diff(vendor_configuration, changed)
+    _apply_video_config_diff(vendor_configuration, changed, media=media)
     set_error = None
     try:
         media.SetVideoEncoderConfiguration(

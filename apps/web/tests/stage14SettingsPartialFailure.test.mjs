@@ -9,9 +9,9 @@ function ownedFunction(marker) {
   return source.slice(start,end+4);
 }
 const load=ownedFunction('  async function load()');
-for(const failedPath of ['/settings','/hardware/capabilities','/users/me']){
+for(const failedPath of ['/settings','/hardware/capabilities']){
   const state={},pending={};const ctx={loadGenerationRef:{current:0},pendingLanguageRef:{current:'en'},
-    apiFetch:path=>new Promise((resolve,reject)=>pending[path]={resolve,reject}),
+    apiFetch:path=>new Promise((resolve,reject)=>pending[path]={resolve,reject}), captureAuthSession:()=>()=>true,
     settingsDraftFromApi:value=>value,setSavedDraft:value=>state.saved=value,
     setDraft:value=>state.draft=typeof value==='function'?value(state.draft??null):value,
     setFormatStatus:value=>state.format=value,setHardware:value=>state.hardware=value,
@@ -25,7 +25,6 @@ for(const failedPath of ['/settings','/hardware/capabilities','/users/me']){
   }
   await done;
   if(failedPath!=='/settings'){assert.equal(state.saved.timezone,'UTC');assert.equal(state.draft.timezone,'UTC');assert.equal(state.draft.language,'en');}
-  if(failedPath!=='/users/me') assert.ok(state.user);
   if(failedPath!=='/hardware/capabilities')assert.ok(state.hardware);
 }
 // The real field updater must not construct a language-only settings draft.

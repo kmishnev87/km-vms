@@ -1,5 +1,6 @@
 import "./globals.css";
 import { I18nProvider } from "../lib/i18n";
+import AuthSessionBoundary from "../components/AuthSessionBoundary";
 
 export const metadata = {
   title: "KM VMS",
@@ -10,7 +11,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="ru">
       <body>
-        <I18nProvider>{children}</I18nProvider>
+        <I18nProvider><AuthSessionBoundary>{children}</AuthSessionBoundary></I18nProvider>
       </body>
     </html>
   );

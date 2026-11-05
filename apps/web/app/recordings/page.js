@@ -7,7 +7,7 @@ import { installModalKeyboard } from "../../lib/modalKeyboard";
 import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
 import ArchiveExportResult from "../../components/ArchiveExportResult";
 import useArchiveExport from "../../lib/useArchiveExport";
-import { apiFetch, canDeleteRecordings, issueRecordingMediaToken, getAuthToken } from "../../lib/api";
+import { apiFetch, canDeleteRecordings, issueRecordingMediaToken, getAuthToken, captureAuthSession } from "../../lib/api";
 import { useAuthSession } from "../../lib/useAuthSession";
 import {
   buildArchiveExportPayload,
@@ -1161,7 +1161,8 @@ export default function RecordingsPage() {
     });
   }
 
-  async function executeExactDelete({ url, options, operationId }) {
+  async function executeExactDelete({ url, options, operationId, ownsAction }) {
+    if (!ownsAction()) return;
     setBusy(true);
     setError("");
     setDeleteDialog({
@@ -1174,12 +1175,14 @@ export default function RecordingsPage() {
     });
     try {
       const result = await apiFetch(url, options);
+      if (!ownsAction()) return;
       await refresh();
+      if (!ownsAction()) return;
       showDeletionResult(result);
     } catch (error) {
-      showDeletionError(error);
+      if (ownsAction()) showDeletionError(error);
     } finally {
-      setBusy(false);
+      if (ownsAction()) setBusy(false);
     }
   }
 
@@ -1187,6 +1190,7 @@ export default function RecordingsPage() {
     if (!recordingsActionReady) return;
     if (!canDelete) return;
     const operationId = newClientOperationId("recording-single");
+    const ownsAction = captureAuthSession();
     setDeleteDialog({
       id: `recording-single-confirm-${operationId}`,
       title: t.deleteOneTitle,
@@ -1199,6 +1203,7 @@ export default function RecordingsPage() {
       confirmTone: "danger",
       tone: "error",
       onConfirm: () => executeExactDelete({
+        ownsAction,
         operationId,
         url: `/recordings?${recordingIdentityQuery(item)}&operation_id=${encodeURIComponent(operationId)}`,
         options: { method: "DELETE" },
@@ -1213,6 +1218,7 @@ export default function RecordingsPage() {
       .filter((item) => selectedPaths.includes(recordingIdentityKey(item)))
       .map((item) => recordingIdentityPayload(item));
     const operationId = newClientOperationId("recording-selected");
+    const ownsAction = captureAuthSession();
     setDeleteDialog({
       id: `recording-selected-confirm-${operationId}`,
       title: t.deleteSelectedTitle,
@@ -1225,6 +1231,7 @@ export default function RecordingsPage() {
       confirmTone: "danger",
       tone: "error",
       onConfirm: () => executeExactDelete({
+        ownsAction,
         operationId,
         url: "/recordings/bulk-delete",
         options: {
@@ -1237,6 +1244,8 @@ export default function RecordingsPage() {
   }
 
   async function prepareDynamicDeletion(scope, camera = null) {
+    const ownsAction = captureAuthSession();
+    if (!ownsAction()) return;
     dangerTriggerRef.current?.focus({ preventScroll: true });
     setDangerMenuOpen(false);
     setBusy(true);
@@ -1255,6 +1264,7 @@ export default function RecordingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scope, camera }),
       });
+      if (!ownsAction()) return;
       const title = scope === "all" ? t.deleteAllTitle : t.deleteCameraTitle;
       const message = scope === "all"
         ? t.deleteAllMessage
@@ -1274,16 +1284,17 @@ export default function RecordingsPage() {
         closeLabel: t.cancel,
         confirmTone: "danger",
         tone: "error",
-        onConfirm: () => executeDeletionPlan(plan),
+        onConfirm: () => executeDeletionPlan(plan, ownsAction),
       });
     } catch (error) {
-      showDeletionError(error);
+      if (ownsAction()) showDeletionError(error);
     } finally {
-      setBusy(false);
+      if (ownsAction()) setBusy(false);
     }
   }
 
-  async function executeDeletionPlan(plan) {
+  async function executeDeletionPlan(plan, ownsAction) {
+    if (!ownsAction()) return;
     setBusy(true);
     setDeleteDialog({
       id: `recording-plan-running-${plan.plan_id}`,
@@ -1299,12 +1310,14 @@ export default function RecordingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirm: true }),
       });
+      if (!ownsAction()) return;
       await refresh();
+      if (!ownsAction()) return;
       showDeletionResult(result);
     } catch (error) {
-      showDeletionError(error);
+      if (ownsAction()) showDeletionError(error);
     } finally {
-      setBusy(false);
+      if (ownsAction()) setBusy(false);
     }
   }
 

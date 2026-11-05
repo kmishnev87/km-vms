@@ -447,8 +447,15 @@ if [ "$INITIAL_SETUP" = "1" ]; then
 else
   cp "$ENV_FILE" "$backup"
 fi
-awk -v value="$selected_path" '
-  BEGIN { done = 0 }
+literal_selected_path="$selected_path"
+case "$selected_path" in
+  *'$'*|*'#'*|*"'"*|*' '* )
+    escaped_selected_path=$(printf '%s' "$selected_path" | sed "s/'/\\\\'/g")
+    literal_selected_path="'$escaped_selected_path'"
+    ;;
+esac
+KM_VMS_STORAGE_LITERAL_PATH="$literal_selected_path" awk '
+  BEGIN { done = 0; value = ENVIRON["KM_VMS_STORAGE_LITERAL_PATH"] }
   /^SURVEILLANCE_ROOT=/ { print "SURVEILLANCE_ROOT=" value; done = 1; next }
   { print }
   END { if (!done) print "SURVEILLANCE_ROOT=" value }

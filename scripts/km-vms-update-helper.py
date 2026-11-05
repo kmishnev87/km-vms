@@ -1701,6 +1701,19 @@ def verify_installed_commit(
     }
 
 
+def assert_activation_target_matches(request: dict[str, Any], journal: dict[str, Any]) -> None:
+    source = request["source"]
+    if (
+        journal.get("request_id") != request["request_id"]
+        or journal.get("target_commit") != str(source["commit"]).lower()
+        or journal.get("target_version") != source["version"]
+    ):
+        raise HelperError(
+            "activation_journal_invalid",
+            "Release activation does not match the admitted target.",
+        )
+
+
 def publish_activation_outcome(
     request: dict[str, Any],
     journal: dict[str, Any],
@@ -1708,15 +1721,7 @@ def publish_activation_outcome(
 ) -> bool:
     source = request["source"]
     expected_commit = str(source["commit"]).lower()
-    if (
-        journal["request_id"] != request["request_id"]
-        or journal["target_commit"] != expected_commit
-        or journal["target_version"] != source["version"]
-    ):
-        raise HelperError(
-            "activation_journal_invalid",
-            "Release activation does not match the admitted target.",
-        )
+    assert_activation_target_matches(request, journal)
     phase = journal["phase"]
     if phase == "completed":
         active_source = resolve_update_source_dir(update_dir)
@@ -1812,6 +1817,14 @@ def publish_activation_outcome(
     return False
 
 
+def authorize_update_source(source: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return _operation_handlers.verify_published_source(source)
+    except _operation_handlers.PublishedSourceError as exc:
+        category = "source_temporarily_unavailable" if exc.unavailable else "source_acquisition_failed"
+        raise HelperError(category, "Official published update source could not be verified.") from None
+
+
 def resume_activation(
     request: dict[str, Any],
     update_dir: Path,
@@ -1822,55 +1835,23 @@ def resume_activation(
             "activation_journal_invalid",
             "Unfinished activation journal is missing.",
         )
-    target_source = (
-        update_dir
-        / "data/update-runtime/slots"
-        / journal["target_slot"]
-        / "source"
-    )
-    bridge = target_source / "scripts/km-vms-update-helper-bridge.py"
-    if bridge.is_symlink() or not bridge.is_file():
-        raise HelperError(
-            "activation_journal_invalid",
-            "Trusted activation bridge is unavailable.",
-        )
+    assert_activation_target_matches(request, journal)
     if journal["phase"] not in {
         "completed",
         "failed_rolled_back",
         "blocked",
     }:
-        command = [
-            "python3",
-            str(bridge),
-            "resume-activation",
-            "--app-dir",
-            str(update_dir),
-            "--project-name",
-            resolve_helper_project_name(update_dir),
-            "--request-id",
-            request["request_id"],
-        ]
-        result = subprocess.run(
-            command,
-            cwd=update_dir,
-            env=update_child_env(request),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=4200,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise HelperError(
-                "activation_journal_invalid",
-                "Release activation could not converge after restart.",
-            )
+        # Stable bootstrap validates immutable slot inventory + binding before
+        # delegating recovery. A writable journal alone never authorizes code.
+        # This uses local evidence, so rollback/resume do not depend on GitHub.
+        resolve_update_source_dir(update_dir)
         journal = activation_journal(request["request_id"])
         if journal is None:
             raise HelperError(
                 "activation_journal_invalid",
                 "Release activation result is unavailable.",
             )
+    assert_activation_target_matches(request, journal)
     if not publish_activation_outcome(request, journal, update_dir):
         raise HelperError(
             "activation_journal_invalid",
@@ -1881,7 +1862,7 @@ def resume_activation(
 
 def _update_operation_handler() -> UpdateOperationHandler:
     return UpdateOperationHandler(
-        HelperError, PROGRESS_FILE, STATUS_FILE, activation_journal, base_status, classify_apply_failure, compose_app_dir, publish_activation_outcome, publish_terminal, resolve_update_source_dir, run_child_with_progress, steps_for, update_child_env, verify_installed_commit, write_json,
+        HelperError, PROGRESS_FILE, STATUS_FILE, activation_journal, base_status, classify_apply_failure, compose_app_dir, publish_activation_outcome, publish_terminal, resolve_update_source_dir, run_child_with_progress, steps_for, update_child_env, verify_installed_commit, write_json, authorize_update_source,
     )
 
 

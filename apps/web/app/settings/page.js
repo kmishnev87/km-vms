@@ -172,6 +172,7 @@ const TEXT = {
     maintenanceCurrentRestoreTerminalPhase: "Результат",
     maintenanceCurrentRestorePhraseMismatch: "Введите фразу подтверждения точно как указано.",
     maintenanceCurrentRestoreRequestRejected: "Запуск восстановления отклонён.",
+    maintenanceCurrentRestoreNotAdmitted: "Этот запрос восстановления не был принят. Можно запустить восстановление заново вручную.",
     maintenanceCurrentRestorePhases: {
       preflight: "Проверка условий",
       pre_restore_backup: "Подготовка резервной копии текущей базы",
@@ -877,6 +878,7 @@ const TEXT = {
     maintenanceCurrentRestoreTerminalPhase: "Result",
     maintenanceCurrentRestorePhraseMismatch: "Type the confirmation phrase exactly as shown.",
     maintenanceCurrentRestoreRequestRejected: "The restore request was rejected.",
+    maintenanceCurrentRestoreNotAdmitted: "This restore request was not admitted. You can start a new restore manually.",
     maintenanceCurrentRestorePhases: {
       preflight: "Checking conditions",
       pre_restore_backup: "Preparing current database safety backup",
@@ -1561,6 +1563,7 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceCurrentRestoreTerminalPhase: "结果",
   maintenanceCurrentRestorePhraseMismatch: "请完全按提示输入确认短语。",
   maintenanceCurrentRestoreRequestRejected: "恢复请求已被拒绝。",
+  maintenanceCurrentRestoreNotAdmitted: "此恢复请求未被接受。您可以手动重新发起恢复。",
   maintenanceCurrentRestorePhases: {
     preflight: "检查条件",
     pre_restore_backup: "准备当前数据库安全备份",
@@ -2136,7 +2139,7 @@ export default function SettingsPage() {
   const auditRequestRef = useRef(0);
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
-  const { draft, setDraft, savedDraft, setSavedDraft, hardware, setHardware, formatStatus, setFormatStatus, currentUser, setCurrentUser, pendingLanguageRef, patch, load, lang } = useSettingsFormLoader({ showToast, normalizedError });
+  const { draft, setDraft, savedDraft, setSavedDraft, hardware, setHardware, formatStatus, setFormatStatus, currentUser, pendingLanguageRef, patch, load, lang } = useSettingsFormLoader({ showToast, normalizedError });
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
   const anyBusy = saving || hardwareChecking || Boolean(formatChoice);
@@ -2148,6 +2151,7 @@ export default function SettingsPage() {
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
   useModalBodyScrollLock(Boolean(usersModalOpen || userModal || securityModalOpen));
   const maintenanceController = useSettingsMaintenanceController({
+    currentUser,
     canManageMaintenance,
     lang,
     t,

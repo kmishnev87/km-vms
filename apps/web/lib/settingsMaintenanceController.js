@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch } from "./api";
+import { apiFetch, captureAuthSession, getAuthToken } from "./api";
+import { useAuthSession } from "./useAuthSession";
+import { actorPendingStorage } from "./actorPendingStorage";
 import { acquireModalScrollLock } from "./modalScrollLock";
 import {
   retainUpdateApplyOperation,
@@ -106,6 +108,7 @@ function createUpdateApplySubmissionId() {
 }
 
 export function useSettingsMaintenanceController({
+  currentUser,
   canManageMaintenance,
   lang,
   t,
@@ -113,6 +116,11 @@ export function useSettingsMaintenanceController({
   clearToast,
   diagnosticChoiceOpen,
 }) {
+  const maintenanceSession = useAuthSession();
+  const ownsMaintenanceSession = () => Boolean(maintenanceSession && getAuthToken() === maintenanceSession);
+  const pendingStorage = useMemo(() => actorPendingStorage(
+    typeof window === "undefined" ? null : window.sessionStorage, currentUser?.id,
+  ), [currentUser?.id]);
   const [maintenanceModalOpen, setMaintenanceModalOpen] = useState(false);
   const [maintenanceOverview, setMaintenanceOverview] = useState(null);
   const [maintenanceBackupDetail, setMaintenanceBackupDetail] = useState(null);
@@ -146,6 +154,7 @@ export function useSettingsMaintenanceController({
   const maintenanceBackupDetailRef = useRef(null);
   const currentRestorePendingRef = useRef(null);
   const currentRestorePollInFlightRef = useRef(false);
+  const currentRestoreApplyInFlightRef = useRef(null);
   const currentRestoreDialogRef = useRef(null);
   const updateApplyDialogRef = useRef(null);
   const maintenanceChildDialogOpenRef = useRef(false);
@@ -256,7 +265,7 @@ export function useSettingsMaintenanceController({
 
   useEffect(() => {
     try {
-      const raw = window.sessionStorage.getItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
+      const raw = pendingStorage.getItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
       const restored = restoreBackupOperationPending(raw, Date.now());
       if (restored) {
         maintenanceBackupRecoveryRef.current = true;
@@ -269,25 +278,25 @@ export function useSettingsMaintenanceController({
           recovering: true,
         });
       } else if (raw !== null) {
-        window.sessionStorage.removeItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
+        pendingStorage.removeItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
       }
     } catch {}
-  }, []);
+  }, [pendingStorage]);
 
   useEffect(() => {
     try {
-      const raw = window.sessionStorage.getItem(UPDATE_APPLY_PENDING_STORAGE_KEY);
+      const raw = pendingStorage.getItem(UPDATE_APPLY_PENDING_STORAGE_KEY);
       const restored = restoreUpdateApplyPending(raw, Date.now());
       if (restored) {
         updateApplyPendingRef.current = restored;
         setUpdateApplyPending(restored);
       }
     } catch {}
-  }, []);
+  }, [pendingStorage]);
 
   useEffect(() => {
     try {
-      const raw = window.sessionStorage.getItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+      const raw = pendingStorage.getItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
       const value = raw ? JSON.parse(raw) : null;
       const valid = value
         && typeof value === "object"
@@ -308,14 +317,14 @@ export function useSettingsMaintenanceController({
           error: "",
         });
       } else if (raw !== null) {
-        window.sessionStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+        pendingStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
       }
     } catch {
       try {
-        window.sessionStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+        pendingStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
       } catch {}
     }
-  }, []);
+  }, [pendingStorage]);
 
   useEffect(() => {
     if (!canManageMaintenance || !currentRestorePending) return undefined;
@@ -475,9 +484,9 @@ export function useSettingsMaintenanceController({
     setUpdateApplyPending(safeRecord);
     try {
       if (safeRecord) {
-        window.sessionStorage.setItem(UPDATE_APPLY_PENDING_STORAGE_KEY, JSON.stringify(safeRecord));
+        pendingStorage.setItem(UPDATE_APPLY_PENDING_STORAGE_KEY, JSON.stringify(safeRecord));
       } else {
-        window.sessionStorage.removeItem(UPDATE_APPLY_PENDING_STORAGE_KEY);
+        pendingStorage.removeItem(UPDATE_APPLY_PENDING_STORAGE_KEY);
       }
     } catch {}
     return safeRecord;
@@ -490,12 +499,12 @@ export function useSettingsMaintenanceController({
     if (nextRecord && !safeRecord) return null;
     try {
       if (safeRecord) {
-        window.sessionStorage.setItem(
+        pendingStorage.setItem(
           BACKUP_OPERATION_PENDING_STORAGE_KEY,
           JSON.stringify(safeRecord),
         );
       } else {
-        window.sessionStorage.removeItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
+        pendingStorage.removeItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
       }
     } catch {
       if (safeRecord) return null;
@@ -521,12 +530,12 @@ export function useSettingsMaintenanceController({
     setCurrentRestorePending(safeRecord);
     try {
       if (safeRecord) {
-        window.sessionStorage.setItem(
+        pendingStorage.setItem(
           CURRENT_RESTORE_PENDING_STORAGE_KEY,
           JSON.stringify(safeRecord),
         );
       } else {
-        window.sessionStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+        pendingStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
       }
     } catch {}
     return safeRecord;
@@ -609,35 +618,37 @@ export function useSettingsMaintenanceController({
 
   async function pollCurrentRestoreStatus(pendingOverride = null) {
     const pending = pendingOverride || currentRestorePendingRef.current;
-    if (!pending || currentRestorePollInFlightRef.current) return null;
+    if (!pending || currentRestorePollInFlightRef.current || !ownsMaintenanceSession()) return null;
+    const ownsSession = captureAuthSession();
+    const ownsPending = () => ownsSession() && currentRestorePendingRef.current?.submissionId === pending.submissionId;
     currentRestorePollInFlightRef.current = true;
     try {
-      const result = await apiFetch("/system/restore/current/status");
-      const resultSubmissionId = String(result?.submission_id || "");
-      if (
-        String(result?.status || "") !== "idle"
-        && resultSubmissionId !== pending.submissionId
-      ) {
-        setCurrentRestoreDialog((current) => ({
-          ...(current || {}),
-          artifact: current?.artifact || {
-            id: pending.artifactId,
-            createdAt: "-",
-          },
-          accepted: true,
-          reconnecting: true,
-          error: "",
-        }));
-        return null;
+      let result;
+      try {
+        result = await apiFetch("/system/restore/current/status");
+      } catch (error) {
+        if (Number(error?.status) !== 404) throw error;
+        result = { status: "idle" };
       }
-      if (String(result?.status || "") === "idle") {
-        setCurrentRestoreDialog((current) => current ? {
-          ...current,
-          accepted: true,
-          reconnecting: true,
-          error: "",
-        } : current);
-        return null;
+      if (!ownsPending()) return null;
+      const resultSubmissionId = String(result?.submission_id || "");
+      if (String(result?.status || "") === "idle" || resultSubmissionId !== pending.submissionId) {
+        // Do not retire a healthy POST which this page is still awaiting.
+        if (currentRestoreApplyInFlightRef.current === pending.submissionId) return null;
+        const receipt = await apiFetch("/system/restore/current/reconcile", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ submission_id: pending.submissionId, artifact_id: pending.artifactId }),
+        });
+        if (!ownsPending() || receipt?.submission_id !== pending.submissionId) return null;
+        if (receipt.admission === "not_admitted") {
+          commitCurrentRestorePending(null);
+          setCurrentRestoreStatus(null);
+          setCurrentRestoreDialog(null);
+          showToast({ variant: "error", title: t.maintenanceCurrentRestoreNotAdmitted });
+          return receipt;
+        }
+        result = receipt.admission === "admitted" ? receipt.restore_status : null;
+        if (!result || result.submission_id !== pending.submissionId) return null;
       }
       setCurrentRestoreStatus(result);
       const terminal = currentRestoreTerminal(result);
@@ -666,6 +677,7 @@ export function useSettingsMaintenanceController({
       }
       return result;
     } catch (error) {
+      if (!ownsPending()) return null;
       const expectedRestart = updateApplyRequestIsAmbiguous(error);
       setCurrentRestoreDialog((current) => ({
         ...(current || {}),
@@ -741,6 +753,8 @@ export function useSettingsMaintenanceController({
   }
 
   async function confirmCurrentDatabaseRestore() {
+    if (!ownsMaintenanceSession()) return;
+    const ownsSession = captureAuthSession();
     const dialog = currentRestoreDialog;
     if (
       !dialog
@@ -756,6 +770,7 @@ export function useSettingsMaintenanceController({
       createdAt: Date.now(),
     });
     if (!pending) return;
+    currentRestoreApplyInFlightRef.current = pending.submissionId;
     setCurrentRestoreStatus({
       submission_id: pending.submissionId,
       status: "queued",
@@ -779,10 +794,14 @@ export function useSettingsMaintenanceController({
           confirmation_phrase: CURRENT_RESTORE_CONFIRMATION_PHRASE,
         }),
       });
+      if (!ownsSession()) return;
+      currentRestoreApplyInFlightRef.current = null;
       const restoreStatus = receipt?.restore_status || null;
       if (restoreStatus) setCurrentRestoreStatus(restoreStatus);
       void pollCurrentRestoreStatus(pending);
     } catch (error) {
+      if (!ownsSession()) return;
+      currentRestoreApplyInFlightRef.current = null;
       if (updateApplyRequestIsAmbiguous(error)) {
         setCurrentRestoreDialog((current) => current ? {
           ...current,
@@ -800,6 +819,10 @@ export function useSettingsMaintenanceController({
           reconnecting: false,
           error: currentRestoreReasonText(currentRestoreReasonCode(error)),
         } : current);
+      }
+    } finally {
+      if (currentRestoreApplyInFlightRef.current === pending.submissionId) {
+        currentRestoreApplyInFlightRef.current = null;
       }
     }
   }

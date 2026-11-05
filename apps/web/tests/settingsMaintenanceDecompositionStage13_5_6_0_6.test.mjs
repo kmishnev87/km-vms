@@ -486,6 +486,7 @@ assert.deepEqual(counts(endpointValues), {
   "/system/restore/artifacts/${encodeURIComponent(artifact.id)}/delete": 1,
   "/system/restore/current/apply": 1,
   "/system/restore/current/preflight": 1,
+  "/system/restore/current/reconcile": 1,
   "/system/restore/current/status": 1,
   "/system/restore/status?offset=${safeOffset}&limit=${MAINTENANCE_BACKUP_PAGE_SIZE}": 1,
   "/system/restore/status?offset=${validOffset}&limit=${MAINTENANCE_BACKUP_PAGE_SIZE}": 1,
@@ -497,7 +498,8 @@ assert.deepEqual(counts(endpointValues), {
 assert.equal((pageSource.match(/["'`](?:\/system\/)/g) || []).length, 0);
 assert.equal((surfaceSource.match(/["'`](?:\/system\/)/g) || []).length, 0);
 
-const persistenceValues = [...controllerSource.matchAll(/window\.sessionStorage\.(?:getItem|setItem|removeItem)\(\s*([A-Z0-9_]+)/g)]
+assert.equal(/window\.sessionStorage\.(?:getItem|setItem|removeItem)\(/.test(controllerSource), false);
+const persistenceValues = [...controllerSource.matchAll(/pendingStorage\.(?:getItem|setItem|removeItem)\(\s*([A-Z0-9_]+)/g)]
   .map((match) => match[1]);
 assert.deepEqual(counts(persistenceValues), {
   "BACKUP_OPERATION_PENDING_STORAGE_KEY": 4,
