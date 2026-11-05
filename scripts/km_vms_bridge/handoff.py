@@ -404,6 +404,16 @@ class BridgeHandoffExecutor:
             "--rm",
             "--name",
             coordinator_name,
+            # Compose-built images carry their original project/service labels.
+            # This detached coordinator must not impersonate the live helper.
+            "--label",
+            f"com.docker.compose.project={coordinator_name}",
+            "--label",
+            "com.docker.compose.service=update-helper-refresh",
+            "--label",
+            "com.docker.compose.oneoff=True",
+            "--label",
+            f"org.km-vms.update.project={project_name}",
             "-v",
             f"{app_dir}:{app_dir}",
             "-v",

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.4",
-  "tag": "v0.9.4",
-  "title": "Accept verified commit-pinned release updates",
-  "summary": "Correct the contract between release discovery and the installed update helper: accept an exact pinned commit as well as its version tag, while independently verifying the official published release and its exact commit.",
+  "version": "0.9.5",
+  "tag": "v0.9.5",
+  "title": "Isolate temporary update coordinators from running services",
+  "summary": "Give the detached update-helper coordinator its own Docker project and service identity so Compose image labels cannot make it appear as a duplicate running helper. Preserve exact target-image verification, automatic cleanup and the original installation's update authority.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.4",
+  "source_ref": "v0.9.5",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,35 +20,35 @@
     "target_version": 10
   },
   "changelog": [
-    "Accept commit-pinned update requests produced by the real release provider; keep exact official release, repository and tag-to-commit verification.",
-    "Reject unrelated commits, branches, mismatched versions, draft releases and unavailable publisher evidence before running update code.",
-    "Cover the actual release descriptor, API manifest projection and installed helper together, including lightweight and annotated tags."
+    "Override inherited Compose labels on temporary refresh coordinators; keep them outside the running installation's service discovery.",
+    "Preserve the original project, request, exact image and release-slot arguments; temporary coordinators still remove themselves on exit.",
+    "Add regression coverage for canonical release-slot and legacy refresh routes, including images carrying another helper's Compose identity."
   ],
   "title_i18n": {
-    "en": "Accept verified commit-pinned release updates",
-    "ru": "Исправлена проверка точной сборки при обновлении",
-    "zh-CN": "修复固定提交版本的更新验证"
+    "en": "Isolate temporary update coordinators from running services",
+    "ru": "Надёжная передача управления обновлённой службе",
+    "zh-CN": "隔离临时更新协调器与运行中的服务"
   },
   "summary_i18n": {
-    "en": "Correct the contract between release discovery and the installed update helper: accept an exact pinned commit as well as its version tag, while independently verifying the official published release and its exact commit.",
-    "ru": "Устранено несоответствие между поиском выпуска и служебным обновлятором: запрос с точным номером сборки принимается наравне с названием версии. Официальный выпуск и соответствие его исходникам по-прежнему проверяются независимо.",
-    "zh-CN": "统一版本发现与已安装更新助手之间的约定，允许精确固定的提交或其版本标签，同时独立验证官方已发布版本及其精确提交。"
+    "en": "Give the detached update-helper coordinator its own Docker project and service identity so Compose image labels cannot make it appear as a duplicate running helper. Preserve exact target-image verification, automatic cleanup and the original installation's update authority.",
+    "ru": "Временный координатор обновления получает собственные Docker-метки и больше не может ошибочно определяться как вторая рабочая служба. Проверки точного образа, исходной установки и запроса сохранены; временный контейнер удаляется автоматически.",
+    "zh-CN": "为独立更新协调器分配自己的 Docker 项目与服务标识，避免继承镜像标签后被误认为运行助手的副本。保留精确目标镜像验证、自动清理和原安装实例的更新权限。"
   },
   "changelog_i18n": {
     "en": [
-      "Accept commit-pinned update requests produced by the real release provider; keep exact official release, repository and tag-to-commit verification.",
-      "Reject unrelated commits, branches, mismatched versions, draft releases and unavailable publisher evidence before running update code.",
-      "Cover the actual release descriptor, API manifest projection and installed helper together, including lightweight and annotated tags."
+      "Override inherited Compose labels on temporary refresh coordinators; keep them outside the running installation's service discovery.",
+      "Preserve the original project, request, exact image and release-slot arguments; temporary coordinators still remove themselves on exit.",
+      "Add regression coverage for canonical release-slot and legacy refresh routes, including images carrying another helper's Compose identity."
     ],
     "ru": [
-      "Обновлятор принимает точную сборку из настоящего описания выпуска; независимая проверка официального репозитория, версии и исходников сохранена.",
-      "Посторонние сборки, ветки, несовпадающие версии и неопубликованные выпуски по-прежнему отклоняются до запуска обновления.",
-      "Добавлена сквозная проверка описания выпуска, передачи данных API и служебного обновлятора для обычных и аннотированных тегов."
+      "Временный координатор использует отдельные метки проекта и службы, не мешая поиску работающего обновлятора.",
+      "Точная проверка образа, установка, запрос и выбранный слот не изменены; временный контейнер по-прежнему удаляется после завершения.",
+      "Добавлены проверки обеих схем передачи управления с учётом меток, унаследованных от образа служебного контейнера."
     ],
     "zh-CN": [
-      "接受真实版本提供程序生成的固定提交更新请求，并保留官方版本、仓库和标签到提交的精确验证。",
-      "在执行更新代码之前，拒绝不相关提交、分支、版本不匹配、草稿版本及无法验证的发布证据。",
-      "联合测试真实版本描述文件、API 清单转换和已安装助手，覆盖轻量标签和附注标签。"
+      "覆盖临时协调器继承的 Compose 标签，避免干扰正在运行实例的服务发现。",
+      "保留原项目、请求、精确镜像和版本槽参数；临时协调器仍在退出后自动删除。",
+      "新增标准版本槽及旧版交接路径回归测试，覆盖携带其他助手 Compose 标识的镜像。"
     ]
   }
 }
