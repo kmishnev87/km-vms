@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.3",
-  "tag": "v0.9.3",
-  "title": "Reliable updates, video playback and session recovery",
-  "summary": "Prepare pinned update dependencies automatically, recover repeated video playback interruptions, keep overlapping exports accurate, provide bounded service diagnostics and invalidate stale video and user credentials safely.",
+  "version": "0.9.4",
+  "tag": "v0.9.4",
+  "title": "Accept verified commit-pinned release updates",
+  "summary": "Correct the contract between release discovery and the installed update helper: accept an exact pinned commit as well as its version tag, while independently verifying the official published release and its exact commit.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.3",
+  "source_ref": "v0.9.4",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,63 +20,35 @@
     "target_version": 10
   },
   "changelog": [
-    "Automatically prepare the pinned archive-validation image before updating; bound download time and report a specific retryable dependency error.",
-    "Recover separate Recordings and Chronology playback interruptions while preserving position, speed and pause state.",
-    "Isolate Live cookies per installation, renew access without restarting video and revoke this browser's Live access on normal logout.",
-    "Revoke old user and media credentials before database restore or rollback without replacing installation signing or encryption keys.",
-    "Deduplicate chronology requests and enforce explicit work limits without silently truncating archive results.",
-    "Use a shared nonoverlapping export plan, including nested and partially overlapping recordings.",
-    "Collect bounded, redacted service logs through the existing helper without granting the API Docker access; report partial evidence honestly.",
-    "Use grouped archive totals and bounded file samples; reuse lightweight storage metadata and distinguish unverified counts from zero.",
-    "Reuse localized storage labels and extend update, playback, export, restore, session and diagnostic regression coverage.",
-    "Older sessions may require one fresh login after upgrading. Passwords, settings and video archives are preserved."
+    "Accept commit-pinned update requests produced by the real release provider; keep exact official release, repository and tag-to-commit verification.",
+    "Reject unrelated commits, branches, mismatched versions, draft releases and unavailable publisher evidence before running update code.",
+    "Cover the actual release descriptor, API manifest projection and installed helper together, including lightweight and annotated tags."
   ],
   "title_i18n": {
-    "en": "Reliable updates, video playback and session recovery",
-    "ru": "Надёжные обновления, просмотр видео и восстановление сессий",
-    "zh-CN": "可靠的更新、视频播放与会话恢复"
+    "en": "Accept verified commit-pinned release updates",
+    "ru": "Исправлена проверка точной сборки при обновлении",
+    "zh-CN": "修复固定提交版本的更新验证"
   },
   "summary_i18n": {
-    "en": "Prepare pinned update dependencies automatically, recover repeated video playback interruptions, keep overlapping exports accurate, provide bounded service diagnostics and invalidate stale video and user credentials safely.",
-    "ru": "Автоматическая подготовка зависимостей обновления, восстановление повторных обрывов просмотра, экспорт без повторяющихся участков, ограниченная по объёму диагностика служб и безопасное прекращение действия старых пользовательских и видеосессий.",
-    "zh-CN": "自动准备固定更新依赖，恢复多次视频播放中断，正确导出重叠录像，限制服务诊断开销，并安全撤销过期的用户与媒体凭据。"
+    "en": "Correct the contract between release discovery and the installed update helper: accept an exact pinned commit as well as its version tag, while independently verifying the official published release and its exact commit.",
+    "ru": "Устранено несоответствие между поиском выпуска и служебным обновлятором: запрос с точным номером сборки принимается наравне с названием версии. Официальный выпуск и соответствие его исходникам по-прежнему проверяются независимо.",
+    "zh-CN": "统一版本发现与已安装更新助手之间的约定，允许精确固定的提交或其版本标签，同时独立验证官方已发布版本及其精确提交。"
   },
   "changelog_i18n": {
     "en": [
-      "Automatically prepare the pinned archive-validation image before updating; bound download time and report a specific retryable dependency error.",
-      "Recover separate Recordings and Chronology playback interruptions while preserving position, speed and pause state.",
-      "Isolate Live cookies per installation, renew access without restarting video and revoke this browser's Live access on normal logout.",
-      "Revoke old user and media credentials before database restore or rollback without replacing installation signing or encryption keys.",
-      "Deduplicate chronology requests and enforce explicit work limits without silently truncating archive results.",
-      "Use a shared nonoverlapping export plan, including nested and partially overlapping recordings.",
-      "Collect bounded, redacted service logs through the existing helper without granting the API Docker access; report partial evidence honestly.",
-      "Use grouped archive totals and bounded file samples; reuse lightweight storage metadata and distinguish unverified counts from zero.",
-      "Reuse localized storage labels and extend update, playback, export, restore, session and diagnostic regression coverage.",
-      "Older sessions may require one fresh login after upgrading. Passwords, settings and video archives are preserved."
+      "Accept commit-pinned update requests produced by the real release provider; keep exact official release, repository and tag-to-commit verification.",
+      "Reject unrelated commits, branches, mismatched versions, draft releases and unavailable publisher evidence before running update code.",
+      "Cover the actual release descriptor, API manifest projection and installed helper together, including lightweight and annotated tags."
     ],
     "ru": [
-      "Обновлятор сам подготавливает закреплённый образ проверки архива; скачивание ограничено по времени, ошибка имеет понятную причину и допускает повторную попытку.",
-      "Записи и Хронология восстанавливаются после повторных обрывов без потери позиции, скорости и состояния паузы.",
-      "Cookie Live разделены между установками; продление не перезапускает видео, выход прекращает доступ этого браузера без остановки других устройств.",
-      "Перед восстановлением базы и возвратом отзываются старые пользовательские и видеотокены без замены ключей подписи и шифрования установки.",
-      "Повторяющиеся камеры в запросе Хронологии объединяются; объём работы ограничен явно, без скрытого усечения результатов.",
-      "Проверка и создание экспорта используют единый план без дублирования пересекающихся участков, в том числе вложенных записей.",
-      "Помощник собирает ограниченные журналы служб без доступа API к Docker; секреты удаляются, неполные и недоступные данные обозначаются явно.",
-      "Диагностика использует агрегаты и ограниченную выборку файлов без полного сканирования; непроверенное число физических файлов не подменяется нулём.",
-      "Используются существующие переводы хранилища; расширены проверки обновления, просмотра, экспорта, восстановления, сессий и диагностики.",
-      "После обновления старой сессии может потребоваться один повторный вход. Пароли, настройки и видеоархив сохраняются."
+      "Обновлятор принимает точную сборку из настоящего описания выпуска; независимая проверка официального репозитория, версии и исходников сохранена.",
+      "Посторонние сборки, ветки, несовпадающие версии и неопубликованные выпуски по-прежнему отклоняются до запуска обновления.",
+      "Добавлена сквозная проверка описания выпуска, передачи данных API и служебного обновлятора для обычных и аннотированных тегов."
     ],
     "zh-CN": [
-      "更新交接前自动准备缺失的固定归档验证镜像，限制下载等待时间，并明确提示可重试的依赖错误。",
-      "稳定播放或暂停画面恢复后重新启用重试，使录像与时间线能应对多次独立中断，同时保留位置、速度和暂停状态。",
-      "按安装实例隔离实时视频 Cookie，续期时保持浏览器权限稳定，正常退出仅撤销本浏览器的实时访问。",
-      "将用户会话标识保存在数据库备份之外，恢复或回滚数据库前撤销旧用户及媒体凭据，不更换安装签名或加密密钥。",
-      "合并时间线请求中的重复摄像机并明确限制工作量，不再重复处理或静默截断归档结果。",
-      "导出验证与生成使用同一个无重叠覆盖计划，正确处理嵌套及部分重叠的录像。",
-      "通过现有辅助服务收集固定服务的有界脱敏日志，不授予 API Docker 权限，明确区分部分结果和不可用证据。",
-      "归档诊断采用聚合统计及有限文件样本，复用轻量存储元数据，将未经验证的物理文件数量表示为未知而非零。",
-      "复用现有的存储完整性本地化标签，并扩展更新、播放、导出、恢复、会话及诊断回归测试。",
-      "升级后旧凭据可能需要重新登录一次，因为它们不含新的会话标识；密码、设置和视频归档均保留。"
+      "接受真实版本提供程序生成的固定提交更新请求，并保留官方版本、仓库和标签到提交的精确验证。",
+      "在执行更新代码之前，拒绝不相关提交、分支、版本不匹配、草稿版本及无法验证的发布证据。",
+      "联合测试真实版本描述文件、API 清单转换和已安装助手，覆盖轻量标签和附注标签。"
     ]
   }
 }

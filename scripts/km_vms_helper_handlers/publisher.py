@@ -69,14 +69,19 @@ def verify_published_source(source, *, get_json=None):
     """Return pinned verified identity; never use caller-provided URLs or cache."""
     if not isinstance(source, dict):
         raise PublishedSourceError()
-    tag = source.get("ref")
+    version = source.get("version")
+    tag = "v" + version if isinstance(version, str) else ""
+    ref = source.get("ref")
     commit = str(source.get("commit") or "").lower()
     if (str(source.get("repo") or "").casefold() != OFFICIAL_REPOSITORY
-            or not isinstance(tag, str) or not TAG_RE.fullmatch(tag)
-            or tag != "v" + str(source.get("version") or "")
+            or not TAG_RE.fullmatch(tag)
+            or not isinstance(ref, str) or ref not in (tag, commit)
             or not SHA_RE.fullmatch(commit)
             or str(source.get("apply_ref") or "").lower() != commit):
         raise PublishedSourceError()
+    # API artifacts are pinned to a commit, not necessarily named by the tag.
+    # Independently resolve the version's official release in either case;
+    # caller-provided refs never select a different release or download URL.
     deadline = time.monotonic() + LOOKUP_DEADLINE_SECONDS
     fetch = get_json or _github_json
     quoted_tag = urllib.parse.quote(tag, safe="")

@@ -1,5 +1,7 @@
-"""Publisher admission is mocked metadata, never a live substituted release."""
+"""Actual API/helper contracts, with only external publisher metadata mocked."""
+from dataclasses import asdict
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import uuid
@@ -30,7 +32,7 @@ def _source(version="0.9.1"):
 
 
 def _metadata(source, *, annotated=False):
-    tag = source["ref"]
+    tag = "v" + source["version"]
     result = {
         "/releases/tags/" + tag: {"draft": False, "tag_name": tag, "published_at": "2026-11-05T00:00:00Z", "target_commitish": "not-an-authority"},
         "/git/ref/tags/" + tag: {"ref": "refs/tags/" + tag,
@@ -43,8 +45,11 @@ def _metadata(source, *, annotated=False):
 
 @pytest.mark.parametrize("version", ["0.9.1", "0.8.29", "1.4.0", "1.4.0-beta.1"])
 @pytest.mark.parametrize("annotated", [False, True])
-def test_any_official_published_matching_tag_can_update_without_current_version_pin(policy, version, annotated):
+@pytest.mark.parametrize("pinned_ref", [False, True])
+def test_any_official_published_matching_tag_can_update_without_current_version_pin(policy, version, annotated, pinned_ref):
     source = _source(version)
+    if pinned_ref:
+        source["ref"] = source["commit"]
     records = _metadata(source, annotated=annotated)
     calls = []
 
@@ -57,7 +62,7 @@ def test_any_official_published_matching_tag_can_update_without_current_version_
     assert len(calls) == (3 if annotated else 2)
 
 
-@pytest.mark.parametrize("patch", [{"repo": "foreign/project"}, {"ref": "main"}, {"ref": "a" * 40}, {"version": "0.9.2"}, {"apply_ref": "c" * 40}])
+@pytest.mark.parametrize("patch", [{"repo": "foreign/project"}, {"ref": "main"}, {"ref": "c" * 40}, {"ref": None}, {"ref": {}}, {"version": "0.9.2"}, {"version": None}, {"apply_ref": "c" * 40}])
 def test_untrusted_schema_is_rejected_before_any_network_or_child(policy, patch):
     def forbidden(*_):
         raise AssertionError("invalid source reached network")
@@ -67,16 +72,22 @@ def test_untrusted_schema_is_rejected_before_any_network_or_child(policy, patch)
 
 
 @pytest.mark.parametrize("patch", [{"draft": True}, {"draft": None}, {"published_at": None}, {"published_at": "nonsense"}, {"published_at": "2026-11-05"}, {"tag_name": "v0.9.0"}])
-def test_draft_unpublished_malformed_or_wrong_release_cannot_authorize(policy, patch):
+@pytest.mark.parametrize("pinned_ref", [False, True])
+def test_draft_unpublished_malformed_or_wrong_release_cannot_authorize(policy, patch, pinned_ref):
     source = _source()
+    if pinned_ref:
+        source["ref"] = source["commit"]
     records = _metadata(source)
     records["/releases/tags/v0.9.1"].update(patch)
     with pytest.raises(policy.PublishedSourceError):
         policy.verify_published_source(source, get_json=lambda path, _: records[path])
 
 
-def test_ref_identity_commit_mismatch_and_tag_cycles_are_rejected(policy):
+@pytest.mark.parametrize("pinned_ref", [False, True])
+def test_ref_identity_commit_mismatch_and_tag_cycles_are_rejected(policy, pinned_ref):
     source = _source()
+    if pinned_ref:
+        source["ref"] = source["commit"]
     for bad_object in ({"type": "commit", "sha": "c" * 40}, {"type": "tree", "sha": "a" * 40}, None):
         records = _metadata(source)
         records["/git/ref/tags/v0.9.1"]["object"] = bad_object
@@ -93,6 +104,54 @@ def test_ref_identity_commit_mismatch_and_tag_cycles_are_rejected(policy):
     with pytest.raises(policy.PublishedSourceError):
         policy.verify_published_source(source, get_json=cycle)
     assert len(calls) == 2 + policy.MAX_TAG_HOPS
+
+
+@pytest.mark.parametrize("annotated", [False, True])
+@pytest.mark.parametrize("matching_commit", [False, True])
+def test_real_release_descriptor_api_projection_reaches_installed_publisher(monkeypatch, annotated, matching_commit):
+    from app.services import update_apply, update_check
+
+    payload = json.loads((ROOT / "release/km-vms-release.json").read_text(encoding="utf-8"))
+    tag = "v" + payload["version"]
+    commit = "a" * 40
+    calls = []
+
+    def resolve_tag(repo, requested_tag):
+        assert repo == "kmishnev87/km-vms"
+        assert requested_tag == tag
+        return commit
+
+    def read_descriptor(url):
+        assert url == f"https://raw.githubusercontent.com/kmishnev87/km-vms/{tag}/release/km-vms-release.json"
+        return dict(payload)
+
+    monkeypatch.setattr(update_check, "_resolve_public_tag_commit", resolve_tag)
+    monkeypatch.setattr(update_check, "_read_public_release_payload", read_descriptor)
+    manifest = update_check._manifest_from_public_release_tag("kmishnev87/km-vms", tag)
+    source = update_apply._sanitized_source(asdict(manifest))
+    assert source["ref"] == source["commit"] == source["apply_ref"] == commit
+    assert manifest.git_ref == tag
+
+    records = _metadata(source, annotated=annotated)
+    if not matching_commit:
+        path = "/git/tags/" + "b" * 40 if annotated else "/git/ref/tags/" + tag
+        records[path]["object"]["sha"] = "c" * 40
+
+    def fetch(path, deadline):
+        calls.append(path)
+        assert deadline > 0
+        return records[path]
+
+    helper = _load("scripts/km-vms-update-helper.py")
+    publisher = sys.modules[helper._operation_handlers.verify_published_source.__module__]
+    monkeypatch.setattr(publisher, "_github_json", fetch)
+    if matching_commit:
+        assert helper.authorize_update_source(source) == source
+    else:
+        with pytest.raises(helper.HelperError) as result:
+            helper.authorize_update_source(source)
+        assert result.value.category == "source_acquisition_failed"
+    assert calls == list(records)
 
 
 def test_helper_denies_before_resolving_or_running_any_update_child(monkeypatch, tmp_path):
