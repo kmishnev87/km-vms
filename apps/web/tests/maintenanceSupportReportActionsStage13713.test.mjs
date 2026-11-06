@@ -186,10 +186,7 @@ assert.equal(settingsPage.includes("санитизирован"), false);
 assert.equal(settingsPage.includes("Sanitized"), false);
 assert.equal(settingsPage.includes("sanitized"), false);
 assert.equal(settingsPage.includes("脱敏"), false);
-assert.match(
-  settingsPage,
-  /settingsSecurityModalButton[\s\S]*\{t\.createDiagnosticArchive\}/,
-);
+assert.match(settingsPage, /<SupportReportForm /, "security section uses the shared sending/downloading form");
 
 assert.match(cssRule(".settingsMaintenanceSupportActions"), /display: grid/);
 assert.match(stageCss, /\.settingsMaintenanceWarningsList\s*\{[\s\S]*?max-height:\s*170px/);

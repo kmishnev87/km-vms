@@ -97,6 +97,8 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("system", "POST", "/system/update/apply/cancel", PERMISSION_MANAGE_SETTINGS, "require_permission", "Cancels only queued update apply before helper starts; no rollback or container killing."),
     EndpointPermission("diagnostics", "GET", "/settings/logs/archive", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("diagnostics", "POST", "/settings/bug-report", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
+    EndpointPermission("diagnostics", "GET", "/settings/support/status", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
+    EndpointPermission("diagnostics", "POST", "/settings/support/reports", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("hardware", "GET", "/hardware/capabilities", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("hardware", "POST", "/hardware/rescan", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("storage", "GET", "/storage/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only Storage Monitoring summary; owner/admin only."),

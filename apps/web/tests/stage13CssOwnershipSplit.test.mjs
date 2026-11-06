@@ -22,6 +22,7 @@ const expectedImports = [
   "styles/20-06-dashboard-card-tail.css",
   "styles/20-07-maintenance-final-layout.css",
   "styles/20-08-settings-recording-format.css",
+  "styles/20-09-support-reports.css",
   "styles/30-system-status-apk.css",
   "styles/40-01-storage-base.css",
   "styles/40-02-page-layout-shared.css",

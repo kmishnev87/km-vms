@@ -374,7 +374,7 @@ def test_stage650_publish_validation_leaves_descriptor_clean_with_tag_fallback(t
 
 
 def test_stage6141_docs_mention_publish_helper_and_token_file_contract():
-    docs = DOCS.read_text(encoding="utf-8")
+    docs = DOCS.with_name("RELEASING.md").read_text(encoding="utf-8")
 
     assert "km-vms-publish-github-release.sh" in docs
     assert "KM_VMS_GITHUB_RELEASE_TOKEN_FILE" in docs

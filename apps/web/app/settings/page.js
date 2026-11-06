@@ -8,6 +8,7 @@ import useSettingsUsersController from "../../lib/useSettingsUsersController";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import { OperationDialog, OperationToast, OperationRefreshButton, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import RecordingFormatChangeStatus from "../../components/RecordingFormatChangeStatus";
+import SupportReportForm from "../../components/SupportReportForm";
 import { recordingFormatCopy, recordingFormatError, recordingFormatNotice, recordingFormatNotificationKey, shouldWatchRecordingFormat } from "../../lib/recordingFormatChange";
 import {
   SettingsMaintenanceConfirmationDialogs,
@@ -2143,8 +2144,6 @@ export default function SettingsPage() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState("");
   const auditRequestRef = useRef(0);
-  const [bugReportText, setBugReportText] = useState("");
-  const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const { draft, setDraft, savedDraft, setSavedDraft, hardware, setHardware, formatStatus, setFormatStatus, currentUser, pendingLanguageRef, patch, load, lang } = useSettingsFormLoader({ showToast, normalizedError });
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
@@ -2394,15 +2393,10 @@ export default function SettingsPage() {
 
 
 
-  function patchBugReportText(value) {
-    setBugReportText(value);
-  }
-
   function closeSecurityModal() {
+    if (securityBusy) return;
     setSecurityModalOpen(false);
     setDiagnosticChoiceOpen(false);
-    setDiagnosticArchive(null);
-    setBugReportText("");
     setAuditError("");
   }
 
@@ -2429,10 +2423,8 @@ export default function SettingsPage() {
     try {
       const { blob, filename } = await apiFetchBlob(`/settings/logs/archive?mode=${encodeURIComponent(mode)}`);
       downloadBlob(blob, filename);
-      setDiagnosticArchive({ filename: filename || "km-vms-logs.zip" });
       showToast({ variant: "success", title: t.toasts.logsTitle, text: filename || "" });
     } catch (err) {
-      setDiagnosticArchive(null);
       showToast(normalizedError(err, lang));
     } finally {
       setSecurityBusy(false);
@@ -2845,7 +2837,7 @@ export default function SettingsPage() {
             <div className="settingsSecurityModal" role="dialog" aria-modal="true" aria-label={t.security}>
               <div className="settingsUserModalHeader">
                 <h2>{t.security}</h2>
-                <button type="button" className="settingsModalClose" onClick={closeSecurityModal} aria-label={t.close}>×</button>
+                <button type="button" className="settingsModalClose" onClick={closeSecurityModal} disabled={securityBusy} aria-label={t.close}>×</button>
               </div>
 
               <section className="settingsSecurityModalSection">
@@ -2946,31 +2938,7 @@ export default function SettingsPage() {
                 <div className="settingsSecurityModalSectionHead">
                   <h3>{t.bugReport}</h3>
                 </div>
-                <button className="button secondary small settingsSecurityModalButton" onClick={() => setDiagnosticChoiceOpen(true)} disabled={securityBusy}>
-                  {t.createDiagnosticArchive}
-                </button>
-                <textarea
-                  className="input settingsBugReportTextarea"
-                  value={bugReportText}
-                  onChange={(event) => patchBugReportText(event.target.value)}
-                  placeholder={t.bugReportPlaceholder}
-                  disabled={securityBusy}
-                />
-                {diagnosticArchive ? (
-                  <div className="settingsAttachmentBadge">
-                    <span>✓</span>
-                    <strong>{t.diagnosticArchiveReady}</strong>
-                    <small>{diagnosticArchive.filename}</small>
-                  </div>
-                ) : null}
-                <div className="settingsSecurityNote">{t.reportSendingPending}</div>
-                <button
-                  className="button small settingsSecurityModalButton"
-                  disabled
-                  title={t.reportSendingPending}
-                >
-                  {t.sendBugReport}
-                </button>
+                <SupportReportForm onToast={showToast} onBusyChange={setSecurityBusy} disabled={securityBusy} />
               </section>
 
             </div>

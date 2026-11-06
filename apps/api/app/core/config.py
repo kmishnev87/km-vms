@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     cors_allowed_origins: str = ""
+    support_report_url: str = "https://xn--80asbicph.xn--p1ai/km-vms-support/v1/reports"
 
     database_url: str
     jwt_secret: str

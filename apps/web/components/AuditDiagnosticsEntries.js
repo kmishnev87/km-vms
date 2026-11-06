@@ -6,6 +6,7 @@ import { OperationDialog, OperationToast, OperationRefreshButton } from "./Opera
 import { apiFetch, apiFetchBlob, forbiddenMessage } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
+import SupportReportForm from "./SupportReportForm";
 import { safeMetadataRows } from "../lib/settingsPageHelpers";
 import {
   AUDIT_CATEGORIES,
@@ -247,7 +248,6 @@ export function DiagnosticsEntry() {
   const [busy, setBusy] = useState("");
   const [operationToast, setOperationToast] = useState(null);
   const [archiveChoiceOpen, setArchiveChoiceOpen] = useState(false);
-  const [bugText, setBugText] = useState("");
   const canRunDiagnostics = Boolean(currentUser?.permissions?.includes("run_diagnostics"));
 
   async function downloadArchive(mode) {
@@ -260,28 +260,6 @@ export function DiagnosticsEntry() {
       setOperationToast({
         id: `diagnostics-archive-${mode}-${Date.now()}`,
         title: t("diagnosticsEntry.archiveReady"),
-        tone: "success",
-      });
-    } catch (err) {
-      setOperationToast({ id: `diagnostics-error-${Date.now()}`, title: t("diagnosticsEntry.failed"), message: err?.message, tone: "error" });
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function createBugReport() {
-    if (busy || !bugText.trim()) return;
-    setBusy("bug-report");
-    try {
-      const { blob, filename } = await apiFetchBlob("/settings/bug-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: bugText.trim(), include_logs: false }),
-      });
-      downloadBlob(blob, filename || "km-vms-bug-report.zip");
-      setOperationToast({
-        id: `diagnostics-bug-report-${Date.now()}`,
-        title: t("diagnosticsEntry.bugReportReady"),
         tone: "success",
       });
     } catch (err) {
@@ -320,16 +298,7 @@ export function DiagnosticsEntry() {
             <h3>{t("diagnosticsEntry.bugReport")}</h3>
             <p>{t("diagnosticsEntry.bugReportHint")}</p>
           </div>
-          <textarea
-            className="input settingsBugReportTextarea"
-            value={bugText}
-            onChange={(event) => setBugText(event.target.value.slice(0, 10000))}
-            placeholder={t("diagnosticsEntry.bugReportPlaceholder")}
-            disabled={Boolean(busy)}
-          />
-          <button type="button" className="button small settingsSecurityModalButton" onClick={createBugReport} disabled={Boolean(busy) || !bugText.trim()}>
-            {busy === "bug-report" ? t("diagnosticsEntry.running") : t("diagnosticsEntry.createBugReport")}
-          </button>
+          <SupportReportForm onToast={setOperationToast} onBusyChange={value => setBusy(value ? "support" : "")} disabled={Boolean(busy)} />
         </section>
       </div>
       <OperationDialog

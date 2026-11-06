@@ -11,6 +11,7 @@ const read = (relative) => fs.readFileSync(resolve(root, relative), "utf8");
 const api = read("lib/api.js");
 const routePermissions = read("lib/routePermissions.js");
 const component = read("components/AuditDiagnosticsEntries.js");
+const reportForm = read("components/SupportReportForm.js");
 const securityPage = read("app/security-journal/page.js");
 const diagnosticsPage = read("app/diagnostics/page.js");
 const i18n = readI18nSource();
@@ -42,11 +43,12 @@ assert.equal(diagnosticsDialog.includes("showFooterClose: false"), true);
 assert.equal(i18n.includes('archiveChoiceTitle: "Выберите диагностический архив"'), true);
 assert.equal(i18n.includes('normalArchive: "Обычный"'), true);
 assert.equal(i18n.includes('extendedArchive: "Расширенный"'), true);
-assert.equal(component.includes('apiFetchBlob("/settings/bug-report"'), true);
-assert.equal(component.includes("include_logs: false"), true);
+assert.equal(component.includes("<SupportReportForm"), true);
+assert.equal(reportForm.includes('apiFetchBlob("/settings/bug-report"'), true);
+assert.equal(reportForm.includes("include_logs: true"), true);
 assert.equal(component.includes("dangerouslySetInnerHTML"), false);
 assert.equal(component.includes("<pre"), false);
-assert.equal(component.includes("JSON.stringify("), true, "only request body serialization should use JSON.stringify");
+assert.equal(reportForm.includes("JSON.stringify("), true, "only request body serialization should use JSON.stringify");
 
 for (const key of [
   "securityJournal",

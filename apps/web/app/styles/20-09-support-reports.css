@@ -1,0 +1,19 @@
+/* Chapter 14.5: one shared form; fixed feedback space, no inline error banners. */
+.supportReportForm { display: grid; gap: 12px; min-width: 0; }
+.supportReportLabel { font-size: 12px; color: #526780; }
+.supportReportForm .settingsBugReportTextarea { width: 100%; height: 100px; min-height: 100px; resize: vertical; }
+.supportReportModes { margin: 0; padding: 0; border: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; }
+.supportReportModes legend { font-size: 12px; color: #526780; padding: 0 0 8px; }
+.supportReportModes label { border: 1px solid #dce5f1; background: #fff; border-radius: 9px; padding: 10px 12px; display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 4px 8px; align-items: center; cursor: pointer; }
+.supportReportModes label.is-selected { background: #f2f6ff; border-color: #94b5ed; }
+.supportReportModes input { margin: 0; width: 14px; height: 14px; accent-color: #356fe1; }
+.supportReportModes span { font-size: 12px; font-weight: 600; }
+.supportReportModes small { grid-column: 2; font-size: 10px; color: #6b7e97; line-height: 1.5; }
+.supportReportPrivacy { margin: 0; font-size: 11px; line-height: 1.7; color: #6b7e97; }
+.supportReportConsent { display: flex; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.6; color: #415976; cursor: pointer; }
+.supportReportConsent input { margin: 3px 0 0; width: 15px; height: 15px; flex-shrink: 0; accent-color: #356fe1; }
+.supportReportActions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.supportReportActions .button { min-width: 145px; }
+.supportReportReceipt { height: 56px; overflow: auto; display: flex; flex-direction: column; justify-content: flex-start; gap: 4px; color: #687d98; font-size: 11px; line-height: 1.6; padding: 2px 0; }
+.supportReportNumber { font-size: 10px; overflow-wrap: anywhere; user-select: text; }
+@media (max-width: 480px) { .supportReportActions .button { min-width: 0; flex: 1 1 100%; } .supportReportModes label { padding: 9px; } }

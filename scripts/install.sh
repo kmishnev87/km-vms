@@ -552,6 +552,11 @@ random_secret() {
 }
 
 write_env() {
+  hardware_mode=${LIVE_HWACCEL_MODE:-auto}
+  case "$hardware_mode" in
+    auto|off|disabled|false|0|qsv|vaapi|nvenc|amf) ;;
+    *) fail "LIVE_HWACCEL_MODE must be auto, off, or a supported hardware backend." ;;
+  esac
   env_file="$APP_DIR/.env"
   [ ! -e "$env_file" ] || fail ".env already exists; refusing to overwrite: $env_file"
   archive_dir="$APP_DIR/data/archive"
@@ -578,7 +583,7 @@ write_env() {
     printf 'KM_VMS_CONTAINER_PREFIX=%s\n' "$PROJECT_NAME"
     printf 'KM_VMS_HOST_APP_DIR=%s\n' "$APP_DIR"
     printf 'NEXT_PUBLIC_API_BASE_URL=/api\n'
-    printf 'LIVE_HWACCEL_MODE=auto\n'
+    printf 'LIVE_HWACCEL_MODE=%s\n' "$hardware_mode"
     printf 'LIVE_HWACCEL_BACKEND=auto\n'
     printf 'LIVE_HWACCEL_DEVICE=/dev/dri/renderD128\n'
     printf 'VIDEO_GID=44\n'

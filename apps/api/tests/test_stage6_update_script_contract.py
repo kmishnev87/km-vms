@@ -1476,27 +1476,20 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
     docs = read("docs/INSTALL.md")
 
     for required in (
-        "## Terminal Update",
-        "curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh",
+        "## Updating an existing installation",
         "bootstrap/current/km-vms-update-launcher.sh",
-        '--app-dir "$HOME/km-vms" --branch vX.Y.Z --yes',
-        '--app-dir "$HOME/km-vms" --branch vX.Y.Z --dry-run',
-        "sh scripts/km-vms-release-cycle.sh --check",
-        "git tag -a vX.Y.Z",
-        ".km-vms-release.json",
-        "--github-private",
-        "KM_VMS_GITHUB_TOKEN",
-        ".env",
-        "data/",
-        "activation returns to the exact captured previous slot",
-        "bounded in-app apply orchestration",
-        "dedicated `update-helper` service",
+        "--app-dir /path/to/km-vms --branch vX.Y.Z --dry-run",
+        "`--yes` instead of `--dry-run`",
+        "Settings → Maintenance",
+        "Do not rerun the new-install command over an existing installation",
+        "configuration, database state, archive mounts",
+        "checks must not be disabled",
     ):
         assert required in docs
 
     assert "down -v" in docs
-    assert "docker system prune" in docs
-    assert "delete Docker volumes" in docs
+    assert "delete database volumes" in docs
+    assert "prune active resources" in docs
     assert "automatically runs database migrations" not in docs
     assert "sh scripts/update.sh" not in docs
     assert "sh scripts/km-vms-restart.sh" not in docs

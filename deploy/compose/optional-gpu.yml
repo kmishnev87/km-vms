@@ -1,0 +1,6 @@
+# Selected by the shared Compose launcher only when the Docker host has DRM
+# devices. The base configuration deliberately remains usable without a GPU.
+services:
+  api:
+    devices:
+      - /dev/dri:/dev/dri

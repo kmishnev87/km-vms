@@ -79,16 +79,19 @@ def test_install_script_exposes_private_github_no_git_contract():
         assert required in helper
 
 
-def test_install_docs_include_public_pipe_install_without_token_requirement():
+def test_install_docs_include_pinned_public_download_without_token_requirement():
     docs = read("docs/INSTALL.md")
 
-    assert "curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh | sh -s --" in docs
-    public_install_section = docs.split("Public one-line install:", 1)[1].split("Private GitHub repository install without `git`:", 1)[0]
+    public_install_section = docs.split("## 1. Install a published release", 1)[1].split("## 2.", 1)[0]
+    tag = public_install_section.split("https://raw.githubusercontent.com/kmishnev87/km-vms/",1)[1].split("/scripts/install.sh",1)[0]
+    assert tag.startswith("v") and all(part.isdigit() for part in tag[1:].split("."))
+    assert f"{tag}/scripts/install.sh -o km-vms-install.sh" in public_install_section
+    assert f"sh km-vms-install.sh --branch {tag}" in public_install_section
     assert "--github-token" not in public_install_section
-    assert "Private GitHub repository install without `git`" in docs
-    assert "The operator does not run `km-vms-storage-apply.sh` or `km-vms-restart.sh` manually" in docs
-    assert "setup-complete.json" in docs
-    assert "host needs Python 3" in docs
+    assert "public repository does not require a GitHub token" in docs
+    assert "Storage activation is handled by the wizard" in docs
+    assert "Python 3" in docs
+    assert "Host Node.js, npm, and Git are not required" in docs
     assert "does not require host Python" not in docs
 
 

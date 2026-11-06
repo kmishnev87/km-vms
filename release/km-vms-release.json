@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.5",
-  "tag": "v0.9.5",
-  "title": "Isolate temporary update coordinators from running services",
-  "summary": "Give the detached update-helper coordinator its own Docker project and service identity so Compose image labels cannot make it appear as a duplicate running helper. Preserve exact target-image verification, automatic cleanup and the original installation's update authority.",
+  "version": "0.9.6",
+  "tag": "v0.9.6",
+  "title": "Diagnostic report delivery, optional GPU and MIT license",
+  "summary": "Send an explicitly approved normal or extended diagnostic report to the KM VMS developer over HTTPS, receive a confirmed report ID, or download the ZIP instead. The separate developer-only support center stores and manages reports; local surveillance needs no new service and no background reporting.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.5",
+  "source_ref": "v0.9.6",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,35 +20,55 @@
     "target_version": 10
   },
   "changelog": [
-    "Override inherited Compose labels on temporary refresh coordinators; keep them outside the running installation's service discovery.",
-    "Preserve the original project, request, exact image and release-slot arguments; temporary coordinators still remove themselves on exit.",
-    "Add regression coverage for canonical release-slot and legacy refresh routes, including images carrying another helper's Compose identity."
+    "Connect report sending in Settings > Security and Diagnostics using one stable, localized form.",
+    "Include the problem description and existing redacted diagnostics/logs with 10- or 30-minute log coverage; do not send video recordings.",
+    "Require explicit consent and diagnostic permissions; use a configured HTTPS destination without forwarding application credentials.",
+    "Confirm success only after receiver acceptance and retain the submission ID for safe retries after a lost response.",
+    "Keep ZIP download available, and keep the developer's receiving infrastructure outside user installations with no automatic report sending.",
+    "Update public support/privacy guidance and separate maintainer publishing instructions from user installation documentation.",
+    "License KM VMS project code under MIT; preserve third-party component licensing.",
+    "Make DRM/GPU passthrough optional for installation, updates and restarts, with automatic CPU fallback on hosts without /dev/dri."
   ],
   "title_i18n": {
-    "en": "Isolate temporary update coordinators from running services",
-    "ru": "Надёжная передача управления обновлённой службе",
-    "zh-CN": "隔离临时更新协调器与运行中的服务"
+    "en": "Diagnostic report delivery, optional GPU and MIT license",
+    "ru": "Отправка диагностики, необязательный GPU и лицензия MIT",
+    "zh-CN": "诊断报告发送、可选 GPU 与 MIT 许可证"
   },
   "summary_i18n": {
-    "en": "Give the detached update-helper coordinator its own Docker project and service identity so Compose image labels cannot make it appear as a duplicate running helper. Preserve exact target-image verification, automatic cleanup and the original installation's update authority.",
-    "ru": "Временный координатор обновления получает собственные Docker-метки и больше не может ошибочно определяться как вторая рабочая служба. Проверки точного образа, исходной установки и запроса сохранены; временный контейнер удаляется автоматически.",
-    "zh-CN": "为独立更新协调器分配自己的 Docker 项目与服务标识，避免继承镜像标签后被误认为运行助手的副本。保留精确目标镜像验证、自动清理和原安装实例的更新权限。"
+    "en": "Send an explicitly approved normal or extended diagnostic report to the KM VMS developer over HTTPS, receive a confirmed report ID, or download the ZIP instead. The separate developer-only support center stores and manages reports; local surveillance needs no new service and no background reporting.",
+    "ru": "Отправляйте разработчику обычную или расширенную диагностику через HTTPS только после явного согласия, получайте номер принятого обращения либо скачивайте ZIP. Отдельная закрытая панель разработчика хранит и обрабатывает отчёты; видеонаблюдение не требует новых служб и не отправляет отчёты в фоне.",
+    "zh-CN": "经明确同意后，通过 HTTPS 向 KM VMS 开发者发送普通或扩展诊断，接收确认的报告编号，也可单独下载 ZIP。开发者专用支持中心独立存储和管理报告，本地视频监控无需新增服务，不会在后台自动发送报告。"
   },
   "changelog_i18n": {
     "en": [
-      "Override inherited Compose labels on temporary refresh coordinators; keep them outside the running installation's service discovery.",
-      "Preserve the original project, request, exact image and release-slot arguments; temporary coordinators still remove themselves on exit.",
-      "Add regression coverage for canonical release-slot and legacy refresh routes, including images carrying another helper's Compose identity."
+      "Connect report sending in Settings > Security and Diagnostics using one stable, localized form.",
+      "Include the problem description and existing redacted diagnostics/logs with 10- or 30-minute log coverage; do not send video recordings.",
+      "Require explicit consent and diagnostic permissions; use a configured HTTPS destination without forwarding application credentials.",
+      "Confirm success only after receiver acceptance and retain the submission ID for safe retries after a lost response.",
+      "Keep ZIP download available, and keep the developer's receiving infrastructure outside user installations with no automatic report sending.",
+      "Update public support/privacy guidance and separate maintainer publishing instructions from user installation documentation.",
+      "License KM VMS project code under MIT; preserve third-party component licensing.",
+      "Make DRM/GPU passthrough optional for installation, updates and restarts, with automatic CPU fallback on hosts without /dev/dri."
     ],
     "ru": [
-      "Временный координатор использует отдельные метки проекта и службы, не мешая поиску работающего обновлятора.",
-      "Точная проверка образа, установка, запрос и выбранный слот не изменены; временный контейнер по-прежнему удаляется после завершения.",
-      "Добавлены проверки обеих схем передачи управления с учётом меток, унаследованных от образа служебного контейнера."
+      "Подключена отправка из «Настройки → Безопасность» и «Диагностика» через одну устойчивую форму на трёх языках.",
+      "Описание проблемы дополняется существующей диагностикой и журналами с маскированием известных секретных полей за 10 или 30 минут; видеоархив не передаётся.",
+      "Для отправки обязательны явное согласие и права диагностики; HTTPS-получатель задан на сервере, учётные данные приложения ему не передаются.",
+      "Успех подтверждается номером принятого обращения; повтор после потерянного ответа использует прежний идентификатор без дублей.",
+      "Скачивание ZIP сохранено; приёмник разработчика не устанавливается у пользователей и не вводит фоновую отправку отчётов.",
+      "Актуализированы публичные сведения о поддержке и приватности; инструкции публикации отделены от пользовательской установки.",
+      "Для кода KM VMS принята лицензия MIT; лицензии сторонних компонентов сохранены.",
+      "Установка, обновление и перезапуск подключают DRM/GPU только при доступном устройстве; серверы без /dev/dri работают на процессоре."
     ],
     "zh-CN": [
-      "覆盖临时协调器继承的 Compose 标签，避免干扰正在运行实例的服务发现。",
-      "保留原项目、请求、精确镜像和版本槽参数；临时协调器仍在退出后自动删除。",
-      "新增标准版本槽及旧版交接路径回归测试，覆盖携带其他助手 Compose 标识的镜像。"
+      "设置 → 安全与诊断页面使用统一、稳定的三语言报告表单。",
+      "报告包含问题描述和已隐藏已知敏感字段的诊断/日志，可选择最近 10 或 30 分钟；不发送录像。",
+      "发送需要明确同意及诊断权限；使用服务器配置的 HTTPS 接收地址，不转发应用凭据。",
+      "仅在接收方确认后显示成功编号；响应丢失后的重试沿用相同提交标识，避免重复。",
+      "保留 ZIP 下载；开发者接收基础设施不安装到用户系统中，也不引入后台自动发送。",
+      "更新公开支持与隐私说明，将维护者发布指南与用户安装说明分离。",
+      "KM VMS 项目代码采用 MIT 许可证，第三方组件保留各自的许可证。",
+      "安装、更新和重启仅在设备可用时启用 DRM/GPU 直通；没有 /dev/dri 的服务器使用 CPU。"
     ]
   }
 }

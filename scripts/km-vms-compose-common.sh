@@ -143,6 +143,9 @@ km_vms_compose_version() {
 }
 
 km_vms_compose_bound_cmd() {
+  if [ -n "${KM_VMS_COMPOSE_GPU_OVERRIDE:-}" ]; then
+    set -- -f "$KM_VMS_COMPOSE_GPU_OVERRIDE" "$@"
+  fi
   if [ -n "${KM_VMS_COMPOSE_SLOT_ID:-}" ]; then
     (
       KM_VMS_RELEASE_IMAGE_TAG="$KM_VMS_COMPOSE_SLOT_ID"
@@ -319,6 +322,30 @@ km_vms_archive_override() {
   printf '%s\n' "$protected_archive_override"
 }
 
+km_vms_gpu_override() {
+  gpu_app_dir="$1"
+  gpu_source_dir="$2"
+  gpu_project="$3"
+  gpu_override="$gpu_source_dir/deploy/compose/optional-gpu.yml"
+  if [ ! -e "$gpu_override" ] && [ ! -L "$gpu_override" ]; then
+    return 0
+  fi
+  gpu_selector="$gpu_source_dir/scripts/km-vms-optional-gpu.py"
+  [ -f "$gpu_selector" ] && [ ! -L "$gpu_selector" ] ||
+    km_vms_compose_fail "Optional GPU selector is unavailable or unsafe."
+  if km_vms_command_exists python3; then
+    python3 -B "$gpu_selector" --app-dir "$gpu_app_dir" --source-dir "$gpu_source_dir"
+  else
+    gpu_helper_ids=$(docker ps -q \
+      --filter "label=com.docker.compose.project=$gpu_project" \
+      --filter "label=com.docker.compose.service=update-helper")
+    [ "$(printf '%s\n' "$gpu_helper_ids" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] ||
+      km_vms_compose_fail "Optional GPU selection requires the canonical update-helper."
+    docker exec "$gpu_helper_ids" python3 -B "$gpu_selector" \
+      --app-dir "$gpu_app_dir" --source-dir "$gpu_source_dir"
+  fi
+}
+
 km_vms_compose_for_source() {
   stable_app_dir="$1"
   source_dir="$2"
@@ -358,6 +385,12 @@ km_vms_compose_for_source() {
   else
     set -- -p "$project_name" "$@"
   fi
+  KM_VMS_COMPOSE_GPU_OVERRIDE=$(km_vms_gpu_override "$stable_app_dir" "$source_dir" "$project_name") ||
+    km_vms_compose_fail "Optional GPU configuration could not be selected."
+  case "$KM_VMS_COMPOSE_GPU_OVERRIDE" in
+    ""|"$source_dir/deploy/compose/optional-gpu.yml") ;;
+    *) km_vms_compose_fail "Optional GPU selection escaped the product source." ;;
+  esac
   archive_override=$(km_vms_archive_override "$stable_app_dir" "$project_name" "$source_dir") ||
     km_vms_compose_fail "Archive bindings could not be materialized."
   lifecycle_override=$(km_vms_lifecycle_override "$stable_app_dir")

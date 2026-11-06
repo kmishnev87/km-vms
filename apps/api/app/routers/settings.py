@@ -9,6 +9,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -87,6 +88,7 @@ from app.services.update_apply import (
 )
 from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata, utc_now_storage
 from app.services.diagnostic_logs import collect_diagnostic_logs
+from app.services.support_delivery import SUPPORT_DELIVERY_GATE, deliver_report, delivery_error, support_destination
 
 router = APIRouter(tags=["settings"])
 
@@ -137,6 +139,16 @@ class SettingsUpdateRequest(BaseModel):
 class BugReportRequest(BaseModel):
     text: str = Field(min_length=1, max_length=10000)
     include_logs: bool = True
+    mode: Literal["normal", "extended"] = "normal"
+
+
+class SupportReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=10000)
+    mode: Literal["normal", "extended"] = "normal"
+    consent: Literal[True]
+    submission_id: UUID
 
 
 class BackupCreateRequest(BaseModel):
@@ -1343,6 +1355,52 @@ def download_log_archive(
     )
 
 
+@router.get("/settings/support/status")
+def support_status(current_user: User = Depends(require_permission("run_diagnostics"))):
+    # Local configuration only: opening the form never contacts the receiver.
+    try:
+        support_destination()
+        available = True
+    except HTTPException:
+        available = False
+    return {"available": available, "max_archive_bytes": 32 * 1024 * 1024}
+
+
+@router.post("/settings/support/reports")
+def send_support_report(
+    payload: SupportReportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    if not payload.text.strip() or payload.submission_id.version != 4:
+        delivery_error("support_invalid_report", 422)
+    support_destination()
+    if not SUPPORT_DELIVERY_GATE.acquire(blocking=False):
+        delivery_error("support_busy", 429)
+    archive = None
+    try:
+        try:
+            archive = build_log_archive(db=db, mode=payload.mode, report_text=payload.text, include_logs=True)
+        except Exception:
+            delivery_error("support_archive_failed")
+        receipt = deliver_report(archive, mode=payload.mode, submission_id=str(payload.submission_id))
+        create_event(
+            db=db, actor=current_user, category="diagnostics",
+            event_type="diagnostics.support_report_sent",
+            message_ru=f"{current_user.username} отправил диагностический отчёт разработчику",
+            message_en=f"{current_user.username} sent a diagnostic report to the developer",
+            target_type="support_report", target_id=receipt["report_id"],
+            metadata={"mode": payload.mode, "report_id": receipt["report_id"]},
+            ip_address=request_ip(request), user_agent=request_user_agent(request),
+        )
+        return receipt
+    finally:
+        if archive is not None:
+            archive.close()
+        SUPPORT_DELIVERY_GATE.release()
+
+
 @router.post("/settings/bug-report")
 def create_bug_report(
     payload: BugReportRequest,
@@ -1363,7 +1421,7 @@ def create_bug_report(
         user_agent=request_user_agent(request),
     )
     try:
-        archive = build_log_archive(db=db, report_text=payload.text, include_logs=payload.include_logs)
+        archive = build_log_archive(db=db, mode=payload.mode, report_text=payload.text, include_logs=payload.include_logs)
     except Exception as exc:
         create_event(
             db=db,

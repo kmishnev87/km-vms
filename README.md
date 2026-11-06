@@ -8,6 +8,8 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 
 **Interface languages: English · 简体中文 (Simplified Chinese) · Русский (Russian).**
 
+[MIT License](LICENSE) — use, modify and distribute, including commercially, with the required copyright and license notices.
+
 [Quick start](#quick-start) · [Features](#features) · [Screenshots](#screenshots) · [Installation guide](docs/INSTALL.md) · [Releases](https://github.com/kmishnev87/km-vms/releases) · [Report a problem](https://github.com/kmishnev87/km-vms/issues)
 
 ![KM VMS English-language dashboard with cameras, recordings, live view, chronology, storage, system health, and settings](docs/images/dashboard-en.png)
@@ -44,7 +46,7 @@ ONVIF capabilities are device-dependent: a camera must expose the relevant servi
 
 ## Quick start
 
-The example below installs the published **0.9.5** release on a **new installation**. It is not an update command for an existing installation.
+The example below installs the published **0.9.6** release on a **new installation**. It is not an update command for an existing installation.
 
 ### 1. Prepare your NAS or Linux server
 
@@ -62,8 +64,8 @@ The installer does **not** install Docker or host packages for you. Host Node.js
 Run these commands in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.5/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.5
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.6/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.6
 ```
 
 The interactive installer uses `$HOME/km-vms` as the default application directory and port `8088`. It asks for confirmation before creating a new application directory. To choose a persistent application directory on your NAS instead, add `--app-dir /path/to/km-vms` to the second command; replace that example path with your own.
@@ -99,6 +101,8 @@ Language, timezone, recording format, hardware acceleration, security, maintenan
 KM VMS is a Docker-based, self-hosted application for Linux/NAS environments. Its web interface runs in the browser; no separate desktop client is required for normal use.
 
 The current development and hardware-validation environment is a TerraMaster NAS. Other Linux-based NAS/server environments must provide the documented Docker, Compose, Python, filesystem/ACL, and storage capabilities; their vendor name alone is not a compatibility guarantee. No vendor certification or ONVIF conformance certification is claimed.
+
+A GPU is optional: hosts without `/dev/dri` use software video processing. Supported DRM devices are passed through automatically by the shared installation/update/restart launcher when available; a missing GPU does not prevent container startup.
 
 The implementation uses a Python/FastAPI backend, PostgreSQL, Redis, FFmpeg-based video processing, a Next.js web frontend, and nginx. See [dependency notes](docs/DEPENDENCIES.md) for pinned component information.
 
@@ -148,6 +152,10 @@ The quick start serves HTTP and is intended for initial setup on a trusted netwo
 
 KM VMS is actively developed. Published releases and their notes are available under [Releases](https://github.com/kmishnev87/km-vms/releases). Compatibility and capacity should be evaluated for your own cameras, NAS, storage, and network; no universal camera-count or performance guarantee is claimed.
 
-For ordinary bugs and feature requests, use [GitHub Issues](https://github.com/kmishnev87/km-vms/issues). Include the release version, environment, expected/actual behavior, and sanitized reproduction steps. Do not publish passwords, tokens, camera URLs containing credentials, database dumps, or private video. If private vulnerability reporting is available in the repository's Security section, use it for sensitive security reports rather than disclosing details in a public issue.
+For a bug report with diagnostics, open **Settings → Security**, describe the problem, choose normal or extended diagnostics, and explicitly consent to sending the report to the KM VMS developer. The application sends it over HTTPS to the developer's support receiver at **кмпрайм.рф** and shows a report ID only after acceptance. This is one-way report delivery, not a live chat or a guaranteed response service. You can download the ZIP instead; no report is sent automatically.
 
-No project license file has been selected at present. Repository visibility and this README are not a statement that the project has an approved open-source license; redistribution and licensing terms require a separate decision by the maintainer.
+Diagnostics may contain device names, addresses, application state and logs. Known secret fields are redacted; video recordings are not included. Do not type passwords into the description, and do not post diagnostic ZIPs publicly. The developer's receiver is separate infrastructure and is not installed on users' servers. Local recording/viewing do not depend on it.
+
+For feature requests and sanitized public discussion, use [GitHub Issues](https://github.com/kmishnev87/km-vms/issues). Include the release version, environment, expected/actual behavior, and reproduction steps. Do not publish passwords, tokens, camera URLs containing credentials, database dumps, or private video. If private vulnerability reporting is available in the repository's Security section, use it for sensitive security reports rather than disclosing details in a public issue.
+
+KM VMS project code is available under the [MIT License](LICENSE). Third-party components retain their own licenses; see [dependency notes](docs/DEPENDENCIES.md). The software is provided without warranty as described in the license.

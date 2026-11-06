@@ -264,8 +264,6 @@ services:
       - ./.km-vms-source.json:/app/.km-vms-source.json:ro
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/previews:/storage/previews
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/exports:/storage/exports
-    devices:
-      - /dev/dri:/dev/dri
     group_add:
       - video
       - render

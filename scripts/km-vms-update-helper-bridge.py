@@ -5037,6 +5037,22 @@ def compose_base(
         "-p",
         project_name,
     ]
+    gpu_override = source / "deploy/compose/optional-gpu.yml"
+    if gpu_override.exists() or gpu_override.is_symlink():
+        gpu_selector = source / "scripts/km-vms-optional-gpu.py"
+        if gpu_selector.is_symlink() or not gpu_selector.is_file():
+            raise BridgeError("optional_gpu_invalid", "Optional GPU selector is unavailable or unsafe.")
+        selected_gpu = run_command(
+            [sys.executable, "-B", str(gpu_selector), "--app-dir", str(app_dir),
+             "--source-dir", str(source)],
+            timeout=35,
+            error_code="optional_gpu_invalid",
+            error_message="Optional GPU configuration could not be selected.",
+        ).stdout.strip()
+        if selected_gpu:
+            if selected_gpu != str(gpu_override):
+                raise BridgeError("optional_gpu_invalid", "Optional GPU selection escaped the product source.")
+            command.extend(["-f", selected_gpu])
     if runtime_override is None:
         possible = source.parent / "docker-compose.runtime-override.yml"
         if (

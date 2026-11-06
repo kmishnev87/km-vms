@@ -19,13 +19,15 @@ Docker and host packages are not installed automatically. Host Node.js, npm, and
 
 TerraMaster NAS is the current hardware-validation environment. Other Linux/NAS systems need the same capabilities; a NAS brand name alone does not establish compatibility. Hardware acceleration is optional and depends on the host, drivers, and video format.
 
+A GPU and `/dev/dri` are **not required**. The shared installer/update/restart launcher adds DRM device passthrough only when it is available on the Docker host; otherwise KM VMS uses software video processing. Helpers check the Docker host rather than mistaking their own private `/dev` for it. No periodic GPU probe runs in the background. To explicitly install in CPU-only mode, prefix the install command with `LIVE_HWACCEL_MODE=off`; this setting is retained in the installation's private `.env`.
+
 ## 1. Install a published release
 
-The following commands select **0.9.5** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **0.9.6** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.5/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.5
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.6/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.6
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -35,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.5 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.6 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.5 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.6 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -148,4 +150,6 @@ Persistent services use Docker restart policies. A Docker health status alone do
 | Camera connects but a setting is unavailable | Confirm the device's ONVIF service/encoder options, credentials, streams, and codec/browser compatibility. |
 | Update does not finish | Read the operation result and diagnostics; do not erase state or replace files to hide the failure. |
 
-Report ordinary problems through [GitHub Issues](https://github.com/kmishnev87/km-vms/issues), including version, NAS/OS, Docker/Compose versions, and sanitized reproduction steps. Never publish credentials, full camera connection URLs, tokens, database dumps, or private footage.
+For private diagnostic delivery, use **Settings → Security**: describe the problem, choose normal or extended diagnostics, confirm consent, and click **Send report**. The receiver at **кмпрайм.рф** accepts the ZIP over HTTPS; an accepted report gets an ID in the form. The developer-only receiving service is not an additional component of your installation. Sending is optional, one-way, and only happens after your explicit action. You can download the ZIP instead when sending is unavailable.
+
+Reports include application diagnostics and logs, potentially with device names and addresses; known secret fields are redacted and video recordings are not included. Do not include passwords in the description. For sanitized public discussion, use [GitHub Issues](https://github.com/kmishnev87/km-vms/issues). Never publish diagnostic ZIPs, credentials, full camera connection URLs, tokens, database dumps, or private footage.

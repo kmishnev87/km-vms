@@ -23,6 +23,7 @@ const recordings = read("app/recordings/page.js");
 const storage = read("app/storage/page.js");
 const login = read("app/login/page.js");
 const diagnostics = read("components/AuditDiagnosticsEntries.js");
+const supportForm = read("components/SupportReportForm.js");
 const i18n = readI18nSource();
 
 const toastSource = feedback.slice(feedback.indexOf("export function OperationToast"));
@@ -93,12 +94,14 @@ assert.equal((i18n.match(/credentialsChanged:/g) || []).length, 3);
 
 assert.match(diagnostics, /const \[error, setError\]/); // journal data state, not an action banner
 assert.match(diagnostics, /diagnostics-archive-[\s\S]*?tone:\s*"success"/);
-assert.match(diagnostics, /diagnostics-bug-report-[\s\S]*?tone:\s*"success"/);
+assert.match(diagnostics, /<SupportReportForm onToast=\{setOperationToast\}/);
+assert.match(supportForm, /support-sent-[\s\S]*?tone:\s*"success"/);
 assert.match(diagnostics, /settingsJournalEmpty error/);
 assert.doesNotMatch(diagnostics, /const \[message, setMessage\]/);
 
 assert.doesNotMatch(settings, /function submitBugReport/);
 assert.doesNotMatch(settings, /onClick=\{submitBugReport\}/);
-assert.match(settings, /title=\{t\.reportSendingPending\}/);
+assert.match(settings, /<SupportReportForm onToast=\{showToast\}/);
+assert.doesNotMatch(settings, /title=\{t\.reportSendingPending\}/);
 
 console.log("UI feedback and compact confirmation unification tests passed");
