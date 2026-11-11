@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { fitCameraFrames, sameFrameLayout, savedFrameRatio } from "../../lib/liveAspectLayout";
 import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
 import { useAuthSession } from "../../lib/useAuthSession";
 import useChronologyClock from "../../lib/useChronologyClock";
@@ -183,7 +184,7 @@ function dateTimeFromDate(dt) {
 
 
 export default function ChronologyPage() {
-  const { text } = useI18n();
+  const { text, t } = useI18n();
   const TEXT = useMemo(
     () => Object.fromEntries(Object.entries(CHRONOLOGY_TEXT).map(([key, value]) => [key, text(value)])),
     [text]
@@ -221,7 +222,10 @@ export default function ChronologyPage() {
   const [cameras, setCameras] = useState([]);
   const [exportCameraOptions, setExportCameraOptions] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
+  const [workspaceLayoutReady, setWorkspaceLayoutReady] = useState(false);
   const [tiles, setTiles] = useState([]);
+  const [frameLayoutActive, setFrameLayoutActive] = useState(false);
+  const [frameLayoutBounds, setFrameLayoutBounds] = useState({ width: 0, height: 0, dimensions: "" });
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
   const layoutWriterRef = useRef(null);
@@ -352,7 +356,10 @@ export default function ChronologyPage() {
       setLastPersistedSidebarCameraOrder([]);
       showWorkspaceError(err.message || TEXT.loadError);
     } finally {
-      if (isWorkspaceCurrent(ownerSession, generation)) hydratedRef.current = true;
+      if (isWorkspaceCurrent(ownerSession, generation)) {
+        hydratedRef.current = true;
+        setWorkspaceLayoutReady(true);
+      }
     }
   }
 
@@ -381,6 +388,8 @@ export default function ChronologyPage() {
     cacheOwnerRef.current = null;
     lastBackendLayoutPayloadRef.current = "";
     setTiles([]); setSidebarCameraOrder([]); setLastPersistedSidebarCameraOrder([]);
+    setFrameLayoutActive(false);
+    setWorkspaceLayoutReady(false);
     setCameras([]); setCamerasLoaded(false); setCurrentUser(null); setExportCameraOptions([]);
     setExportModal(null); setIsPlaying(false); setFullscreenTileId(null);
     exportDraftRef.current = null;
@@ -454,6 +463,28 @@ export default function ChronologyPage() {
   const { playbackMap, playbackMapRef, playbackResolverRef, resolvePlaybackForTimestamp } = useChronologySources({
     tilesRef, tileSourceKey, currentTs, isPlaying, isScrubbingRef, formatProductTimestampParam,
   });
+
+  const frameLayoutKey = visibleTiles.map(tile => `${tile.id}:${tile.cameraId}:${savedFrameRatio(cameraMap.get(String(tile.cameraId)))}`).join("|");
+  useEffect(() => {
+    const element = workspaceRef.current;
+    if (!element) return;
+    const measure = () => {
+      const dimensions = [...element.querySelectorAll("[data-natural-resolution]")]
+        .map(player => `${player.closest("[data-chronology-tile-id]")?.getAttribute("data-chronology-tile-id")}:${player.getAttribute("data-natural-resolution")}`).join("|");
+      const next = { width: element.clientWidth, height: element.clientHeight, dimensions };
+      setFrameLayoutBounds(previous => previous.width === next.width && previous.height === next.height && previous.dimensions === dimensions ? previous : next);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    const metadata = new MutationObserver(measure);
+    if (frameLayoutActive) metadata.observe(element, { subtree: true, attributes: true, attributeFilter: ["data-natural-resolution"] });
+    measure();
+    return () => { observer.disconnect(); metadata.disconnect(); };
+  }, [camerasLoaded, frameLayoutActive]);
+  useLayoutEffect(() => {
+    if (!frameLayoutActive || !frameLayoutBounds.width || !frameLayoutBounds.height) return;
+    applyFrameLayout();
+  }, [frameLayoutActive, frameLayoutKey, frameLayoutBounds.width, frameLayoutBounds.height, frameLayoutBounds.dimensions]);
 
   const orderedCameras = useMemo(
     () => mergeSidebarCameraOrder(cameras, sidebarCameraOrder),
@@ -582,6 +613,7 @@ export default function ChronologyPage() {
 
 
   function addTile(cameraId, clientX, clientY) {
+    if (!hydratedRef.current) return;
     const bounds = workspaceBounds();
     if (!bounds) return;
     const normalizedCameraId = String(cameraId || "");
@@ -636,11 +668,20 @@ export default function ChronologyPage() {
     cancelPlaybackCoordinator("tile-removed");
     setTiles((prev) => prev.filter((tile) => tile.id !== tileId));
     setFullscreenTileId((prev) => (prev === tileId ? null : prev));
-    setPlaybackMap((prev) => {
-      const next = { ...prev };
-      delete next[tileId];
-      return next;
-    });
+    // useChronologySources owns membership cleanup; there is no page-local setter.
+  }
+
+  function removeAllTiles() {
+    invalidateSeekActions();
+    cancelPlaybackCoordinator("all-tiles-removed");
+    playbackResolverRef.current.invalidate();
+    tilesRef.current = [];
+    setIsPlaying(false);
+    setFullscreenTileId(null);
+    setDragState(null);
+    setResizeState(null);
+    setDownloadChooserOpen(false);
+    setTiles([]);
   }
 
   function bringToFront(tileId) {
@@ -654,10 +695,43 @@ export default function ChronologyPage() {
   }
 
   function autoLayoutTiles() {
+    setFrameLayoutActive(false);
     setTiles((prev) => layoutTiles(activeLayoutTiles(prev), workspaceBounds()));
   }
 
+  function applyFrameLayout() {
+    const element = workspaceRef.current;
+    if (!element) return;
+    const bounds = { width: element.clientWidth, height: element.clientHeight };
+    const headerHeight = element.querySelector(".chronologyTile:not(.fullscreen) .chronologyTileBar")?.getBoundingClientRect().height || 34;
+    setTiles(previous => {
+      const active = activeLayoutTiles(previous);
+      const frameCameras = active.map(tile => {
+        const camera = cameraMap.get(String(tile.cameraId));
+        const player = tileRefs.current.get(tile.id)?.querySelector("[data-natural-resolution]");
+        const [width, height] = String(player?.getAttribute("data-natural-resolution") || "").split("x").map(Number);
+        const currentKey = playbackMapRef.current[tile.id]?.playbackKey;
+        if (currentKey && player?.getAttribute("data-playback-key") === currentKey && width > 0 && height > 0) {
+          return { ...camera, id: tile.cameraId, stream_dimensions: { main: { width, height } } };
+        }
+        return camera;
+      }).filter(Boolean);
+      const next = fitCameraFrames(active, frameCameras, bounds, { headerHeight });
+      return sameFrameLayout(previous, next) ? previous : next;
+    });
+  }
+
+  function alignFrames() {
+    if (frameLayoutActive) {
+      setFrameLayoutActive(false);
+      return;
+    }
+    setFrameLayoutActive(true);
+    applyFrameLayout();
+  }
+
   function addAllCameras() {
+    setFrameLayoutActive(false);
     setTiles((prev) => {
       const active = activeLayoutTiles(prev);
       const existing = workspaceCameraIds(active);
@@ -707,6 +781,7 @@ export default function ChronologyPage() {
   }
 
   function reorderSidebarCamera(targetCameraId, position = "before", sourceCameraId = draggedSidebarCameraId) {
+    if (!hydratedRef.current) return;
     const sourceId = String(sourceCameraId || "");
     const targetId = String(targetCameraId || "");
     if (!sourceId || !targetId || sourceId === targetId) return;
@@ -1006,6 +1081,7 @@ export default function ChronologyPage() {
         0,
         1 - dragState.tileH
       );
+      setFrameLayoutActive(false);
       updateTile(dragState.id, { xPct: nextX, yPct: nextY });
     }
 
@@ -1027,6 +1103,7 @@ export default function ChronologyPage() {
     if (!resizeState) return undefined;
 
     function onMove(event) {
+      setFrameLayoutActive(false);
       updateTile(resizeState.id, resizeWorkspaceTile(null, resizeState, event));
     }
 
@@ -1533,7 +1610,7 @@ export default function ChronologyPage() {
   }
 
   return (
-    <Layout>
+    <Layout className="chronologyLayout">
       <div
         ref={shellRef}
         className={`chronologyShell ${isSystemFullscreen ? "systemFullscreen" : ""} ${isSidebarCollapsed ? "sidebarCollapsed" : "sidebarOpen"} ${isTimelineCollapsed ? "timelineCollapsed" : "timelineOpen"}`}
@@ -1566,25 +1643,52 @@ export default function ChronologyPage() {
         <aside className="chronologyCameraPanel" aria-hidden={isSystemFullscreen && isSidebarCollapsed}>
           <div className="chronologyPanelHeader">
             <div className="chronologyPanelTitle">{TEXT.cameras}</div>
+          </div>
             <div className="chronologyPanelActions">
               <button
                 type="button"
                 className="chronologyAlignButton"
                 onClick={addAllCameras}
-                disabled={!cameras.length}
+                disabled={!workspaceLayoutReady || !cameras.length}
+                title={t("liveWorkspace.addAll")}
+                aria-label={t("liveWorkspace.addAll")}
+                data-workspace-action="add-all"
               >
-                {TEXT.addAll}
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="3" width="6" height="6" rx="1" /><rect x="3" y="15" width="6" height="6" rx="1" /><path d="M18 14v8M14 18h8" /></svg>
+              </button>
+              <button
+                type="button"
+                className="chronologyAlignButton"
+                onClick={removeAllTiles}
+                disabled={!workspaceLayoutReady || !tiles.length}
+                title={t("liveWorkspace.removeAll")}
+                aria-label={t("liveWorkspace.removeAll")}
+                data-workspace-action="remove-all"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
               </button>
               <button
                 type="button"
                 className="chronologyAlignButton"
                 onClick={autoLayoutTiles}
-                disabled={!tiles.length}
-                title={TEXT.align}
-                aria-label={TEXT.align}
+                disabled={!workspaceLayoutReady || !tiles.length}
+                title={t("liveWorkspace.alignTiles")}
+                aria-label={t("liveWorkspace.alignTiles")}
                 data-workspace-align-button="grid-2x2"
               >
                 <AlignGridIcon />
+              </button>
+              <button
+                type="button"
+                className="chronologyAlignButton chronologyFrameAlignButton"
+                onClick={alignFrames}
+                disabled={!workspaceLayoutReady || !visibleTiles.length}
+                aria-pressed={frameLayoutActive}
+                title={t("liveWorkspace.fitFrames")}
+                aria-label={t("liveWorkspace.fitFrames")}
+                data-workspace-align-button="frames"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="11" height="7" rx="1" /><rect x="10" y="14" width="11" height="6" rx="1" /><path d="M3 15v5h4M17 5h4v6" /></svg>
               </button>
               <button
                 type="button"
@@ -1592,13 +1696,11 @@ export default function ChronologyPage() {
                 onClick={isSystemFullscreen ? exitSystemFullscreen : enterSystemFullscreen}
                 title={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
                 aria-label={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+                data-workspace-action="fullscreen"
               >
-                {isSystemFullscreen ? "\u2715" : "\u26f6"}
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={isSystemFullscreen ? "M3 8h5V3m8 0v5h5M3 16h5v5m8 0v-5h5" : "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"} /></svg>
               </button>
             </div>
-          </div>
-
-
           <div className="chronologyCameraList">
             {orderedCameras.map((camera) => {
               const dropParts = sidebarDropParts(sidebarDropTargetCameraId);

@@ -20,6 +20,7 @@ from app.services.live_engine.process_runtime import (
     _pid_exists, _read_proc_cmdline, _read_proc_state,
 )
 from app.services.live_engine.ffmpeg import build_hls_command, choose_input_url, command_text, inspect_input_url, mask_rtsp_credentials, probe_video_codec
+from app.services.camera_stream_dimensions import remember_dimensions
 
 logger = logging.getLogger(__name__)
 
@@ -639,6 +640,8 @@ class StreamInstance:
         force_hw_backend: str | None = None,
     ) -> str:
         probe = probe_video_codec(input_url, (camera.rtsp_transport or "tcp").lower())
+        if not probe.error and hasattr(camera, "protocol"):
+            remember_dimensions(camera, self.stream, {"width": probe.width, "height": probe.height})
         caps = get_hardware_capabilities()
         policy = self._pipeline_policy()
         mode = policy._choose_mode(camera, probe, caps, force_mode, force_hw_backend)

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from fastapi.routing import APIRoute, iter_route_contexts
+from fastapi.routing import APIRoute, APIWebSocketRoute, iter_route_contexts
 
 from app.core.endpoint_permissions import AUTHENTICATED, ENDPOINT_PERMISSIONS, PUBLIC
 from app.core.permissions import (
@@ -61,6 +61,9 @@ def decision(path: str, method: str):
 def actual_app_routes():
     routes = set()
     for route in iter_route_contexts(app.routes):
+        if isinstance(route.original_route, APIWebSocketRoute):
+            routes.add(("WEBSOCKET", route.path))
+            continue
         if not isinstance(route.original_route, APIRoute):
             continue
         for method in route.methods or []:

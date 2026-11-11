@@ -1,4 +1,17 @@
 export const enDictionary = {
+  liveWorkspace: { addAll: "Add all cameras", removeAll: "Remove all cameras from view", alignTiles: "Align tiles", fitFrames: "Fit frames" },
+  ptz: {
+    areaMode: "Zoom to area", areaHint: "Draw a rectangle on the image to centre and zoom the camera. Escape cancels the selection.",
+    pointMode: "Point positioning", pointHint: "Click the image to centre the camera on that point.",
+    lowLatencyUnavailable: "Low-latency video is unavailable. Showing the ordinary live stream. Close and reopen PTZ to retry.",
+    title: "PTZ controls", open: "Control camera", close: "Close controls", stop: "Stop camera",
+    up_left: "Up and left", up: "Up", up_right: "Up and right", left: "Left", right: "Right",
+    down_left: "Down and left", down: "Down", down_right: "Down and right",
+    zoom: "Zoom", zoomIn: "Zoom in", zoomOut: "Zoom out", speed: "Speed",
+    savedPosition: "Saved position", position: "Position", noPositions: "No saved positions",
+    commandFailed: "The camera command failed. Check the connection and press again.",
+    presetsFailed: "Could not read the camera's saved positions.",
+  },
   supportReport: {
     description: "What happened?",
     diagnostics: "Diagnostic report",

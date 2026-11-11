@@ -4,9 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import CompactVideoCanvas from "./CompactVideoCanvas";
 import VideoZoomPanSurface from "./VideoZoomPanSurface";
-import { apiFetch, issueLiveMediaTokenInfo } from "../lib/api";
+import PtzPointSurface from "./cameras/PtzPointSurface";
+import { createLiveMsePlayer } from "../lib/liveMsePlayer";
+import { apiFetch, captureAuthSession, issueLiveMediaTokenInfo } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { liveFailureMessage, liveRecoveryDelay, notifyLiveRuntimeChanged } from "../lib/livePlaybackRecovery";
+import { confirmedHlsAudio, liveAudioAllowed, playLiveAudio } from "../lib/liveAudioPlayback";
 import {
   isCompactSmoothingSourceVideo,
   normalizeVideoDimensions,
@@ -56,11 +59,22 @@ export default function TilePlayer({
   onAudioPlaybackBlocked,
   onDesktopDoubleClick,
   onTouchDoubleTap,
+  lowLatency = false,
+  pointActive = false,
+  onPoint,
+  areaZoomActive = false,
+  onAreaZoom,
+  onPtzAimCancel,
+  onLowLatencyUnavailable,
 }) {
   const { text } = useI18n();
   const videoRef = useRef(null);
   const wrapRef = useRef(null);
   const hlsRef = useRef(null);
+  const mseRef = useRef(null);
+  const lowLatencyUnavailableRef = useRef(onLowLatencyUnavailable);
+  lowLatencyUnavailableRef.current = onLowLatencyUnavailable;
+  const [transport, setTransport] = useState("hls");
   const retryTimerRef = useRef(null);
   const mediaTokenRefreshTimerRef = useRef(null);
   const mediaTokenRefreshInFlightRef = useRef(null);
@@ -95,7 +109,7 @@ export default function TilePlayer({
   function reportAudioStatus(item, source = "live-status") {
     if (typeof audioStatusChangeRef.current !== "function") return;
     const audioMode = String(item?.audio_mode || "unknown").toLowerCase();
-    const audioEnabledByConfig = item?.audio_enabled !== false && !["none", "off", "disable", "disabled"].includes(audioMode);
+    const audioEnabledByConfig = liveAudioAllowed(item);
     const inputHasAudio = item?.audio_available === true || Boolean(item?.input_audio_codec);
     audioStatusChangeRef.current({
       source,
@@ -188,6 +202,8 @@ export default function TilePlayer({
   }
 
   function destroyPlayer() {
+    mseRef.current?.destroy();
+    mseRef.current = null;
     if (retryTimerRef.current) {
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
@@ -299,6 +315,7 @@ export default function TilePlayer({
     let lastRuntimeState = "";
     let currentViewerId = null;
     let viewerTouchTimer = null;
+    let audioAllowedByConfig = true;
     const sourceKey = {
       cameraId: cameraId ? Number(cameraId) : null,
       stream: stream || null,
@@ -362,6 +379,7 @@ export default function TilePlayer({
           if (item?.source_resolution?.width && item?.source_resolution?.height) {
             applyNaturalResolution(item.source_resolution.width, item.source_resolution.height, "runtime-source");
           }
+          if (item) audioAllowedByConfig = liveAudioAllowed(item);
           reportAudioStatus(item, "live-status");
           if (item?.running && item?.ready) {
             return { ready: true, item };
@@ -501,6 +519,12 @@ export default function TilePlayer({
 
         hlsRef.current = hls;
 
+        hls.on(Hls.Events.BUFFER_CODECS, (_event, tracks) => {
+          if (cancelled) return;
+          const fact = confirmedHlsAudio(tracks, audioAllowedByConfig);
+          if (fact) reportAudioStatus(fact, "hls-codecs");
+        });
+
         hls.once(Hls.Events.MEDIA_ATTACHED, () => {
           if (!cancelled) {
             hls.loadSource(playlist.url);
@@ -516,7 +540,7 @@ export default function TilePlayer({
             applyNaturalResolution(level.width, level.height, "hls-manifest");
           }
           authRefreshFailures = 0;
-          if ((Array.isArray(data?.audioTracks) && data.audioTracks.length) || (Array.isArray(hls.audioTracks) && hls.audioTracks.length)) {
+          if (audioAllowedByConfig && ((Array.isArray(data?.audioTracks) && data.audioTracks.length) || (Array.isArray(hls.audioTracks) && hls.audioTracks.length))) {
             reportAudioStatus({ audio_mode: "manifest", audio_enabled: true, audio_available: true, audio_reason: "input_has_audio" }, "hls-manifest");
           }
           setStatus("playing");
@@ -566,6 +590,9 @@ export default function TilePlayer({
 
         const onLoaded = () => {
           if (cancelled) return;
+          if (audioAllowedByConfig && video.audioTracks?.length) {
+            reportAudioStatus({ audio_mode: "native", audio_enabled: true, audio_available: true, audio_reason: "input_has_audio" }, "native-hls");
+          }
           sampleVideoDimensions("native-hls");
           setStatus("playing");
           setError("");
@@ -678,7 +705,40 @@ export default function TilePlayer({
     };
     window.addEventListener("online", onResume);
     document.addEventListener("visibilitychange", onResume);
-    startPlayback();
+    if (lowLatency) {
+      const ownSession = captureAuthSession();
+      destroyPlayer();
+      setTransport("mse");
+      setStatus("loading"); setError("");
+      const mse = createLiveMsePlayer({
+        video: videoRef.current, cameraId, stream,
+        requestToken: issueLiveMediaTokenInfo,
+        isCurrent: () => !cancelled && ownSession(),
+        onPlaying: () => {
+          if (cancelled) return;
+          setStatus("playing"); setError(""); everPlayed = true;
+          sampleVideoDimensions("mse");
+          notifyLiveRuntimeChanged();
+        },
+        onAudio: item => reportAudioStatus(item, "mse"),
+        onFailure: cause => {
+          if (cancelled || !ownSession()) return;
+          if ([401, 403, 404].includes(cause?.status)) {
+            failWithMessage(TEXT.failedPlay, cause);
+            return;
+          }
+          mseRef.current?.destroy(); mseRef.current = null;
+          setTransport("hls");
+          lowLatencyUnavailableRef.current?.();
+          void startPlayback();
+        },
+      });
+      mseRef.current = mse;
+      void mse.start();
+    } else {
+      setTransport("hls");
+      startPlayback();
+    }
 
     function dispose() {
       cancelled = true;
@@ -696,7 +756,7 @@ export default function TilePlayer({
       window.removeEventListener("km-vms-before-logout", beforeLogout);
       dispose();
     };
-  }, [cameraId, stream]);
+  }, [cameraId, stream, lowLatency]);
 
   useEffect(() => {
     audioStatusChangeRef.current = onAudioStatusChange;
@@ -711,13 +771,13 @@ export default function TilePlayer({
       return;
     }
     video.volume = 1;
-    video.play().catch(() => {
+    return playLiveAudio(video, () => {
       video.muted = true;
       if (typeof audioPlaybackBlockedRef.current === "function") {
         audioPlaybackBlockedRef.current();
       }
     });
-  }, [audioEnabled, audioRequestId]);
+  }, [cameraId, stream, lowLatency, audioEnabled, audioRequestId]);
 
   return (
     <div
@@ -725,6 +785,7 @@ export default function TilePlayer({
       className={`liveVideoWrap ${compactCanvasRequested ? "compactVideoCanvasRequested" : ""} ${nativeVideoSuppressed ? "compactVideoCanvasActive" : ""}`}
       title={text(TEXT.doubleClick)}
       data-render-context="live"
+      data-live-transport={transport}
       data-playback-status={status}
       data-renderer={nativeVideoSuppressed ? "canvas" : "native"}
       data-render-mode={renderState.mode}
@@ -746,7 +807,7 @@ export default function TilePlayer({
       <VideoZoomPanSurface
         className="liveVideoZoomSurface"
         context="live"
-        sourceKey={`${cameraId || ""}:${stream || ""}`}
+        sourceKey={`${cameraId || ""}:${stream || ""}${pointActive ? ":ptz-point" : ""}${areaZoomActive ? ":ptz-area" : ""}`}
         onDesktopDoubleClick={onDesktopDoubleClick}
         onTouchDoubleTap={onTouchDoubleTap}
         onZoomActiveChange={setZoomActive}
@@ -770,6 +831,9 @@ export default function TilePlayer({
           className="liveCompactVideoCanvas"
         />
       </VideoZoomPanSurface>
+      {pointActive || areaZoomActive ? <PtzPointSurface key={`${cameraId}:${stream}:${areaZoomActive ? "area" : "point"}`}
+        dimensions={naturalResolution} ready={status === "playing" && readyState >= 2}
+        mode={areaZoomActive ? "area" : "point"} onAim={onPoint} onAreaZoom={onAreaZoom} onCancel={onPtzAimCancel} /> : null}
 
       {status === "loading" || status === "waiting" ? (
         <div className="liveCenterHint">

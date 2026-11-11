@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import AuthenticatedPreviewImage from "../../components/AuthenticatedPreviewImage";
 import CameraEditor from "../../components/cameras/CameraEditor";
+import { CameraPtzBadge, CameraPtzDialog } from "../../components/cameras/CameraPtz";
+import { invalidateCameraPtz, usePtzCapabilities } from "../../lib/useCameraPtz";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
@@ -142,6 +144,9 @@ export default function CamerasPage() {
   const copy = useLocaleText("cameras");
   const { currentUser } = useCurrentUser();
   const [cameras, setCameras] = useState([]);
+  const ptzCapabilities = usePtzCapabilities(cameras);
+  const [ptzCameraId, setPtzCameraId] = useState(null);
+  const ptzCamera = cameras.find(camera => camera.id === ptzCameraId) || null;
   const [camerasLoadState, setCamerasLoadState] = useState("idle");
   const [viewMode, setViewMode] = useState("list");
   const [storage, setStorage] = useState(null);
@@ -251,6 +256,7 @@ export default function CamerasPage() {
   }
 
   async function cameraSaved() {
+    invalidateCameraPtz();
     setShowEditor(false);
     setEditorCamera(null);
     await Promise.all([load(), loadSecondaryStatus()]);
@@ -382,7 +388,11 @@ export default function CamerasPage() {
                   <div className="cameraTileBody">
                     <div className="cameraTileTitleRow">
                       <div className="cameraTileIdentity">
-                        <div className="cameraTileName" title={camera.name}>{camera.name}</div>
+                        <div className="cameraTileName cameraNameWithPtz" title={camera.name}>
+                          <span className="cameraPtzNameText">{camera.name}</span>
+                          <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
+                            onClick={() => setPtzCameraId(camera.id)} expanded={ptzCameraId === camera.id} />
+                        </div>
                         <div className="cameraTileEndpoint" title={cameraEndpointLabel(camera)}>{cameraEndpointLabel(camera)}</div>
                       </div>
                       <div className="cameraTileActions">
@@ -416,7 +426,11 @@ export default function CamerasPage() {
                 <div className="cameraCardGrid">
                   <div className="cameraField cameraNameField">
                     <div className="cameraFieldLabel">{copy.camera}</div>
-                    <div className="cameraPrimary" title={camera.name}>{camera.name}</div>
+                    <div className="cameraPrimary cameraNameWithPtz" title={camera.name}>
+                      <span className="cameraPtzNameText">{camera.name}</span>
+                      <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
+                        onClick={() => setPtzCameraId(camera.id)} expanded={ptzCameraId === camera.id} />
+                    </div>
                     <div className="cameraSecondary" title={`${copy.folder}: ${camera.storage_folder_name}`}>{copy.folder}: {camera.storage_folder_name}</div>
                     <div className="cameraActions">
                       <button className="cameraIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
@@ -484,6 +498,9 @@ export default function CamerasPage() {
       </div>
 
       {showEditor ? <CameraEditor camera={editorCamera} onClose={() => setShowEditor(false)} onSaved={cameraSaved} /> : null}
+      {ptzCamera && ptzCapabilities[ptzCamera.id]?.supported ? <CameraPtzDialog
+        key={`${ptzCamera.id}-${ptzCapabilities[ptzCamera.id].profile_token}`}
+        camera={ptzCamera} capability={ptzCapabilities[ptzCamera.id]} onClose={() => setPtzCameraId(null)} /> : null}
 
       <OperationDialog
         dialog={deleteModalOpen ? {

@@ -385,7 +385,8 @@ test("Live, Chronology and Records use the shared zoom surface without permanent
   }
 
   assert.equal(livePlayer.includes("context=\"live\""), true);
-  assert.equal(livePlayer.includes("sourceKey={`${cameraId || \"\"}:${stream || \"\"}`}"), true);
+  assert.equal(livePlayer.includes('sourceKey={`${cameraId || ""}:${stream || ""}${pointActive ? ":ptz-point" : ""}${areaZoomActive ? ":ptz-area" : ""}`}'), true,
+    "physical point/area positioning resets digital cropping; ordinary playback keeps the same camera/stream key");
   assert.equal(livePlayer.includes("sourceKey={`${cameraId || \"\"}:${stream || \"\"}:${canvasGeneration}`}"), false);
   assert.equal(archivePlayer.includes("context=\"chronology\""), true);
   assert.equal(archivePlayer.includes("sourceKey={playback?.playbackKey || \"empty\"}"), true);

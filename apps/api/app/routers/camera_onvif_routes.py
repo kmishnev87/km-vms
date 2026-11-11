@@ -21,6 +21,7 @@ from app.routers.camera_connection_helpers import (
 )
 from app.routers.deps import require_permission
 from app.services.audit_log import create_event, request_ip, request_user_agent
+from app.services.camera_stream_dimensions import remember_onvif_dimensions
 from app.services.onvif_service import (
     OnvifConfigurationError,
     build_onvif_health_contract,
@@ -30,6 +31,7 @@ from app.services.onvif_service import (
     fetch_onvif_profiles,
     get_onvif_profile_config,
     get_onvif_ptz_capabilities,
+    get_onvif_ptz_presets,
     probe_onvif_device,
     select_profile_config_health_target,
     update_onvif_profile,
@@ -157,6 +159,7 @@ def onvif_profiles(
             **({"onvif_path": creds["onvif_path"]} if creds.get("onvif_path") else {}),
         )
         data = apply_profile_assignments(data, creds.get("camera"))
+        remember_onvif_dimensions(creds.get("camera"), creds, data.get("profiles") or [])
         proof_payload = {**payload, **creds, "protocol": "onvif", "port": int(port),
                          "rtsp_host": creds["rtsp_host"] or host, "rtsp_port": creds["rtsp_port"] or 554,
                          "onvif_path": creds.get("onvif_path")}
@@ -250,14 +253,16 @@ def onvif_profile_config(
         raise HTTPException(status_code=400, detail="ONVIF profile settings require host, credentials, and profile token.")
 
     try:
-        return safe_onvif_management_payload(get_onvif_profile_config(
+        result = get_onvif_profile_config(
             host=str(creds["host"]),
             port=int(creds["port"] or 80),
             username=str(creds["username"]),
             password=str(creds["password"]),
             profile_token=str(payload["profile_token"]),
             **({"onvif_path": creds["onvif_path"]} if creds.get("onvif_path") else {}),
-        ))
+        )
+        remember_onvif_dimensions(creds.get("camera"), creds, [{**result, "token": str(payload["profile_token"])}])
+        return safe_onvif_management_payload(result)
     except Exception as e:
         raise HTTPException(status_code=400, detail=onvif_config_http_detail(e))
 
@@ -273,7 +278,7 @@ def update_onvif_profile_route(
         raise HTTPException(status_code=400, detail="ONVIF profile update requires host, credentials, and profile token.")
 
     try:
-        return safe_onvif_management_payload(update_onvif_profile(
+        result = update_onvif_profile(
             host=str(creds["host"]),
             port=int(creds["port"] or 80),
             username=str(creds["username"]),
@@ -281,7 +286,9 @@ def update_onvif_profile_route(
             profile_token=str(payload["profile_token"]),
             config=payload.get("config") or {},
             **({"onvif_path": creds["onvif_path"]} if creds.get("onvif_path") else {}),
-        ))
+        )
+        remember_onvif_dimensions(creds.get("camera"), creds, [{**result, "token": str(payload["profile_token"])}])
+        return safe_onvif_management_payload(result)
     except Exception as e:
         status_code = 409 if isinstance(e, OnvifConfigurationError) and e.code == "video_encoder_configuration_mismatch" else 400
         raise HTTPException(status_code=status_code, detail=onvif_config_http_detail(e))
@@ -302,7 +309,7 @@ def onvif_ptz_capabilities(
             **creds,
         }
     try:
-        result = get_onvif_ptz_capabilities(**creds)
+        result = get_onvif_ptz_capabilities(**creds, profile_token=camera.onvif_profile_token)
         return {
             "camera_id": camera.id,
             "camera_name": camera.name,
@@ -327,6 +334,24 @@ def onvif_ptz_capabilities(
             "message": safe_onvif_error(e),
             "raw_secret_exposed": False,
         }
+
+
+@router.get("/{camera_id}/onvif/ptz/presets")
+def onvif_ptz_presets(
+    camera_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    camera = get_active_camera_or_404(db, camera_id)
+    creds = safe_camera_onvif_credentials(camera)
+    if creds.get("source") == "not_onvif":
+        return {"camera_id": camera.id, "ok": True, "presets": [], "supported": False,
+                "raw_secret_exposed": False}
+    try:
+        return {"camera_id": camera.id,
+                **get_onvif_ptz_presets(**creds, profile_token=camera.onvif_profile_token)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=onvif_config_http_detail(exc))
 
 
 @router.post("/{camera_id}/onvif/ptz/command")
@@ -355,8 +380,18 @@ def onvif_ptz_command(
                 status_code=400,
                 detail={"code": "camera_not_onvif", "message": "PTZ commands require an ONVIF camera."},
             )
+        expected_profile = payload.get("profile_token")
+        if expected_profile:
+            current_profile = camera.onvif_profile_token
+            if not current_profile:
+                current_profile = get_onvif_ptz_capabilities(**creds).get("profile_token")
+            if expected_profile != current_profile:
+                raise HTTPException(status_code=409, detail={"code": "ptz_profile_changed",
+                    "message": "The camera profile changed. Reopen camera controls."})
         try:
-            result = execute_onvif_ptz_command(**creds, payload=payload)
+            result = execute_onvif_ptz_command(**creds, payload=payload,
+                                               profile_token=camera.onvif_profile_token,
+                                               control_owner=current_user.id)
         except ValueError as e:
             raise HTTPException(
                 status_code=400,
@@ -365,29 +400,30 @@ def onvif_ptz_command(
         except Exception as e:
             raise HTTPException(
                 status_code=400,
-                detail={"code": onvif_error_code(e), "message": safe_onvif_error(e)},
+                detail=onvif_config_http_detail(e),
             )
 
-    create_event(
-        db=db,
-        actor=current_user,
-        category="cameras",
-        event_type="cameras.ptz_command",
-        message_ru=f"{current_user.username} проверил PTZ команду для камеры {camera.name}",
-        message_en=f"{current_user.username} validated PTZ command for camera {camera.name}",
-        target_type="camera",
-        target_id=camera.id,
-        target_name=camera.name,
-        ip_address=request_ip(request),
-        user_agent=request_user_agent(request),
-        metadata={
-            "action": result.get("action"),
-            "execution_mode": result.get("execution_mode"),
-            "executed": bool(result.get("executed")),
-            "physical_camera_mutated": bool(result.get("physical_camera_mutated")),
-            "duration_seconds": result.get("duration_seconds"),
-        },
-    )
+    if result.get("audit_event", True):
+        create_event(
+            db=db,
+            actor=current_user,
+            category="cameras",
+            event_type="cameras.ptz_command",
+            message_ru=f"{current_user.username}: PTZ-команда для камеры {camera.name}",
+            message_en=f"{current_user.username}: PTZ command for camera {camera.name}",
+            target_type="camera",
+            target_id=camera.id,
+            target_name=camera.name,
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+            metadata={
+                "action": result.get("action"),
+                "execution_mode": result.get("execution_mode"),
+                "executed": bool(result.get("executed")),
+                "physical_camera_mutated": bool(result.get("physical_camera_mutated")),
+                "duration_seconds": result.get("duration_seconds"),
+            },
+        )
     return {
         "camera_id": camera.id,
         "camera_name": camera.name,
@@ -498,6 +534,7 @@ def onvif_health_check(
             try:
                 ptz_result = run_bounded_read_only_check(
                     get_onvif_ptz_capabilities,
+                    profile_token=camera.onvif_profile_token,
                     host=str(camera.host),
                     port=int(camera.port or 80),
                     username=str(camera.username),

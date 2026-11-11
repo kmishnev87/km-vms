@@ -1,4 +1,17 @@
 export const zhCNDictionary = {
+  liveWorkspace: { addAll: "添加全部摄像机", removeAll: "关闭全部画面", alignTiles: "按窗口排列", fitFrames: "按画面排列" },
+  ptz: {
+    areaMode: "框选放大", areaHint: "在画面上框选区域，摄像机将转向该区域并放大。按 Escape 取消选择。",
+    pointMode: "点击定位", pointHint: "点击画面，将摄像机转向所选位置。",
+    lowLatencyUnavailable: "低延迟视频暂不可用，已切换至普通实时视频。请关闭并重新打开云台控制以重试。",
+    title: "云台控制", open: "控制摄像机", close: "关闭控制", stop: "停止摄像机",
+    up_left: "左上", up: "向上", up_right: "右上", left: "向左", right: "向右",
+    down_left: "左下", down: "向下", down_right: "右下",
+    zoom: "变焦", zoomIn: "放大", zoomOut: "缩小", speed: "速度",
+    savedPosition: "预置位", position: "位置", noPositions: "没有已保存的预置位",
+    commandFailed: "摄像机命令失败。请检查连接后再次按下。",
+    presetsFailed: "无法读取摄像机的预置位。",
+  },
   supportReport: {
     description: "发生了什么？",
     diagnostics: "诊断报告",

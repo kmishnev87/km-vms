@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, WebSocket
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -48,6 +48,7 @@ SAFE_FAILURE_REASONS = {
 }
 LIVE_STATUS_ALLOWED_FIELDS = (
     "stream_key",
+    "transport",
     "camera_id",
     "stream",
     "stream_type",
@@ -403,6 +404,12 @@ def live_debug_stream(
 ):
     _get_camera(db, camera_id)
     return _serialize_live_debug(manager.debug(camera_id=camera_id, stream=stream))
+
+
+@router.websocket("/{camera_id}/{stream}/mse")
+async def live_mse(websocket: WebSocket, camera_id: int, stream: StreamKey):
+    from app.routers.live_mse import serve_mse
+    await serve_mse(websocket, camera_id, stream)
 
 
 @router.get("/{camera_id}/{stream}/index.m3u8")

@@ -38,6 +38,7 @@ const expectedImports = [
   "styles/70-live.css",
   "styles/80-chronology-timeline.css",
   "styles/90-live-workspace.css",
+  "styles/95-camera-ptz.css",
   "styles/100-chronology-workspace.css",
 ];
 

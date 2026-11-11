@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.6",
-  "tag": "v0.9.6",
-  "title": "Diagnostic report delivery, optional GPU and MIT license",
-  "summary": "Send an explicitly approved normal or extended diagnostic report to the KM VMS developer over HTTPS, receive a confirmed report ID, or download the ZIP instead. The separate developer-only support center stores and manages reports; local surveillance needs no new service and no background reporting.",
+  "version": "0.9.7",
+  "tag": "v0.9.7",
+  "title": "Automatic PTZ control and frame-aware workspaces",
+  "summary": "Control supported ONVIF PTZ cameras directly in KM VMS, with low-latency video while PTZ is open, point and supported area positioning, and movable fullscreen controls. Fit complete frames into Online and Chronology with consistent compact toolbars, while preserving the ordinary viewing and archive workflows.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.6",
+  "source_ref": "v0.9.7",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,55 +20,67 @@
     "target_version": 10
   },
   "changelog": [
-    "Connect report sending in Settings > Security and Diagnostics using one stable, localized form.",
-    "Include the problem description and existing redacted diagnostics/logs with 10- or 30-minute log coverage; do not send video recordings.",
-    "Require explicit consent and diagnostic permissions; use a configured HTTPS destination without forwarding application credentials.",
-    "Confirm success only after receiver acceptance and retain the submission ID for safe retries after a lost response.",
-    "Keep ZIP download available, and keep the developer's receiving infrastructure outside user installations with no automatic report sending.",
-    "Update public support/privacy guidance and separate maintainer publishing instructions from user installation documentation.",
-    "License KM VMS project code under MIT; preserve third-party component licensing.",
-    "Make DRM/GPU passthrough optional for installation, updates and restarts, with automatic CPU fallback on hosts without /dev/dri."
+    "Detect PTZ for the saved ONVIF profile and lens through Media1/Media2; do not confuse panoramic and moving lenses.",
+    "Provide move, zoom, Stop and existing presets with permission checks, bounded camera commands and ordered quick taps.",
+    "Use MSE/WebSocket video only for the camera whose PTZ controls are open; retain ordinary HLS viewing and fallback.",
+    "Support point positioning and advertised ONVIF area positioning, with a narrowly detected Dahua area-zoom adapter where required.",
+    "Add a discrete draggable speed slider and a translucent, movable fullscreen PTZ panel whose position lasts only for the current view.",
+    "Keep fullscreen Main/Sub and audio controls compact; preserve listening intent when switching streams.",
+    "Cache source-scoped Main/Sub dimensions from existing connection checks, without database changes or new background camera probes.",
+    "Add optional automatic full-frame packing to Online and Chronology; a second press disables it without moving tiles.",
+    "Unify both camera toolbars with five equal icon buttons, clear tooltips and a close-all-views action that does not delete cameras or recordings.",
+    "Correct Online viewport sizing and desktop Chronology height; preserve archive time and playback identities while rearranging.",
+    "Prevent initial layout loading from overwriting early actions and repair the stale single-tile close handler in Chronology."
   ],
   "title_i18n": {
-    "en": "Diagnostic report delivery, optional GPU and MIT license",
-    "ru": "Отправка диагностики, необязательный GPU и лицензия MIT",
-    "zh-CN": "诊断报告发送、可选 GPU 与 MIT 许可证"
+    "en": "Automatic PTZ control and frame-aware workspaces",
+    "ru": "Автоматическое PTZ-управление и раскладка по кадру",
+    "zh-CN": "自动云台控制与按画面排列"
   },
   "summary_i18n": {
-    "en": "Send an explicitly approved normal or extended diagnostic report to the KM VMS developer over HTTPS, receive a confirmed report ID, or download the ZIP instead. The separate developer-only support center stores and manages reports; local surveillance needs no new service and no background reporting.",
-    "ru": "Отправляйте разработчику обычную или расширенную диагностику через HTTPS только после явного согласия, получайте номер принятого обращения либо скачивайте ZIP. Отдельная закрытая панель разработчика хранит и обрабатывает отчёты; видеонаблюдение не требует новых служб и не отправляет отчёты в фоне.",
-    "zh-CN": "经明确同意后，通过 HTTPS 向 KM VMS 开发者发送普通或扩展诊断，接收确认的报告编号，也可单独下载 ZIP。开发者专用支持中心独立存储和管理报告，本地视频监控无需新增服务，不会在后台自动发送报告。"
+    "en": "Control supported ONVIF PTZ cameras directly in KM VMS, with low-latency video while PTZ is open, point and supported area positioning, and movable fullscreen controls. Fit complete frames into Online and Chronology with consistent compact toolbars, while preserving the ordinary viewing and archive workflows.",
+    "ru": "Управляйте поддерживаемыми ONVIF PTZ-камерами прямо в KM VMS: видео с малой задержкой при открытом пульте, наведение по точке и поддерживаемой рамке, перемещаемый полноэкранный пульт. В «Онлайн» и «Хронологии» добавлены раскладка по полному кадру и одинаковые компактные панели; обычный просмотр и работа с архивом сохранены.",
+    "zh-CN": "直接在 KM VMS 中控制受支持的 ONVIF 云台摄像机，打开云台控制时使用低延迟视频，并提供点击定位、受支持的框选放大及可拖动的全屏控制面板。实时与时间轴工作区新增完整画面排列和统一紧凑工具栏，同时保留原有浏览与录像流程。"
   },
   "changelog_i18n": {
     "en": [
-      "Connect report sending in Settings > Security and Diagnostics using one stable, localized form.",
-      "Include the problem description and existing redacted diagnostics/logs with 10- or 30-minute log coverage; do not send video recordings.",
-      "Require explicit consent and diagnostic permissions; use a configured HTTPS destination without forwarding application credentials.",
-      "Confirm success only after receiver acceptance and retain the submission ID for safe retries after a lost response.",
-      "Keep ZIP download available, and keep the developer's receiving infrastructure outside user installations with no automatic report sending.",
-      "Update public support/privacy guidance and separate maintainer publishing instructions from user installation documentation.",
-      "License KM VMS project code under MIT; preserve third-party component licensing.",
-      "Make DRM/GPU passthrough optional for installation, updates and restarts, with automatic CPU fallback on hosts without /dev/dri."
+      "Detect PTZ for the saved ONVIF profile and lens through Media1/Media2; do not confuse panoramic and moving lenses.",
+      "Provide move, zoom, Stop and existing presets with permission checks, bounded camera commands and ordered quick taps.",
+      "Use MSE/WebSocket video only for the camera whose PTZ controls are open; retain ordinary HLS viewing and fallback.",
+      "Support point positioning and advertised ONVIF area positioning, with a narrowly detected Dahua area-zoom adapter where required.",
+      "Add a discrete draggable speed slider and a translucent, movable fullscreen PTZ panel whose position lasts only for the current view.",
+      "Keep fullscreen Main/Sub and audio controls compact; preserve listening intent when switching streams.",
+      "Cache source-scoped Main/Sub dimensions from existing connection checks, without database changes or new background camera probes.",
+      "Add optional automatic full-frame packing to Online and Chronology; a second press disables it without moving tiles.",
+      "Unify both camera toolbars with five equal icon buttons, clear tooltips and a close-all-views action that does not delete cameras or recordings.",
+      "Correct Online viewport sizing and desktop Chronology height; preserve archive time and playback identities while rearranging.",
+      "Prevent initial layout loading from overwriting early actions and repair the stale single-tile close handler in Chronology."
     ],
     "ru": [
-      "Подключена отправка из «Настройки → Безопасность» и «Диагностика» через одну устойчивую форму на трёх языках.",
-      "Описание проблемы дополняется существующей диагностикой и журналами с маскированием известных секретных полей за 10 или 30 минут; видеоархив не передаётся.",
-      "Для отправки обязательны явное согласие и права диагностики; HTTPS-получатель задан на сервере, учётные данные приложения ему не передаются.",
-      "Успех подтверждается номером принятого обращения; повтор после потерянного ответа использует прежний идентификатор без дублей.",
-      "Скачивание ZIP сохранено; приёмник разработчика не устанавливается у пользователей и не вводит фоновую отправку отчётов.",
-      "Актуализированы публичные сведения о поддержке и приватности; инструкции публикации отделены от пользовательской установки.",
-      "Для кода KM VMS принята лицензия MIT; лицензии сторонних компонентов сохранены.",
-      "Установка, обновление и перезапуск подключают DRM/GPU только при доступном устройстве; серверы без /dev/dri работают на процессоре."
+      "PTZ определяется по сохранённому ONVIF-профилю и объективу через Media1/Media2; панорамный и поворотный объективы не смешиваются.",
+      "Поворот, зум, Stop и существующие позиции работают с проверкой прав, ограниченными командами камеры и очередью быстрых нажатий.",
+      "MSE/WebSocket включается только у камеры с открытым пультом PTZ; обычный HLS-просмотр и возврат к нему сохранены.",
+      "Добавлены наведение по точке и объявленная ONVIF-поддержка рамки; для нуждающихся в этом Dahua используется ограниченно определяемый адаптер.",
+      "Ползунок скорости получил дискретное перетаскивание; полупрозрачный полноэкранный пульт можно перемещать, его положение живёт только в текущем просмотре.",
+      "В fullscreen доступны компактные Main/Sub и звук; выбор прослушивания сохраняется при переключении потоков.",
+      "Размеры Main/Sub сохраняются из существующих проверок подключения с привязкой к источнику, без изменения БД и нового фонового опроса камер.",
+      "В «Онлайн» и «Хронологии» добавлена автоматическая раскладка полных кадров; повторное нажатие выключает режим, не двигая плитки.",
+      "Обе панели камер получили пять равных значков с понятными подсказками и общее закрытие просмотров без удаления камер и записей.",
+      "Исправлена высота «Онлайн» и настольной «Хронологии»; перестановка плиток не меняет выбранное время и источники архивного воспроизведения.",
+      "Начальная загрузка раскладки больше не затирает ранние действия; в «Хронологии» исправлен устаревший обработчик закрытия отдельной плитки."
     ],
     "zh-CN": [
-      "设置 → 安全与诊断页面使用统一、稳定的三语言报告表单。",
-      "报告包含问题描述和已隐藏已知敏感字段的诊断/日志，可选择最近 10 或 30 分钟；不发送录像。",
-      "发送需要明确同意及诊断权限；使用服务器配置的 HTTPS 接收地址，不转发应用凭据。",
-      "仅在接收方确认后显示成功编号；响应丢失后的重试沿用相同提交标识，避免重复。",
-      "保留 ZIP 下载；开发者接收基础设施不安装到用户系统中，也不引入后台自动发送。",
-      "更新公开支持与隐私说明，将维护者发布指南与用户安装说明分离。",
-      "KM VMS 项目代码采用 MIT 许可证，第三方组件保留各自的许可证。",
-      "安装、更新和重启仅在设备可用时启用 DRM/GPU 直通；没有 /dev/dri 的服务器使用 CPU。"
+      "通过 Media1/Media2 根据已保存的 ONVIF 配置与镜头识别云台，区分全景与可转动镜头。",
+      "提供移动、变焦、停止及已有预置位，保留权限检查、有限时摄像机指令及快速点击队列。",
+      "仅为已打开云台控制的摄像机启用 MSE/WebSocket 视频，保留普通 HLS 浏览及回退。",
+      "支持点击定位与明确声明的 ONVIF 框选定位；对需要的 Dahua 设备使用受限识别的框选放大适配器。",
+      "速度滑块支持离散拖动，半透明全屏云台面板可移动，位置仅保留在当前浏览会话中。",
+      "全屏内提供紧凑主/子码流与音频控制，切换码流时保留收听选择。",
+      "从现有连接检查缓存与来源绑定的主/子码流尺寸，不修改数据库或新增后台摄像机探测。",
+      "实时与时间轴新增可选完整画面自动排列，再次点击关闭模式且不移动窗口。",
+      "统一两个摄像机工具栏，提供五个等宽图标、清晰提示及关闭全部浏览，不删除摄像机或录像。",
+      "修正实时工作区及桌面时间轴高度，调整窗口不改变所选录像时间或播放源标识。",
+      "防止首次布局加载覆盖过早操作，并修复时间轴单窗口关闭处理函数的失效引用。"
     ]
   }
 }

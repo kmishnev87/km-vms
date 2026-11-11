@@ -63,12 +63,14 @@ for (const forbidden of [
   "stderr_tail",
   "pid_cmdline",
   "ffmpeg_cmd",
-  "command",
   "<pre",
   "dangerouslySetInnerHTML",
 ]) {
   assert.equal(`${livePage}\n${tilePlayer}`.includes(forbidden), false, `${forbidden} must not be rendered by live audio UX`);
 }
+// A translated PTZ error key is not a rendered FFmpeg command/debug object.
+assert.doesNotMatch(`${livePage}\n${tilePlayer}`, /\{\s*(?:[A-Za-z_]\w*\.)?(?:command|cmd_text)\s*\}/);
+assert.doesNotMatch(`${livePage}\n${tilePlayer}`, /JSON\.stringify\([^)]*(?:command|cmd_text)/);
 
 assert.equal(liveCss.includes(".liveWorkspaceAudioButton"), true);
 assert.equal(liveCss.includes(".liveWorkspaceTile.audioActive"), true);

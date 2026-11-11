@@ -11,6 +11,7 @@ from app.core.security import decrypt_text
 from app.models.camera import Camera
 from app.schemas.camera import restore_rtsp_management_value, safe_rtsp_management_value
 from app.services.onvif_service import rtsp_path_from_uri
+from app.services.camera_stream_dimensions import dimensions, remember_dimensions
 
 
 PROOF_TTL_SECONDS = 15 * 60
@@ -144,21 +145,42 @@ def register_onvif_probe_proof(payload: dict, *, profiles: list | None = None) -
         paths = {str(item["token"]): saved_stream_path(item.get("stream_path") or item.get("stream_uri"))
                  for item in profiles if isinstance(item, dict) and item.get("token")}
         ONVIF_PROBE_PROOFS[token]["stream_paths"] = paths
+        sizes = {str(item["token"]): dimensions(item) for item in profiles
+                 if isinstance(item, dict) and item.get("token") and dimensions(item)}
+        ONVIF_PROBE_PROOFS[token]["stream_dimensions"] = sizes
         previous = payload.get("onvif_probe_token")
         if store_has_valid_management_proof(previous, payload):
             ONVIF_PROBE_PROOFS[previous]["stream_paths"] = {**(ONVIF_PROBE_PROOFS[previous].get("stream_paths") or {}), **paths}
+            ONVIF_PROBE_PROOFS[previous]["stream_dimensions"] = {**(ONVIF_PROBE_PROOFS[previous].get("stream_dimensions") or {}), **sizes}
     return token
 
 
-def register_rtsp_test_proof(payload: dict, role: str | None = None) -> str:
+def register_rtsp_test_proof(payload: dict, role: str | None = None, video: dict | None = None) -> str:
     normalized_role = normalize_stream_role(role or payload.get("stream_role")) or "main"
-    return register_validation_proof(
+    token = register_validation_proof(
         RTSP_TEST_PROOFS,
         payload,
         fingerprint=stream_role_fingerprint(payload, normalized_role),
         proof_type="rtsp_exact_role",
         role=normalized_role,
     )
+    RTSP_TEST_PROOFS[token]["stream_dimensions"] = dimensions(video)
+    return token
+
+
+def persist_verified_stream_dimensions(camera, payload):
+    for role in required_stream_roles(payload):
+        token = payload.get(f"{role}_validation_token") or (payload.get("validation_token") if role == "main" else None)
+        if store_has_valid_stream_proof(token, payload, role):
+            if remember_dimensions(camera, role, RTSP_TEST_PROOFS[token].get("stream_dimensions")):
+                continue
+        probe_token = payload.get("onvif_probe_token")
+        if not store_has_valid_management_proof(probe_token, payload):
+            continue
+        proof = ONVIF_PROBE_PROOFS[probe_token]
+        profile = payload.get("onvif_profile_token" if role == "main" else "onvif_sub_profile_token")
+        if profile and (proof.get("stream_paths") or {}).get(profile) == saved_stream_path(payload.get(f"rtsp_{role}_url")):
+            remember_dimensions(camera, role, (proof.get("stream_dimensions") or {}).get(profile))
 
 
 def store_has_valid_proof(store: dict[str, dict], token: str | None, payload: dict) -> bool:

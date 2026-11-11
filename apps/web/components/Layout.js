@@ -88,7 +88,7 @@ function MigrationActivityIndicator({ enabled, onStoragePage, t }) {
   );
 }
 
-export default function Layout({ children }) {
+export default function Layout({ children, className = "" }) {
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, status: currentUserStatus } = useCurrentUser();
@@ -147,7 +147,7 @@ export default function Layout({ children }) {
   }, [currentUser, currentUserStatus, pathname, router]);
 
   return (
-    <div className="layoutShell">
+    <div className={className ? `layoutShell ${className}` : "layoutShell"}>
       <OperationToast toast={logoutError} onClose={() => setLogoutError(null)} />
       <header className="topNav">
         <div className="topNavInner">

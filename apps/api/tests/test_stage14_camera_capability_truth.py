@@ -2,6 +2,14 @@ from types import SimpleNamespace
 
 import pytest
 from app.services import onvif_service as onvif
+from app.services.onvif_ptz import reset_runtime_cache
+
+
+@pytest.fixture(autouse=True)
+def isolated_ptz_cache():
+    reset_runtime_cache()
+    yield
+    reset_runtime_cache()
 
 
 @pytest.mark.parametrize('text', ['PTZ service timed out', 'WSDL read error', 'media service connection refused'])

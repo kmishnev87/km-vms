@@ -13,6 +13,7 @@ from app.models.camera import Camera
 from app.services.hardware import hardware_capabilities_summary
 from .viewers import ViewerRegistry, ViewerSession
 from .stream_instance import StreamInstance, _camera_source, classify_live_failure
+from .mse import MseRegistry
 
 logger = logging.getLogger(__name__)
 StreamKey = tuple[int, str]
@@ -29,6 +30,7 @@ class StreamManager:
         self.viewer_registry = ViewerRegistry()
         self.worker_thread: threading.Thread | None = None
         self.worker_stop_event = threading.Event()
+        self.mse = MseRegistry()
 
     @property
     def viewers(self):
@@ -204,16 +206,18 @@ class StreamManager:
         return instance.stream_dir / filename
 
     def stop_stream(self, camera_id: int, stream: str, reason: str = "client_stop") -> bool:
+        mse_stopped = self.mse.stop_sync(camera_id, stream)
         with self.lock:
             instance = self.streams.get(self._key(camera_id, stream))
             if not instance:
-                return False
+                return bool(mse_stopped)
             instance.start_cancelled.set()
             self.viewer_registry.remove_stream(camera_id, stream)
         instance.stop(reason=reason, cleanup_files=True)
         return True
 
     def stop_all_streams(self) -> int:
+        mse_stopped = self.mse.stop_sync()
         with self.lock:
             instances = list(self.streams.values())
             self.viewer_registry.clear()
@@ -221,10 +225,11 @@ class StreamManager:
                 instance.start_cancelled.set()
         for instance in instances:
             instance.stop(reason="stop_all", cleanup_files=True)
-        return len(instances)
+        return len(instances) + mse_stopped
 
     def stop_camera(self, camera_id: int, reason: str = "camera_deleted") -> int:
         """Cancel both roles and viewers after deletion is durably committed."""
+        mse_stopped = self.mse.stop_sync(int(camera_id))
         with self.lock:
             keys = [key for key in self.streams if key[0] == int(camera_id)]
             for key in keys:
@@ -232,7 +237,7 @@ class StreamManager:
                 self.viewer_registry.remove_stream(*key)
         for key in keys:
             self.stop_stream(*key, reason=reason)
-        return len(keys)
+        return len(keys) + mse_stopped
 
     def cleanup(self):
         ttl = max(int(settings.live_idle_ttl_seconds), 5)
@@ -332,7 +337,7 @@ class StreamManager:
                 default=None,
             )
             result.append(item)
-        return result
+        return result + self.mse.snapshots(camera_id, stream)
 
     def debug(self, camera_id: int | None = None, stream: str | None = None) -> dict:
         items = self.status(camera_id=camera_id, stream=stream)

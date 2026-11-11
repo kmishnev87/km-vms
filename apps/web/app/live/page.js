@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { fitCameraFrames, sameFrameLayout, savedFrameRatio } from "../../lib/liveAspectLayout";
 import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
 import { useAuthSession } from "../../lib/useAuthSession";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationToast } from "../../components/OperationFeedback";
 import TilePlayer from "../../components/TilePlayer";
+import { CameraPtzBadge, CameraPtzControls } from "../../components/cameras/CameraPtz";
+import FloatingCameraPtz from "../../components/cameras/FloatingCameraPtz";
+import { usePtzCapabilities, usePtzController } from "../../lib/useCameraPtz";
 import { apiFetch, getAuthToken } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import {
@@ -67,6 +71,16 @@ function AlignGridIcon() {
       <span className="workspaceAlignGridIconLine horizontal top" />
       <span className="workspaceAlignGridIconLine horizontal bottom" />
     </span>
+  );
+}
+
+function LiveAudioIcon() {
+  return (
+    <svg className="liveWorkspaceAudioIcon" viewBox="0 0 24 24" aria-hidden="true">
+      <path className="liveWorkspaceAudioSpeaker" d="M4 9.5v5h4l5 4.5V5L8 9.5H4Z" />
+      <path className="liveWorkspaceAudioWave one" d="M16 9c.9.9 1.4 1.9 1.4 3s-.5 2.1-1.4 3" />
+      <path className="liveWorkspaceAudioWave two" d="M18.7 6.5c1.6 1.5 2.5 3.4 2.5 5.5s-.9 4-2.5 5.5" />
+    </svg>
   );
 }
 
@@ -228,7 +242,7 @@ function defaultAudioFact() {
 }
 
 export default function LivePage() {
-  const { text } = useI18n();
+  const { text, t } = useI18n();
   const TEXT = useMemo(
     () => Object.fromEntries(Object.entries(LIVE_TEXT).map(([key, value]) => [key, text(value)])),
     [text]
@@ -248,8 +262,17 @@ export default function LivePage() {
   const lastTileTapRef = useRef(null);
   const tileFullscreenReturnStateRef = useRef(null);
   const [cameras, setCameras] = useState([]);
+  const ptzCapabilities = usePtzCapabilities(cameras);
+  const [ptzCameraId, setPtzCameraId] = useState(null);
+  const [ptzPointCameraId, setPtzPointCameraId] = useState(null);
+  const [ptzAreaCameraId, setPtzAreaCameraId] = useState(null);
+  const [ptzPreferences, setPtzPreferences] = useState({});
+  const [ptzPositions, setPtzPositions] = useState({});
   const [camerasLoaded, setCamerasLoaded] = useState(false);
+  const [workspaceLayoutReady, setWorkspaceLayoutReady] = useState(false);
   const [tiles, setTiles] = useState([]);
+  const [frameLayoutActive, setFrameLayoutActive] = useState(false);
+  const [frameLayoutBounds, setFrameLayoutBounds] = useState({ width: 0, height: 0 });
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
   const layoutWriterRef = useRef(null);
@@ -270,6 +293,26 @@ export default function LivePage() {
   const [activeAudioTileId, setActiveAudioTileId] = useState("");
   const [audioRequestId, setAudioRequestId] = useState(0);
   const [audioFactsByTileId, setAudioFactsByTileId] = useState({});
+  const { controller: pointController } = usePtzController(ptzCameraId,
+    ptzCapabilities[ptzCameraId]?.profile_token, () => showWorkspaceError(t("ptz.commandFailed")));
+
+  function togglePtz(cameraId) {
+    setPtzPointCameraId(null);
+    setPtzAreaCameraId(null);
+    setPtzCameraId(current => current === cameraId ? null : cameraId);
+  }
+  function closePtz() { setPtzPointCameraId(null); setPtzAreaCameraId(null); setPtzCameraId(null); }
+  function pointMode(cameraId, active) { setPtzPointCameraId(active ? cameraId : null); setPtzAreaCameraId(null); }
+  function areaMode(cameraId, active) { setPtzAreaCameraId(active ? cameraId : null); setPtzPointCameraId(null); }
+  function ptzPreference(cameraId, update) {
+    setPtzPreferences(current => ({ ...current, [cameraId]: { ...current[cameraId], ...update } }));
+  }
+  function lowLatencyUnavailable() {
+    setPtzPointCameraId(null);
+    setPtzAreaCameraId(null);
+    setOperationToast({ id:`ptz-video-${Date.now()}`, title:t("ptz.title"),
+      message:t("ptz.lowLatencyUnavailable"),tone:"warning" });
+  }
 
   function showWorkspaceError(message) {
     setOperationToast({ id: `live-action-error-${Date.now()}`, title: message || TEXT.loadError, tone: "error" });
@@ -347,7 +390,10 @@ export default function LivePage() {
       setLastPersistedSidebarCameraOrder([]);
       showWorkspaceError(err.message || TEXT.loadError);
     } finally {
-      if (isWorkspaceCurrent(ownerSession, generation)) hydratedRef.current = true;
+      if (isWorkspaceCurrent(ownerSession, generation)) {
+        hydratedRef.current = true;
+        setWorkspaceLayoutReady(true);
+      }
     }
   }
 
@@ -358,7 +404,10 @@ export default function LivePage() {
     cacheOwnerRef.current = null;
     lastBackendLayoutPayloadRef.current = "";
     setTiles([]); setSidebarCameraOrder([]); setLastPersistedSidebarCameraOrder([]);
+    setFrameLayoutActive(false);
+    setWorkspaceLayoutReady(false);
     setCameras([]); setCamerasLoaded(false); setActiveAudioTileId(""); setFullscreenTileId(null);
+    closePtz(); setPtzPreferences({}); setPtzPositions({});
     const writer = createSerializedLayoutWriter((payload) => apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     }), { scope: WORKSPACE_KEY, ownerSession });
@@ -416,6 +465,23 @@ export default function LivePage() {
     return visibleWorkspaceTiles(tiles, cameras);
   }, [tiles, cameras, camerasLoaded]);
 
+  const frameLayoutKey = visibleTiles.map(tile => `${tile.id}:${tile.cameraId}:${tile.stream}:${savedFrameRatio(cameraMap.get(String(tile.cameraId)), tile.stream)}`).join("|");
+  useEffect(() => {
+    const element = workspaceRef.current;
+    if (!element) return;
+    const measure = () => {
+      const next = { width: element.clientWidth, height: element.clientHeight };
+      setFrameLayoutBounds(previous => previous.width === next.width && previous.height === next.height ? previous : next);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element); measure();
+    return () => observer.disconnect();
+  }, [camerasLoaded]);
+  useLayoutEffect(() => {
+    if (!frameLayoutActive || !frameLayoutBounds.width || !frameLayoutBounds.height) return;
+    applyFrameLayout();
+  }, [frameLayoutActive, frameLayoutKey, frameLayoutBounds.width, frameLayoutBounds.height]);
+
   useEffect(() => {
     if (!activeAudioTileId) return;
     if (!visibleTiles.some((tile) => tile.id === activeAudioTileId)) {
@@ -437,6 +503,7 @@ export default function LivePage() {
   }
 
   function addTile(cameraId, stream, clientX, clientY) {
+    if (!hydratedRef.current) return;
     const bounds = workspaceBounds();
     if (!bounds) return;
     const normalizedCameraId = String(cameraId || "");
@@ -490,7 +557,6 @@ export default function LivePage() {
   function updateTile(tileId, patch) {
     if (patch?.stream) {
       setAudioFactsByTileId((prev) => ({ ...prev, [tileId]: defaultAudioFact() }));
-      setActiveAudioTileId((current) => (current === tileId ? "" : current));
     }
     setTiles((prev) =>
       dedupeTiles(prev.map((tile) => (tile.id === tileId ? normalizeTile({ ...tile, ...patch }) : tile)))
@@ -498,6 +564,14 @@ export default function LivePage() {
   }
 
   function removeTile(tileId) {
+    const removed = tiles.find(tile => tile.id === tileId);
+    if (removed && String(removed.cameraId) === String(ptzCameraId)
+      && !tiles.some(tile => tile.id !== tileId && String(tile.cameraId) === String(removed.cameraId))) closePtz();
+    setPtzPositions(previous => {
+      const next = { ...previous };
+      delete next[tileId];
+      return next;
+    });
     setFullscreenTileId((current) => (current === tileId ? null : current));
     setActiveAudioTileId((current) => (current === tileId ? "" : current));
     setAudioFactsByTileId((prev) => {
@@ -509,11 +583,19 @@ export default function LivePage() {
     setTiles((prev) => prev.filter((tile) => tile.id !== tileId));
   }
 
+  function removeAllTiles() {
+    closePtz();
+    setPtzPositions({});
+    setFullscreenTileId(null);
+    setActiveAudioTileId("");
+    setAudioFactsByTileId({});
+    setDragState(null);
+    setResizeState(null);
+    setTiles([]);
+  }
+
   function handleAudioStatusChange(tileId, fact) {
     setAudioFactsByTileId((prev) => ({ ...prev, [tileId]: { ...defaultAudioFact(), ...(fact || {}) } }));
-    if (fact?.audioAvailable === false || fact?.audioDisabledByConfig) {
-      setActiveAudioTileId((current) => (current === tileId ? "" : current));
-    }
   }
 
   function toggleTileAudio(tileId) {
@@ -548,10 +630,33 @@ export default function LivePage() {
   }
 
   function autoLayoutTiles() {
+    setFrameLayoutActive(false);
     setTiles((prev) => layoutTiles(activeLayoutTiles(prev), workspaceBounds()));
   }
 
+  function applyFrameLayout() {
+    const element = workspaceRef.current;
+    if (!element) return;
+    const bounds = { width: element.clientWidth, height: element.clientHeight };
+    const bar = element.querySelector('.liveWorkspaceTile:not(.fullscreen) .liveWorkspaceTileBar');
+    const headerHeight = bar?.getBoundingClientRect().height || 34;
+    setTiles(previous => {
+      const next = fitCameraFrames(activeLayoutTiles(previous), cameras, bounds, { headerHeight, minimumWidth: MIN_TILE_W });
+      return sameFrameLayout(previous, next) ? previous : next;
+    });
+  }
+
+  function alignFrames() {
+    if (frameLayoutActive) {
+      setFrameLayoutActive(false);
+      return;
+    }
+    setFrameLayoutActive(true);
+    applyFrameLayout();
+  }
+
   function addAllCameras() {
+    setFrameLayoutActive(false);
     setTiles((prev) => {
       const active = activeLayoutTiles(prev);
       const existing = workspaceCameraIds(active);
@@ -604,6 +709,7 @@ export default function LivePage() {
   }
 
   function reorderSidebarCamera(targetCameraId, position = "before", sourceCameraId = draggedSidebarCameraId) {
+    if (!hydratedRef.current) return;
     const sourceId = String(sourceCameraId || "");
     const targetId = String(targetCameraId || "");
     if (!sourceId || !targetId || sourceId === targetId) return;
@@ -835,6 +941,7 @@ export default function LivePage() {
   }
 
   function handleTileSurfacePointerUp(event, tileId) {
+    if (event.target?.closest?.("[data-ptz-controls], [data-ptz-point-surface], [data-live-fullscreen-stream-switch]")) return;
     if (event.target?.closest?.("button, select, input, textarea, a")) return;
     if (dragState || resizeState) return;
     if (event.pointerType === "mouse" || event.pointerType === "touch") return;
@@ -956,6 +1063,7 @@ export default function LivePage() {
         0,
         1 - dragState.tileH
       );
+      setFrameLayoutActive(false);
       updateTile(dragState.id, { xPct: nextX, yPct: nextY });
     }
 
@@ -977,6 +1085,7 @@ export default function LivePage() {
     if (!resizeState) return undefined;
 
     function onMove(event) {
+      setFrameLayoutActive(false);
       updateTile(resizeState.id, resizeWorkspaceTile(null, resizeState, event));
     }
 
@@ -995,7 +1104,7 @@ export default function LivePage() {
   }, [resizeState]);
 
   return (
-    <Layout>
+    <Layout className="liveWorkspaceLayout">
       <div
         ref={shellRef}
         className={`liveWorkspaceShell ${isSystemFullscreen ? "systemFullscreen" : ""} ${isSidebarCollapsed ? "sidebarCollapsed" : "sidebarOpen"}`}
@@ -1039,25 +1148,52 @@ export default function LivePage() {
         <aside className="liveWorkspaceCameraPanel" aria-hidden={isSystemFullscreen && isSidebarCollapsed}>
           <div className="liveWorkspacePanelHeader">
             <div className="liveWorkspacePanelTitle">{TEXT.cameras}</div>
-            <div className="liveWorkspacePanelActions">
+          </div>
+          <div className="liveWorkspacePanelActions">
               <button
                 type="button"
                 className="liveWorkspaceAlignButton"
                 onClick={addAllCameras}
-                disabled={!cameras.length}
+                disabled={!workspaceLayoutReady || !cameras.length}
+                title={t("liveWorkspace.addAll")}
+                aria-label={t("liveWorkspace.addAll")}
+                data-workspace-action="add-all"
               >
-                {TEXT.addAll}
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="3" width="6" height="6" rx="1" /><rect x="3" y="15" width="6" height="6" rx="1" /><path d="M18 14v8M14 18h8" /></svg>
+              </button>
+              <button
+                type="button"
+                className="liveWorkspaceAlignButton"
+                onClick={removeAllTiles}
+                disabled={!workspaceLayoutReady || !tiles.length}
+                title={t("liveWorkspace.removeAll")}
+                aria-label={t("liveWorkspace.removeAll")}
+                data-workspace-action="remove-all"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
               </button>
               <button
                 type="button"
                 className="liveWorkspaceAlignButton"
                 onClick={autoLayoutTiles}
-                disabled={!tiles.length}
-                title={TEXT.align}
-                aria-label={TEXT.align}
+                disabled={!workspaceLayoutReady || !tiles.length}
+                title={t("liveWorkspace.alignTiles")}
+                aria-label={t("liveWorkspace.alignTiles")}
                 data-workspace-align-button="grid-2x2"
               >
                 <AlignGridIcon />
+              </button>
+              <button
+                type="button"
+                className="liveWorkspaceAlignButton liveWorkspaceFrameAlignButton"
+                onClick={alignFrames}
+                disabled={!workspaceLayoutReady || !visibleTiles.length}
+                aria-pressed={frameLayoutActive}
+                title={t("liveWorkspace.fitFrames")}
+                aria-label={t("liveWorkspace.fitFrames")}
+                data-workspace-align-button="frames"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="11" height="7" rx="1" /><rect x="10" y="14" width="11" height="6" rx="1" /><path d="M3 15v5h4M17 5h4v6" /></svg>
               </button>
               <button
                 type="button"
@@ -1065,10 +1201,10 @@ export default function LivePage() {
                 onClick={isSystemFullscreen ? exitSystemFullscreen : enterSystemFullscreen}
                 title={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
                 aria-label={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+                data-workspace-action="fullscreen"
               >
-                {isSystemFullscreen ? "\u2715" : "\u26f6"}
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={isSystemFullscreen ? "M3 8h5V3m8 0v5h5M3 16h5v5m8 0v-5h5" : "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"} /></svg>
               </button>
-            </div>
           </div>
 
           <div className="liveWorkspaceCameraList">
@@ -1130,7 +1266,12 @@ export default function LivePage() {
                     reorderSidebarCamera(camera.id, sidebarDropPosition(event), reorderId);
                   }}
                 >
-                  <div className="liveWorkspaceCameraName">{camera.name}</div>
+                  <div className="liveWorkspaceCameraIdentity">
+                    <div className="liveWorkspaceCameraName">{camera.name}</div>
+                    <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
+                      expanded={ptzCameraId === camera.id} controls={`live-ptz-${camera.id}`}
+                      onClick={() => togglePtz(camera.id)} />
+                  </div>
                   <button type="button" className="workspaceSidebarDragHandle" data-sidebar-drag-handle="true" title="Перетащить камеру" aria-label={`Перетащить камеру: ${camera.name}`} onKeyDown={(event) => {
                     if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
                     event.preventDefault();
@@ -1146,6 +1287,14 @@ export default function LivePage() {
                       <span className={`liveWorkspaceStreamText ${camera.rtsp_sub_url ? "" : "empty"}`}>Sub</span>
                     </span>
                   </div>
+                  {ptzCameraId === camera.id && !fullscreenTileId && !(isSystemFullscreen && isSidebarCollapsed)
+                    && ptzCapabilities[camera.id]?.supported ? <div className="liveSidebarPtz" id={`live-ptz-${camera.id}`}>
+                      <CameraPtzControls camera={camera} capability={ptzCapabilities[camera.id]}
+                        speed={ptzPreferences[camera.id]?.speed} onSpeedChange={speed => ptzPreference(camera.id, { speed })}
+                        pointActive={ptzPointCameraId === camera.id} onPointModeChange={active => pointMode(camera.id, active)}
+                        areaZoomActive={ptzAreaCameraId === camera.id} onAreaZoomModeChange={active => areaMode(camera.id, active)}
+                        onClose={closePtz} />
+                    </div> : null}
                 </div>
                   );
                 })()
@@ -1202,23 +1351,16 @@ export default function LivePage() {
                 onPointerDown={(event) => startMove(event, tile)}
                 onPointerUpCapture={(event) => handleTileSurfacePointerUp(event, tile.id)}
                 onDoubleClickCapture={(event) => {
-                  if (event.target?.closest?.("button, select, input, textarea, a, [data-video-zoom-surface]")) return;
+                  if (event.target?.closest?.("button, select, input, textarea, a, [data-video-zoom-surface], [data-ptz-point-surface], [data-live-fullscreen-stream-switch]")) return;
                   event.stopPropagation();
                   toggleTileFullscreen(tile.id);
                 }}
               >
-                <div className="liveWorkspaceTileBar">
+                <div className={`liveWorkspaceTileBar ${ptzCapabilities[camera?.id]?.supported ? "hasPtz" : ""}`}>
                   <div className="liveWorkspaceTileTitle">{camera?.name || TEXT.camera}</div>
-                  <select
-                    className="liveWorkspaceTileSelect"
-                    value={stream}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
-                  >
-                    {streams.map((item) => (
-                      <option key={item.key} value={item.key}>{item.label}</option>
-                    ))}
-                  </select>
+                  {camera ? <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
+                    expanded={ptzCameraId === camera.id}
+                    onClick={() => { setIsSidebarCollapsed(false); togglePtz(camera.id); }} /> : null}
                   <button
                     type="button"
                     className={`liveWorkspaceIconButton liveWorkspaceAudioButton ${audioState.active ? "isActive" : ""}`}
@@ -1231,21 +1373,18 @@ export default function LivePage() {
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => toggleTileAudio(tile.id)}
                   >
-                    <svg className="liveWorkspaceAudioIcon" viewBox="0 0 24 24" aria-hidden="true">
-                      <path
-                        className="liveWorkspaceAudioSpeaker"
-                        d="M4 9.5v5h4l5 4.5V5L8 9.5H4Z"
-                      />
-                      <path
-                        className="liveWorkspaceAudioWave one"
-                        d="M16 9c.9.9 1.4 1.9 1.4 3s-.5 2.1-1.4 3"
-                      />
-                      <path
-                        className="liveWorkspaceAudioWave two"
-                        d="M18.7 6.5c1.6 1.5 2.5 3.4 2.5 5.5s-.9 4-2.5 5.5"
-                      />
-                    </svg>
+                    <LiveAudioIcon />
                   </button>
+                  <select
+                    className="liveWorkspaceTileSelect"
+                    value={stream}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
+                  >
+                    {streams.map((item) => (
+                      <option key={item.key} value={item.key}>{item.label}</option>
+                    ))}
+                  </select>
                   <button
                     type="button"
                     className="liveWorkspaceIconButton"
@@ -1271,6 +1410,13 @@ export default function LivePage() {
                     <TilePlayer
                       cameraId={camera.id}
                       stream={stream}
+                      lowLatency={ptzCameraId === camera.id}
+                      pointActive={ptzCameraId === camera.id && ptzPointCameraId === camera.id && ptzCapabilities[camera.id]?.can_point}
+                      onPoint={point => pointController.point(point)}
+                      areaZoomActive={ptzCameraId === camera.id && ptzAreaCameraId === camera.id && ptzCapabilities[camera.id]?.can_area_zoom}
+                      onAreaZoom={rectangle => pointController.areaZoom(rectangle)}
+                      onPtzAimCancel={() => pointController.stop()}
+                      onLowLatencyUnavailable={lowLatencyUnavailable}
                       audioEnabled={audioState.active}
                       audioRequestId={audioRequestId}
                       onAudioStatusChange={(fact) => handleAudioStatusChange(tile.id, fact)}
@@ -1288,6 +1434,52 @@ export default function LivePage() {
                   ) : (
                     <div className="liveWorkspaceMissing">{TEXT.unavailable}</div>
                   )}
+                  {camera && fullscreenTileId === tile.id ? (
+                    <div
+                      className="liveFullscreenStreamSwitch"
+                      data-live-fullscreen-stream-switch="true"
+                      role="group"
+                      aria-label={t("cameras.liveStream")}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className={`liveWorkspaceAudioButton ${audioState.active ? "isActive" : ""}`}
+                        title={audioState.title}
+                        aria-label={audioState.title}
+                        aria-pressed={audioState.active ? "true" : "false"}
+                        disabled={audioState.disabled}
+                        data-live-fullscreen-audio-button="true"
+                        data-audio-state={audioState.active ? "active" : audioState.disabled ? "unavailable" : "available"}
+                        onClick={() => toggleTileAudio(tile.id)}
+                      >
+                        <LiveAudioIcon />
+                      </button>
+                      {streams.length > 1 ? streams.map((item) => (
+                        <button
+                          key={item.key}
+                          type="button"
+                          aria-pressed={stream === item.key}
+                          onClick={() => {
+                            if (stream !== item.key) updateTile(tile.id, { stream: item.key });
+                          }}
+                        >
+                          {item.label}
+                        </button>
+                      )) : null}
+                    </div>
+                  ) : null}
+                  {camera && ptzCapabilities[camera.id]?.supported
+                    && (fullscreenTileId === tile.id || (isSystemFullscreen && isSidebarCollapsed)) ? (
+                    <FloatingCameraPtz camera={camera} capability={ptzCapabilities[camera.id]}
+                      expanded={ptzCameraId === camera.id} onToggle={() => togglePtz(camera.id)} onClose={closePtz}
+                      position={ptzPositions[tile.id]}
+                      onPositionChange={position => setPtzPositions(previous => ({ ...previous, [tile.id]: position }))}
+                      speed={ptzPreferences[camera.id]?.speed} onSpeedChange={speed => ptzPreference(camera.id, { speed })}
+                      pointActive={ptzPointCameraId === camera.id} onPointModeChange={active => pointMode(camera.id, active)}
+                      areaZoomActive={ptzAreaCameraId === camera.id} onAreaZoomModeChange={active => areaMode(camera.id, active)} />
+                  ) : null}
                 </div>
 
                 {["top-left", "top-right", "bottom-left", "bottom-right"].map((corner) => (

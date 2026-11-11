@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.routers.cameras as cameras_module
 import app.routers.camera_onvif_routes as onvif_routes_module
+from app.services.onvif_ptz import reset_runtime_cache
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.models.camera import Camera
 from app.routers.cameras import onvif_ptz_capabilities, onvif_ptz_command
@@ -17,6 +18,13 @@ from app.services.onvif_service import (
     get_onvif_ptz_capabilities,
     validate_ptz_command_payload,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_ptz_cache():
+    reset_runtime_cache()
+    yield
+    reset_runtime_cache()
 
 
 class FakeQuery:
@@ -93,6 +101,9 @@ def test_ptz_endpoints_are_registered_and_manage_camera_protected():
 
     caps = rows[("GET", "/cameras/{camera_id}/onvif/ptz/capabilities")]
     command = rows[("POST", "/cameras/{camera_id}/onvif/ptz/command")]
+    presets = rows[("GET", "/cameras/{camera_id}/onvif/ptz/presets")]
+    assert presets.decision == "manage_cameras"
+    assert presets.allowed_roles == ("owner", "admin")
 
     assert caps.decision == "manage_cameras"
     assert command.decision == "manage_cameras"
@@ -253,6 +264,48 @@ def test_command_dry_run_response_is_secret_free(monkeypatch):
     assert "camera-pass" not in str(result)
 
 
+def test_stale_ui_profile_cannot_move_a_reconfigured_lens(monkeypatch):
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: "camera-pass")
+    monkeypatch.setattr(onvif_routes_module, "execute_onvif_ptz_command",
+                        lambda **kwargs: pytest.fail("stale profile must not move"))
+    with pytest.raises(HTTPException) as exc:
+        onvif_ptz_command(31, {"action": "move", "direction": "right", "dry_run": False, "speed": .1, "duration_seconds": .5,
+                              "profile_token": "old-lens"}, request=request(),
+                          db=FakeDb(camera()), current_user=user())
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "ptz_profile_changed"
+
+
+def test_command_uses_saved_profile_and_user_as_control_owner(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: "camera-pass")
+    monkeypatch.setattr(onvif_routes_module, "create_event", lambda **kwargs: None)
+
+    def execute(**kwargs):
+        captured.update(kwargs)
+        return {"executed": True, "action": "move", "execution_mode": "executed", "audit_event": False}
+
+    monkeypatch.setattr(onvif_routes_module, "execute_onvif_ptz_command", execute)
+    onvif_ptz_command(31, {"action": "move", "direction": "right", "dry_run": False, "speed": .1, "duration_seconds": .5,
+                          "profile_token": "main"}, request=request(), db=FakeDb(camera()), current_user=user())
+    assert captured["profile_token"] == "main"
+    assert captured["control_owner"] == 1
+
+
+def test_preset_list_uses_saved_profile_without_actuating(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: "camera-pass")
+
+    def read_presets(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "presets": [{"token": "home", "name": "Дом"}]}
+
+    monkeypatch.setattr(onvif_routes_module, "get_onvif_ptz_presets", read_presets)
+    result = onvif_routes_module.onvif_ptz_presets(31, db=FakeDb(camera()), current_user=user())
+    assert result["presets"][0]["name"] == "Дом"
+    assert captured["profile_token"] == "main"
+
+
 class FakePtz:
     def __init__(self):
         self.calls = []
@@ -283,12 +336,22 @@ class FakePtz:
     def Stop(self, payload):
         self.calls.append(("stop", payload))
 
+    def GetConfigurationOptions(self, payload):
+        from datetime import timedelta
+        return SimpleNamespace(Spaces=self.GetNodes()[0].SupportedPTZSpaces,
+                               PTZTimeout=SimpleNamespace(Min=timedelta(seconds=.1), Max=timedelta(seconds=2)))
+
+
+def bound_ptz_camera():
+    return SimpleNamespace(_km_selected_ptz_profile=SimpleNamespace(
+        PTZConfiguration=SimpleNamespace(token="configuration", NodeToken="node-token")))
+
 
 def test_service_capability_normalization_with_fake_ptz(monkeypatch):
     fake_ptz = FakePtz()
     monkeypatch.setattr(
         "app.services.onvif_service._prepare_ptz_context",
-        lambda *args, **kwargs: (object(), fake_ptz, "profile-token"),
+        lambda *args, **kwargs: (bound_ptz_camera(), fake_ptz, "profile-token"),
     )
 
     result = get_onvif_ptz_capabilities("host", 80, "user", "secret")
@@ -306,7 +369,7 @@ def test_service_execute_move_sends_stop_after_bounded_movement(monkeypatch):
     fake_ptz = FakePtz()
     monkeypatch.setattr(
         "app.services.onvif_service._prepare_ptz_context",
-        lambda *args, **kwargs: (object(), fake_ptz, "profile-token"),
+        lambda *args, **kwargs: (bound_ptz_camera(), fake_ptz, "profile-token"),
     )
     monkeypatch.setattr("app.services.onvif_service.time.sleep", lambda seconds: None)
 

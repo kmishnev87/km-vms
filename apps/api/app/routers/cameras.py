@@ -88,6 +88,8 @@ from app.services.storage_operation_conflicts import (
 )
 from app.services.storage_operations_foundation import StorageOperationContractError, claim_operation, safe_reason_code
 from app.services.recording_storage import resolve_segment_file_path
+from app.services.camera_stream_dimensions import read_dimensions
+from app.routers.camera_connection_helpers import persist_verified_stream_dimensions
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
@@ -174,6 +176,7 @@ def list_viewer_cameras(
             "port": camera.port,
             "status": camera.status,
             "default_live_stream": camera.default_live_stream,
+            "stream_dimensions": read_dimensions(camera),
             "rtsp_main_url": bool(camera.rtsp_main_url),
             "rtsp_sub_url": bool(camera.rtsp_sub_url),
         }
@@ -255,7 +258,7 @@ def test_camera(
         if payload.get("include_preview") is not False:
             preview_path, preview_url, preview_token = test_preview_destination(payload)
             preview_ok = capture_camera_preview(input_url, transport, preview_path)
-        validation_token = register_rtsp_test_proof(resolved_payload, tested_role)
+        validation_token = register_rtsp_test_proof(resolved_payload, tested_role, video)
 
     return {
         "ok": True,
@@ -343,6 +346,7 @@ def create_camera(
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    persist_verified_stream_dimensions(camera, final_connection_payload)
     attach_test_preview_to_camera(payload.preview_token, camera.id)
     create_event(
         db=db,
@@ -860,6 +864,7 @@ def update_camera(
         advance_retention_signal(db, commit=False)
     db.commit()
     db.refresh(camera)
+    persist_verified_stream_dimensions(camera, gate_payload)
     attach_test_preview_to_camera(preview_token, camera.id)
     changed = {}
     for key, old_value in old_values.items():

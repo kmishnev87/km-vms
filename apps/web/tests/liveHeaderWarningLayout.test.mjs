@@ -39,7 +39,7 @@ test("Live keeps one contextual warning control inside the fullscreen workspace"
   assert.match(anchor, /z-index:\s*5200/);
 });
 
-test("Live fixes the reserved slot without shrinking the existing controls", () => {
+test("Live keeps the title size and gives all five icon actions equal width", () => {
   assert.match(rule(".liveWorkspaceCameraPanel"), /width:\s*204px/);
   assert.match(rule(".liveWorkspaceCameraPanel"), /flex:\s*0 0 204px/);
   assert.match(rule(".liveWorkspacePanelHeader"), /min-height:\s*30px/);
@@ -47,5 +47,7 @@ test("Live fixes the reserved slot without shrinking the existing controls", () 
   assert.match(rule(".liveWorkspaceAlignButton"), /height:\s*26px/);
   assert.match(rule(".liveWorkspaceAlignButton"), /padding:\s*0 8px/);
   assert.match(rule(".liveWorkspaceAlignButton"), /font-size:\s*11px/);
-  assert.match(rule(".liveWorkspaceFullscreenButton"), /width:\s*28px/);
+  assert.match(rule(".liveWorkspacePanelActions"), /grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(rule(".liveWorkspacePanelActions > button"), /width:\s*100%/);
+  assert.match(rule(".liveWorkspacePanelHeader"), /justify-content:\s*center/);
 });

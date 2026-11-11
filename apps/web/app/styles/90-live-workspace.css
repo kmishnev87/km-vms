@@ -1,8 +1,24 @@
 /* Live workspace shell and shared workspace resize handles retained before chronology shell overrides. */
 
+.liveWorkspaceLayout {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+}
+
+.liveWorkspaceLayout > .topNav {
+  flex-shrink: 0;
+}
+
+.liveWorkspaceLayout > .mainContent {
+  display: flex;
+  min-height: 0;
+}
+
 .liveWorkspaceShell {
-  height: calc(100vh - 78px);
-  min-height: 620px;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   gap: 8px;
 }
@@ -113,6 +129,7 @@
   width: 204px;
   flex: 0 0 204px;
   min-width: 0;
+  min-height: 0;
   border: 1px solid #dbe3ef;
   border-radius: 12px;
   background: #ffffff;
@@ -124,10 +141,10 @@
 .liveWorkspacePanelHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 6px;
   min-height: 30px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .liveWorkspacePanelTitle {
@@ -165,12 +182,41 @@
   color: #ffffff;
 }
 
-.liveWorkspacePanelActions,
 .chronologyPanelActions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
+}
+
+.liveWorkspacePanelActions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.liveWorkspacePanelActions > button {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 0;
+}
+
+.liveWorkspacePanelActions svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.liveWorkspacePanelActions > button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .liveWorkspaceAlignButton {
@@ -185,12 +231,16 @@
   cursor: pointer;
 }
 
-.liveWorkspaceFullscreenButton {
-  font-size: 14px;
-  padding: 0;
-  width: 28px;
-  min-width: 28px;
-  font-weight: 800;
+.liveWorkspaceFrameAlignButton[aria-pressed="true"] {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceFrameAlignButton[aria-pressed="true"] {
+  border-color: #60a5fa;
+  color: #f8fafc;
+  background: rgba(37, 99, 235, .28);
 }
 
 .workspaceAlignGridIcon {
@@ -424,6 +474,7 @@
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid #172554;
   border-radius: 12px;
@@ -494,7 +545,7 @@
   height: 34px;
   flex: 0 0 34px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px 30px 30px;
+  grid-template-columns: minmax(0, 1fr) 30px 76px 30px;
   align-items: center;
   gap: 6px;
   padding: 4px 5px 4px 8px;
@@ -600,6 +651,7 @@
 }
 
 .liveWorkspaceTileVideo {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   background: #000000;
@@ -619,9 +671,69 @@
 .workspaceSidebarDragHandle:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
 
 .liveWorkspaceTileVideo:fullscreen {
+  position: fixed;
+  inset: 0;
   width: 100vw;
   height: 100vh;
   background: #000000;
+}
+
+.liveFullscreenStreamSwitch {
+  position: absolute;
+  z-index: 20;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.6);
+  color: #f1f5f9;
+  backdrop-filter: blur(3px);
+  touch-action: manipulation;
+}
+
+.liveFullscreenStreamSwitch button {
+  min-width: 46px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.liveFullscreenStreamSwitch button:hover:not(:disabled):not([aria-pressed="true"]) {
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.liveFullscreenStreamSwitch .liveWorkspaceAudioButton {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.liveFullscreenStreamSwitch .liveWorkspaceAudioButton:hover:not(:disabled):not(.isActive) {
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.liveFullscreenStreamSwitch button[aria-pressed="true"] {
+  background: rgba(37, 99, 235, 0.65);
+  color: #ffffff;
+}
+
+.liveFullscreenStreamSwitch button:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: -2px;
 }
 
 .liveWorkspaceTileVideo .liveVideoWrap {
@@ -722,8 +834,6 @@
 
 @media (max-width: 900px) {
   .liveWorkspaceShell {
-    height: auto;
-    min-height: 0;
     flex-direction: column;
   }
 
@@ -731,10 +841,11 @@
     width: 100%;
     flex: 0 0 auto;
     max-height: 260px;
+    max-height: min(260px, 40%);
   }
 
   .liveWorkspaceCanvas {
-    height: 720px;
+    height: auto;
   }
 }
 
@@ -748,6 +859,10 @@
     width: 100%;
     box-sizing: border-box;
     padding-inline-end: var(--live-camera-scroll-gutter);
+  }
+
+  .liveWorkspacePanelHeader {
+    padding-inline-start: var(--live-camera-scroll-gutter);
   }
 }
 

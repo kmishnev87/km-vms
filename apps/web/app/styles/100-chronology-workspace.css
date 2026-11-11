@@ -280,6 +280,7 @@
   width: 204px;
   flex: 0 0 204px;
   min-width: 0;
+  min-height: 0;
   border: 1px solid #dbe3ef;
   border-radius: 12px;
   background: #ffffff;
@@ -291,9 +292,10 @@
 .chronologyPanelHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 6px;
-  margin-bottom: 8px;
+  min-height: 30px;
+  margin-bottom: 4px;
 }
 
 .chronologyPanelTitle {
@@ -335,12 +337,46 @@
   cursor: pointer;
 }
 
-.chronologyFullscreenButton {
-  font-size: 14px;
+.chronologyPanelActions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.chronologyPanelActions > button {
+  display: grid;
+  place-items: center;
+  width: 100%;
   padding: 0;
-  width: 28px;
-  min-width: 28px;
-  font-weight: 800;
+}
+
+.chronologyPanelActions svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chronologyPanelActions > button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.chronologyFrameAlignButton[aria-pressed="true"] {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.chronologyShell.systemFullscreen .chronologyFrameAlignButton[aria-pressed="true"] {
+  border-color: #60a5fa;
+  color: #f8fafc;
+  background: rgba(37, 99, 235, .28);
 }
 
 .chronologyAlignButton:hover {
@@ -1064,6 +1100,18 @@
   display: none;
 }
 
+@media (min-width: 901px) {
+  .chronologyLayout {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+  }
+  .chronologyLayout > .topNav { flex-shrink: 0; }
+  .chronologyLayout > .mainContent { display: flex; min-height: 0; }
+  .chronologyShell { flex: 1 1 auto; height: auto; min-height: 0; min-width: 0; }
+  .chronologyMain { min-height: 0; }
+}
+
 @media (max-width: 900px) {
   .chronologyShell {
     height: auto;
@@ -1151,5 +1199,9 @@
     width: 100%;
     box-sizing: border-box;
     padding-inline-end: var(--chronology-camera-scroll-gutter);
+  }
+
+  .chronologyPanelHeader {
+    padding-inline-start: var(--chronology-camera-scroll-gutter);
   }
 }

@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => fs.readFileSync(resolve(root, path), "utf8");
+const { liveAudioAllowed } = await import(`data:text/javascript;base64,${Buffer.from(read("lib/liveAudioPlayback.js")).toString("base64")}`);
 const helper = read("lib/livePlaybackRecovery.js").replaceAll("export const ", "const ").replaceAll("export function ", "function ");
 const context = {};
 vm.runInNewContext(`${helper}\nthis.delay=liveRecoveryDelay; this.message=liveFailureMessage;`, context);
@@ -95,7 +96,15 @@ const states = [
 ];
 const readinessContext = {
   cancelled: false, generation: 1, sourceKey: { cameraId: 1, stream: "sub" },
-  apiFetch: async () => ({ items: [states[readinessRequests++]] }),
+  apiFetch: async () => {
+    const state = states[readinessRequests++];
+    if (!state) {
+      readinessContext.cancelled = true;
+      throw new Error("Unexpected readiness retry in test");
+    }
+    return { items: [state] };
+  },
+  liveAudioAllowed, audioAllowedByConfig: true,
   lastRuntimeState: "", notifyLiveRuntimeChanged: () => { runtimeEvents += 1; },
   reportAudioStatus: () => {}, applyNaturalResolution: () => {},
   setError: () => {}, setStatus: () => {}, sleep: async () => {},

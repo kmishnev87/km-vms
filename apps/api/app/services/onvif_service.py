@@ -1622,7 +1622,7 @@ def update_onvif_profile(host, port, username, password, profile_token, config, 
 
 def _ptz_limits() -> dict:
     return {
-        "actions": ["stop", "move", "zoom"],
+        "actions": ["stop", "move", "zoom", "goto_preset", "point", "area_zoom"],
         "directions": sorted(PTZ_DIRECTIONS),
         "zoom_directions": sorted(PTZ_ZOOM_DIRECTIONS),
         "duration_seconds": {
@@ -1686,68 +1686,38 @@ def _normalize_ptz_node(node) -> dict:
     }
 
 
-def _prepare_ptz_context(host, port, username, password, onvif_path=None):
+def _prepare_ptz_context(host, port, username, password, onvif_path=None, profile_token=None):
     cam, media_candidates = _prepare_camera(host, port, username or "", password or "", onvif_path)
     if getattr(cam, "_km_ptz_absence_confirmed", False):
         raise OnvifConfigurationError("onvif_ptz_not_advertised", "Camera does not advertise a PTZ service.")
-    ptz = cam.create_ptz_service()
     media, _selected_media_xaddr = _get_media_service(cam, media_candidates)
-    profiles = media.GetProfiles()
-    profile_token = _safe_attr(profiles[0], "token") if profiles else None
-    return cam, ptz, profile_token
+    profiles = _as_list(media.GetProfiles())
+    if profile_token:
+        profile = next((p for p in profiles if _safe_attr(p, "token") == profile_token), None)
+        if profile is None:
+            raise OnvifConfigurationError("ptz_profile_not_found", "The selected camera profile is no longer available.")
+    else:
+        sources = {_safe_attr(_safe_attr(p, "VideoSourceConfiguration"), "SourceToken") for p in profiles}
+        if len(sources) > 1:
+            raise OnvifConfigurationError("ptz_profile_ambiguous", "A camera profile is required to identify the correct lens.")
+        profile = next((p for p in profiles if _safe_attr(p, "PTZConfiguration") is not None), profiles[0] if profiles else None)
+    cam._km_selected_ptz_profile = profile
+    cam._km_ptz_media = media
+    selected_token = _safe_attr(profile, "token")
+    ptz = cam.create_ptz_service() if _safe_attr(profile, "PTZConfiguration") is not None else None
+    return cam, ptz, selected_token
 
 
-def get_onvif_ptz_capabilities(host, port, username, password, onvif_path=None) -> dict:
-    try:
-        _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password, *([onvif_path] if onvif_path else []))
-    except Exception as exc:
-        if getattr(exc, "code", None) == "onvif_ptz_not_advertised":
-            return {
-                "ok": True,
-                "supported": False,
-                "source": "unsupported",
-                "can_pan_tilt": False,
-                "can_zoom": False,
-                "can_stop": False,
-                "can_presets": False,
-                "limits": _ptz_limits(),
-                "warnings": ["ptz_service_unavailable"],
-                "unsupported_reasons": ["ptz_service_unavailable"],
-                "raw_secret_exposed": False,
-            }
-        raise
+def get_onvif_ptz_capabilities(host, port, username, password, onvif_path=None, profile_token=None) -> dict:
+    from app.services.onvif_ptz import capabilities
+    return capabilities(host=host, port=port, username=username, password=password,
+                        onvif_path=onvif_path, profile_token=profile_token)
 
-    nodes = []
-    warnings = []
-    try:
-        nodes = [_normalize_ptz_node(node) for node in _as_list(ptz.GetNodes())]
-    except Exception:
-        return {
-            "ok": False, "supported": None, "source": "unknown",
-            "can_pan_tilt": None, "can_zoom": None, "can_stop": None,
-            "can_presets": None, "limits": _ptz_limits(),
-            "warnings": ["ptz_nodes_unavailable"], "unsupported_reasons": [],
-            "raw_secret_exposed": False,
-        }
 
-    can_pan_tilt = any(item.get("can_pan_tilt") for item in nodes)
-    can_zoom = any(item.get("can_zoom") for item in nodes)
-    supported = bool(can_pan_tilt or can_zoom or profile_token)
-    return {
-        "ok": True,
-        "supported": supported,
-        "source": "onvif_ptz_service" if supported else "unsupported",
-        "can_pan_tilt": can_pan_tilt,
-        "can_zoom": can_zoom,
-        "can_stop": supported,
-        "can_presets": False,
-        "profile_token_available": bool(profile_token),
-        "nodes": nodes[:8],
-        "limits": _ptz_limits(),
-        "warnings": warnings,
-        "unsupported_reasons": [] if supported else ["ptz_capabilities_not_reported"],
-        "raw_secret_exposed": False,
-    }
+def get_onvif_ptz_presets(host, port, username, password, onvif_path=None, profile_token=None) -> dict:
+    from app.services.onvif_ptz import presets
+    return presets(host=host, port=port, username=username, password=password,
+                   onvif_path=onvif_path, profile_token=profile_token)
 
 
 def _bounded_float(value, *, name: str, minimum: float, maximum: float, required: bool = True) -> float | None:
@@ -1759,15 +1729,17 @@ def _bounded_float(value, *, name: str, minimum: float, maximum: float, required
         number = float(value)
     except (TypeError, ValueError):
         raise ValueError(f"{name}_must_be_numeric")
-    if number < minimum or number > maximum:
+    if not math.isfinite(number) or number < minimum or number > maximum:
         raise ValueError(f"{name}_out_of_bounds")
     return number
 
 
 def validate_ptz_command_payload(payload: dict | None) -> dict:
     payload = payload or {}
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_ptz_payload")
     action = str(payload.get("action") or "").strip().lower()
-    if action not in {"stop", "move", "zoom"}:
+    if action not in {"stop", "move", "zoom", "goto_preset", "point", "area_zoom"}:
         raise ValueError("unsupported_ptz_action")
 
     validation_only = bool(payload.get("validation_only"))
@@ -1792,9 +1764,53 @@ def validate_ptz_command_payload(payload: dict | None) -> dict:
         "tilt": 0.0,
         "zoom": 0.0,
         "limits": _ptz_limits(),
+        "hold": payload.get("hold") is True,
+        "control_id": None,
+        "sequence": 0,
     }
 
+    control_id = payload.get("control_id")
+    if control_id is not None:
+        if not isinstance(control_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", control_id):
+            raise ValueError("invalid_ptz_control_id")
+        command["control_id"] = control_id
+        sequence = payload.get("sequence", 0)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or not 0 <= sequence <= 1_000_000_000:
+            raise ValueError("invalid_ptz_sequence")
+        command["sequence"] = sequence
+    if command["hold"] and not command["control_id"]:
+        raise ValueError("ptz_control_id_required")
+
+    if action == "goto_preset":
+        token = payload.get("preset_token")
+        if not isinstance(token, str) or not token or len(token) > 255 or re.search(r"[\x00-\x1f\x7f]", token):
+            raise ValueError("invalid_ptz_preset_token")
+        command["preset_token"] = token
+        return command
+
     if action == "stop":
+        return command
+
+    if action == "point":
+        if command["hold"]:
+            raise ValueError("ptz_point_cannot_hold")
+        for coordinate in ("x", "y"):
+            if isinstance(payload.get(coordinate), bool):
+                raise ValueError(f"{coordinate}_must_be_numeric")
+            command[coordinate] = _bounded_float(payload.get(coordinate), name=coordinate,
+                                                 minimum=0, maximum=1, required=True)
+        return command
+
+    if action == "area_zoom":
+        if command["hold"]:
+            raise ValueError("ptz_area_zoom_cannot_hold")
+        for coordinate in ("left", "top", "right", "bottom"):
+            if isinstance(payload.get(coordinate), bool):
+                raise ValueError(f"{coordinate}_must_be_numeric")
+            command[coordinate] = _bounded_float(payload.get(coordinate), name=coordinate,
+                                                 minimum=0, maximum=1, required=True)
+        if command["right"] - command["left"] < 1 / 8192 or command["bottom"] - command["top"] < 1 / 8192:
+            raise ValueError("ptz_area_zoom_empty_rectangle")
         return command
 
     duration = _bounded_float(
@@ -2227,47 +2243,8 @@ def build_onvif_health_contract(
     }
 
 
-def execute_onvif_ptz_command(host, port, username, password, payload: dict, onvif_path=None) -> dict:
-    command = validate_ptz_command_payload(payload)
-    if command["validation_only"] or command["dry_run"]:
-        return ptz_validation_response(command)
-
-    _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password, *([onvif_path] if onvif_path else []))
-    if not profile_token:
-        raise RuntimeError("ptz_profile_token_unavailable")
-
-    stopped = False
-    try:
-        if command["action"] == "stop":
-            ptz.Stop({"ProfileToken": profile_token, "PanTilt": True, "Zoom": True})
-            stopped = True
-        else:
-            velocity = {}
-            if command["action"] == "move":
-                velocity["PanTilt"] = {"x": command["pan"], "y": command["tilt"]}
-            if command["action"] == "zoom":
-                velocity["Zoom"] = {"x": command["zoom"]}
-            ptz.ContinuousMove({"ProfileToken": profile_token, "Velocity": velocity})
-            time.sleep(float(command["duration_seconds"]))
-            ptz.Stop({"ProfileToken": profile_token, "PanTilt": True, "Zoom": True})
-            stopped = True
-    finally:
-        if command["action"] != "stop" and not stopped:
-            try:
-                ptz.Stop({"ProfileToken": profile_token, "PanTilt": True, "Zoom": True})
-                stopped = True
-            except Exception:
-                stopped = False
-
-    return {
-        "ok": True,
-        "action": command["action"],
-        "execution_mode": "executed",
-        "executed": True,
-        "physical_camera_mutated": command["action"] != "stop",
-        "camera_stopped": stopped,
-        "duration_seconds": command.get("duration_seconds"),
-        "warnings": [] if stopped else ["stop_not_verified"],
-        "message": "PTZ command executed with bounded safety stop." if stopped else "PTZ command execution finished but stop could not be verified.",
-        "raw_secret_exposed": False,
-    }
+def execute_onvif_ptz_command(host, port, username, password, payload: dict, onvif_path=None,
+                             profile_token=None, control_owner=None) -> dict:
+    from app.services.onvif_ptz import execute
+    return execute(payload=payload, host=host, port=port, username=username, password=password,
+                   onvif_path=onvif_path, profile_token=profile_token, control_owner=control_owner)
