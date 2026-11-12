@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { selectTimelineLabels } from "../lib/workspaceContinuity";
 import { productCalendarDate } from "../lib/timezone";
+import { useI18n } from "../lib/i18n";
+import useTimelineCameraEvents from "../lib/useTimelineCameraEvents";
 
 const ZOOM_OPTIONS = [
   { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
@@ -90,6 +92,7 @@ export default function ChronologyTimeline({
   rangesError = false,
   compact = false,
 }) {
+  const { t } = useI18n();
   const rootRef = useRef(null);
   const axisRef = useRef(null);
   const dragStateRef = useRef(null);
@@ -107,6 +110,10 @@ export default function ChronologyTimeline({
   }, []);
 
   const zoom = ZOOM_OPTIONS.find((item) => item.key === zoomKey) || ZOOM_OPTIONS[0];
+  const { events: cameraEvents, truncated: eventMarkersLimited } = useTimelineCameraEvents(selectedCameraIds, currentTs?.getTime(), zoom.hours);
+  const eventMarkers = useMemo(() => cameraEvents.map(event => ({ ...event, ms: parseNaiveDateTime(event.timestamp_system) })).filter(event => Number.isFinite(event.ms)).sort((a, b) => a.ms - b.ms), [cameraEvents]);
+  const previousEvent = [...eventMarkers].reverse().find(event => event.ms < (currentTs?.getTime() || 0) - 500);
+  const nextEvent = eventMarkers.find(event => event.ms > (currentTs?.getTime() || 0) + 500);
   const committedMs = committedTs ? committedTs.getTime() : Number.NaN;
 
   const { startMs, endMs, axisMarks } = useMemo(() => {
@@ -269,6 +276,11 @@ export default function ChronologyTimeline({
             </button>
           </div>
 
+          <div className="cameraEventsTimelineNav" title={eventMarkersLimited ? t("cameraEvents.timelineLimited") : t("cameraEvents.timelineEvents")}>
+            <button type="button" disabled={!previousEvent} title={t("cameraEvents.previousEvent")} aria-label={t("cameraEvents.previousEvent")} onClick={() => onSelectTime?.(new Date(previousEvent.ms))}>‹</button>
+            <button type="button" disabled={!nextEvent} title={t("cameraEvents.nextEvent")} aria-label={t("cameraEvents.nextEvent")} onClick={() => onSelectTime?.(new Date(nextEvent.ms))}>›</button>
+          </div>
+
           <div className="chronologyTimelineHeaderCenter">
             <div className={`chronologyTimelineCenterLabel ${isPreviewing ? "preview" : ""}`}>
               <span className="chronologyTimelineStateText">{isPreviewing ? "Предпросмотр" : "Выбрано"}</span>
@@ -362,6 +374,11 @@ export default function ChronologyTimeline({
                           />
                         );
                       })}
+                      {eventMarkers.filter(event => String(event.camera_id) === cameraKey && event.ms >= startMs && event.ms <= endMs).map(event => (
+                        <button key={event.id} type="button" className="cameraEventsTimelineMarker" style={{ left: `${((event.ms - startMs) / (endMs - startMs)) * 100}%` }}
+                          title={`${t(`cameraEvents.kinds.${event.kind}`)} · ${event.timestamp_system.replace("T", " ")}`} aria-label={`${t(`cameraEvents.kinds.${event.kind}`)} ${event.timestamp_system}`}
+                          onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSelectTime?.(new Date(event.ms)); }} />
+                      ))}
                       {!rangesLoading && !rangesError && visibleRangesForCamera === 0 ? (
                         <div className="chronologyTimelineTrackEmpty">нет архива</div>
                       ) : null}

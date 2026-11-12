@@ -75,9 +75,10 @@
   }
 
   .settingsPage {
+    --settings-background-inset: var(--page-x-padding);
     min-height: calc(100vh - 70px);
-    padding: 10px 8px 18px;
-    background: #eef3f8;
+    padding: 10px var(--page-x-padding) 18px;
+    background: transparent;
   }
 
   .settingsPage::after {
@@ -478,6 +479,13 @@
 
   .standardPage {
     padding: 0;
+  }
+
+  .systemStatusPage { padding: 8px 0; }
+
+  .settingsPage {
+    --settings-background-inset: 0px;
+    padding: 10px 8px 18px;
   }
 
   .dashboardHeader {

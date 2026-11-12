@@ -168,7 +168,7 @@ class Media2Service:
             profiles = []
             names = {"VideoSource": "VideoSourceConfiguration", "VideoEncoder": "VideoEncoderConfiguration",
                      "AudioSource": "AudioSourceConfiguration", "AudioEncoder": "AudioEncoderConfiguration",
-                     "PTZ": "PTZConfiguration"}
+                     "PTZ": "PTZConfiguration", "Analytics": "VideoAnalyticsConfiguration"}
             for node in result.findall(etree.QName(MEDIA2_NS, "Profiles")):
                 profile = MediaObject(token=node.get("token"), Name=node.findtext(etree.QName(MEDIA2_NS, "Name")))
                 configurations = node.find(etree.QName(MEDIA2_NS, "Configurations"))

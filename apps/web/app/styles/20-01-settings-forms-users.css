@@ -3,6 +3,7 @@
 .settingsPage {
   --settings-compact-select-width: 210px;
   --settings-panel-border-width: 1px;
+  --settings-background-inset: var(--page-x-padding);
   position: relative;
   width: 100%;
   max-width: var(--page-working-width);
@@ -11,7 +12,7 @@
   padding: 16px var(--page-x-padding) 28px;
   overflow: hidden;
   border-radius: 14px;
-  background: #eef3f8;
+  background: transparent;
 }
 
 .settingsPage::before {
@@ -20,6 +21,8 @@
   inset: 0;
   z-index: 0;
   background: url("/assets/backgrounds/settings/settings-bg.jpg") center center / cover no-repeat;
+  background-color: #eef3f8;
+  clip-path: inset(0 var(--settings-background-inset) round 14px);
 }
 
 .settingsPage::after {
@@ -30,6 +33,7 @@
   width: min(72%, 980px);
   background: linear-gradient(90deg, rgba(238, 243, 248, 0.82) 0%, rgba(238, 243, 248, 0.6) 58%, rgba(238, 243, 248, 0) 100%);
   pointer-events: none;
+  clip-path: inset(0 var(--settings-background-inset) round 14px);
 }
 
 .settingsHeader {

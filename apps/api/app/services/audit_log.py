@@ -138,6 +138,9 @@ def create_event(
         if commit:
             session.commit()
             session.refresh(event)
+            if category == "cameras":
+                from app.services.camera_events_worker import wake_camera_events
+                wake_camera_events()
         else:
             session.flush()
         return event
@@ -242,7 +245,8 @@ def list_events(
 ) -> list[AuditEvent]:
     limit = max(1, min(int(limit or 50), 2000))
     offset = max(0, int(offset or 0))
-    query = db.query(AuditEvent)
+    # Camera episodes/read marks share persistence, not the administrative journal.
+    query = db.query(AuditEvent).filter(AuditEvent.category.notin_(("camera_event", "camera_event_read")))
     if category:
         query = query.filter(AuditEvent.category == category)
     if severity:

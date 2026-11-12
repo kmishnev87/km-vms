@@ -66,11 +66,12 @@ for (const name of ["live", "chronology"]) {
   const effect = source.slice(effectStart + "  useEffect(() => {".length, effectEnd);
   assert.ok(effectStart >= 0 && effectEnd > effectStart);
 
-  for (const change of ["session", "generation", "none", "navigation", "navigation-after-signin"]) {
+  for (const change of ["session", "generation", "none", "navigation", "navigation-after-signin", "event-view"]) {
     let token = "A", callback;
     const writes = [];
     const context = {workspaceSession:"A",getAuthToken:()=>token,workspaceGenerationRef:{current:1},
       hydratedRef:{current:true},backendReadyRef:{current:true},cacheOwnerRef:{current:1},
+      eventViewRef:{current:change === "event-view"},
       layoutWriterRef:{current:{invalidate:noop,save:(...args)=>writes.push(args)}},
       tiles:[{cameraId:"1"}],sidebarCameraOrder:[],lastBackendLayoutPayloadRef:{current:""},
       saveTiles:noop,saveTimerRef:{current:null},pendingLayoutSaveRef:{current:null},clearTimeout:noop,setTimeout:fn=>{callback=fn;return 1;},
@@ -87,7 +88,7 @@ for (const name of ["live", "chronology"]) {
       Object.assign(context, {writer:{dispose:noop},clearInterval:noop,timer:null,
         rangesInFlightRef:{current:null},rangesRequestIdRef:{current:0}});
       vm.runInNewContext("(function () {" + cleanup + "\n})();", context);
-    } else callback();
+    } else if (callback) callback();
     assert.equal(writes.length, ["none", "navigation"].includes(change) ? 1 : 0, `${name}: stale edit must not become another session's write; navigation keeps the last edit`);
     if (writes.length) {
       context.workspaceGenerationRef.current += 1;
@@ -104,6 +105,7 @@ for (const name of ["live", "chronology"]) {
   const context = {WORKSPACE_KEY:name,getAuthToken:()=>token,workspaceGenerationRef:{current:1},
     layoutWriterRef:{current:{flush:async()=>{}}},apiFetch:()=>new Promise(resolve=>pending.push(resolve)),
     hydratedRef:{current:false},backendReadyRef:{current:false},cacheOwnerRef:{current:null},
+    eventViewRef:{current:false},
     setTiles:()=>mutations.push("tiles"),setCurrentUser:()=>mutations.push("user"),showWorkspaceError:()=>mutations.push("error")};
   vm.runInNewContext(guard + source.slice(loadStart,loadEnd) + "\nthis.load = loadWorkspaceLayout;", context);
   const loading = context.load("A", 1); await turn();

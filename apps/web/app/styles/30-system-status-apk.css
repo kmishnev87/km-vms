@@ -9,7 +9,7 @@
 }
 
 .systemStatusPanel {
-  max-width: 1180px;
+  width: 100%;
   overflow: hidden;
   border: 1px solid #d8e2ee;
   border-radius: 10px;
@@ -111,7 +111,7 @@
 
 .systemStatusBody {
   display: grid;
-  grid-template-columns: 318px minmax(0, 1fr);
+  grid-template-columns: clamp(318px, 26%, 360px) minmax(0, 1fr);
   min-height: 360px;
 }
 
@@ -426,9 +426,12 @@
 }
 
 @media (max-width: 840px) {
-  .systemStatusPage,
   .apkPage {
     padding: 8px 0;
+  }
+
+  .systemStatusPage {
+    padding: 8px var(--page-x-padding);
   }
 
   .systemStatusHead,

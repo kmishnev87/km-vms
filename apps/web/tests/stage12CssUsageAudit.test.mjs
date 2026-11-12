@@ -32,7 +32,8 @@ assert.match(css, /\.standardPage\s*\{[\s\S]*?max-width:\s*var\(--page-working-w
 assert.match(css, /\.settingsPage\s*\{[\s\S]*?max-width:\s*var\(--page-working-width\);/);
 assert.match(css, /\.storageOpsPage\s*\{[\s\S]*?max-width:\s*var\(--page-working-width\);/);
 assert.match(css, /\.systemStatusPage,\s*\.apkPage\s*\{[\s\S]*?max-width:\s*var\(--page-working-width\);/);
-assert.match(css, /\.systemStatusPanel\s*\{[\s\S]*?max-width:\s*1180px;/);
+assert.match(css, /\.systemStatusPanel\s*\{\s*width:\s*100%;/);
+assert.doesNotMatch(css, /\.systemStatusPanel\s*\{[^}]*max-width:\s*1180px;/);
 assert.match(css, /html\s*\{[\s\S]*?scrollbar-gutter:\s*stable;/);
 assert.match(css, /\.topNavInner\s*\{[\s\S]*?width:\s*calc\(100% - \(var\(--page-outer-padding\) \* 2\)\);[\s\S]*?max-width:\s*var\(--page-working-width\);[\s\S]*?padding:\s*0 var\(--page-x-padding\);/);
 assert.match(css, /\.mainContent\s*\{[\s\S]*?padding:\s*10px var\(--page-outer-padding\) 16px;/);

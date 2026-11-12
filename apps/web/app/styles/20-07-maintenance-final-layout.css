@@ -299,6 +299,17 @@
 
 .settingsUpdateApplyPrimaryAction {
   align-self: start;
+  justify-self: end;
+  /* Two existing 40px header actions and their 8px gap. */
+  width: 88px;
+}
+
+.settingsUpdateApplyPanel .settingsUpdateApplyPrimaryAction .button {
+  min-width: 0;
+  width: 100%;
+  padding-inline: 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .settingsUpdateApplyCompactMessage {

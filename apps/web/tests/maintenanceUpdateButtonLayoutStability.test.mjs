@@ -7,6 +7,7 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const surface = read("../components/SettingsMaintenanceSurface.js");
 const controller = read("../lib/settingsMaintenanceController.js");
 const css = read("../app/styles/20-07-maintenance-final-layout.css");
+const copySource = read("../app/settings/page.js");
 const panel = surface.slice(surface.indexOf('<section className="settingsUpdateApplyPanel">'));
 const compact = panel.indexOf('<div className="settingsUpdateApplyCompact">');
 const action = panel.indexOf('className="settingsUpdateApplyActions settingsUpdateApplyPrimaryAction"');
@@ -27,6 +28,21 @@ test("compact row reserves a permanent action column and stacks on narrow screen
   assert.match(css, /@media \(max-width: 760px\)[\s\S]*?\.settingsUpdateApplyCompact,[^{]*\{\s*grid-template-columns:\s*1fr;/);
   assert.match(css, /\.settingsUpdateApplyPanel \.settingsMaintenanceHeaderTools\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*minmax\(0, 1fr\) auto;\s*justify-self:\s*stretch;/);
   assert.match(css, /\.settingsUpdateApplyPanel \.settingsMaintenanceHeaderTools > \.settingsUpdateApplyActions\s*\{\s*grid-column:\s*2;\s*grid-row:\s*1;/);
+});
+
+test("apply button aligns with both 40px header actions without changing icon size", () => {
+  assert.match(css, /\.settingsUpdateApplyPrimaryAction\s*\{[^}]*align-self:\s*start;[^}]*justify-self:\s*end;[^}]*width:\s*88px;/);
+  assert.match(css, /\.settingsUpdateApplyPanel \.settingsUpdateApplyPrimaryAction \.button\s*\{[^}]*min-width:\s*0;[^}]*width:\s*100%;[^}]*padding-inline:\s*6px;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/);
+  assert.match(css, /\.settingsMaintenanceActionIcon\s*\{\s*flex:\s*0 0 40px;/);
+  const actionCss = read("../app/styles/20-04-maintenance-progress-details.css");
+  assert.match(actionCss, /\.settingsUpdateApplyActions\s*\{[^}]*gap:\s*8px;/);
+});
+
+test("apply label is concise in every supported language without renaming the panel", () => {
+  const labels = [...copySource.matchAll(/updateApplyStart:\s*"([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(labels, ["Обновить", "Update", "更新"]);
+  assert.match(copySource, /updateApplyTitle:\s*"Обновление KM VMS"/);
+  assert.match(copySource, /updateApplyModalConfirm:\s*"Обновить KM VMS"/);
 });
 
 const allowedExpression = controller.match(/const updateApplyAllowed = Boolean\(([\s\S]*?)\n  \);/);

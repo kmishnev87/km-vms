@@ -1,79 +1,74 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.11",
-  "tag": "v0.9.11",
-  "title": "Synchronized playback and archive tools",
-  "summary": "Keep archive playback synchronized through buffering and segment changes. Manage saved clips without the old 4 GiB cap, export retained recordings from removed cameras, and review clear archive operation history.",
+  "version": "0.9.12",
+  "tag": "v0.9.12",
+  "title": "Camera events and consistent page layout",
+  "summary": "Receive supported ONVIF camera events, review a bounded personal event history and open the relevant live view or archive. Read camera detection rules and change switches only when exposed by the device. Align System Health and Settings with the common page frame.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.11",
+  "source_ref": "v0.9.12",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
   "requires_migration": false,
-  "schema_update": {"mode": "managed", "target_version": 10},
+  "schema_update": {
+    "mode": "managed",
+    "target_version": 10
+  },
   "changelog": [
-    "Synchronize chronology recordings through loading and buffering; confirmed archive gaps do not block the group or conceal actual failures.",
-    "Follow video progress, cancel obsolete seeks, preserve manual pause and hold the last frame while the next recording loads.",
-    "Use a shared New/Saved clip dialog with separate Records and Chronology context, clear selection, paged results and confirmed deletion.",
-    "Remove the fixed 4 GiB source cap, support three-hour clips across 180 or more files, and check space with size-aware preparation timeouts.",
-    "Keep completed clips until manual deletion and export retained recordings of removed cameras; deleting a clip never deletes source footage.",
-    "Group archive history steps, add filters and paging, distinguish past results from current relevance, and correct displayed operation times.",
-    "Keep history filters and summary fixed above scrolling events; compact storage roots and show removed camera names on a single line.",
-    "Confirm logout, align recording checkboxes and center camera names in list view without changing the card layout.",
-    "Keep the maintenance update action in a stable second row, soften chronology button highlights and acknowledge Play without layout shifts.",
-    "Refresh README features, current limitations and installation examples for v0.9.11."
+    "Add managed ONVIF PullPoint reception with long waits, renewal, bounded retries and one leased receiver per physical connection.",
+    "Normalize camera events without inventing object classes, ignore initial subscription state, merge repeated episodes and distinguish unconfirmed state after a disconnection.",
+    "Add camera event history, camera/type/time/unread filters, personal read markers and bulk marking without deleting footage.",
+    "Provide live/archive actions, approximately five seconds of existing pre-event footage where available, and event markers with previous/next navigation in Chronology.",
+    "Use cancellable browser long-polls and existing persistent event/settings envelopes without changing the database schema or the published update path.",
+    "Separate personal KM VMS notifications from camera detection; read ONVIF Rules and allow only exposed boolean controls with revision checks and readback.",
+    "Keep events independent of the Recorder enable flag. Android background push, vendor-private detection APIs and event-only recording are not included.",
+    "Expand System Health to the shared page width, clip only the Settings decoration without stretching forms, and align the concise Update button with its header icons."
   ],
   "title_i18n": {
-    "en": "Synchronized playback and archive tools",
-    "ru": "Синхронный просмотр и управление архивом",
-    "zh-CN": "同步播放与归档工具"
+    "en": "Camera events and consistent page layout",
+    "ru": "События камер и единые границы страниц",
+    "zh-CN": "摄像机事件与统一页面布局"
   },
   "summary_i18n": {
-    "en": "Keep archive playback synchronized through buffering and segment changes. Manage saved clips without the old 4 GiB cap, export retained recordings from removed cameras, and review clear archive operation history.",
-    "ru": "Синхронная хронология при подгрузке и смене файлов. Управление сохранёнными клипами без прежнего предела 4 ГБ, клипы из архива удалённых камер и понятная история операций с архивом.",
-    "zh-CN": "在缓冲及片段切换时保持归档播放同步。管理已保存片段，移除旧的4 GiB源文件限制，导出已删除摄像机保留的录像，并查看清晰的归档操作历史。"
+    "en": "Receive supported ONVIF camera events, review a bounded personal event history and open the relevant live view or archive. Read camera detection rules and change switches only when exposed by the device. Align System Health and Settings with the common page frame.",
+    "ru": "Приём поддерживаемых ONVIF-событий, история с личными отметками и переходы к онлайну или записи. Чтение правил обнаружения и подтверждённое изменение доступных переключателей. Единые границы состояния системы и фона настроек.",
+    "zh-CN": "接收受支持的ONVIF摄像机事件，查看有界历史并进入对应实时画面或录像。读取检测规则，仅修改设备实际开放的开关。统一系统状态与设置页面边界。"
   },
   "changelog_i18n": {
     "en": [
-      "Synchronize chronology recordings through loading and buffering; confirmed archive gaps do not block the group or conceal actual failures.",
-      "Follow video progress, cancel obsolete seeks, preserve manual pause and hold the last frame while the next recording loads.",
-      "Use a shared New/Saved clip dialog with separate Records and Chronology context, clear selection, paged results and confirmed deletion.",
-      "Remove the fixed 4 GiB source cap, support three-hour clips across 180 or more files, and check space with size-aware preparation timeouts.",
-      "Keep completed clips until manual deletion and export retained recordings of removed cameras; deleting a clip never deletes source footage.",
-      "Group archive history steps, add filters and paging, distinguish past results from current relevance, and correct displayed operation times.",
-      "Keep history filters and summary fixed above scrolling events; compact storage roots and show removed camera names on a single line.",
-      "Confirm logout, align recording checkboxes and center camera names in list view without changing the card layout.",
-      "Keep the maintenance update action in a stable second row, soften chronology button highlights and acknowledge Play without layout shifts.",
-      "Refresh README features, current limitations and installation examples for v0.9.11."
+      "Add managed ONVIF PullPoint reception with long waits, renewal, bounded retries and one leased receiver per physical connection.",
+      "Normalize camera events without inventing object classes, ignore initial subscription state, merge repeated episodes and distinguish unconfirmed state after a disconnection.",
+      "Add camera event history, camera/type/time/unread filters, personal read markers and bulk marking without deleting footage.",
+      "Provide live/archive actions, approximately five seconds of existing pre-event footage where available, and event markers with previous/next navigation in Chronology.",
+      "Use cancellable browser long-polls and existing persistent event/settings envelopes without changing the database schema or the published update path.",
+      "Separate personal KM VMS notifications from camera detection; read ONVIF Rules and allow only exposed boolean controls with revision checks and readback.",
+      "Keep events independent of the Recorder enable flag. Android background push, vendor-private detection APIs and event-only recording are not included.",
+      "Expand System Health to the shared page width, clip only the Settings decoration without stretching forms, and align the concise Update button with its header icons."
     ],
     "ru": [
-      "Записи хронологии синхронно ждут подгрузку. Подтверждённый пробел не мешает группе, а ошибка не маскируется отсутствием архива.",
-      "Часы следуют видео. Старые перемотки отменяются, ручная пауза сохраняется, последний кадр удерживается при загрузке следующего файла.",
-      "Общее окно нового и сохранённого клипа: отдельный контекст Записей и Хронологии, снятие выбора, страницы списка и подтверждение удаления.",
-      "Снят предел источников 4 ГБ, поддержаны три часа и 180+ фрагментов, добавлены проверка места и зависящие от объёма сроки подготовки.",
-      "Готовые клипы хранятся до ручного удаления; можно создать клип из архива удалённой камеры. Удаление клипа не удаляет исходные записи.",
-      "Шаги истории архива сгруппированы; добавлены фильтры, страницы, текущая актуальность старых результатов и правильное время событий.",
-      "Фильтры и сводка истории закреплены, прокручиваются события. Корни архива компактнее; имя удалённой камеры и пометка стоят в одной строке.",
-      "Добавлено подтверждение выхода, выровнены галочки записей и имена камер в списке без изменения вида карточек.",
-      "Кнопка обновления занимает постоянный второй ряд. Хронология получила мягкое выделение и отклик Пуска без сдвигов интерфейса.",
-      "README, ограничения продукта и примеры установки актуализированы для v0.9.11."
+      "Добавлен управляемый приём ONVIF PullPoint: длинное ожидание, продление, ограниченные повторы и один приёмник с lease на физическое подключение.",
+      "События нормализуются без выдуманного распознавания; начальные состояния не тревожат, повторы объединяются, потеря связи не считается подтверждённым окончанием.",
+      "История событий получила фильтры камеры/типа/периода/прочтения, личные отметки и массовое прочтение без удаления видео.",
+      "Добавлены переходы к онлайну и существующей записи примерно за пять секунд до события, отметки и переходы между событиями на хронологии.",
+      "Браузер использует отменяемое длинное ожидание; существующие хранилища данных переиспользованы без изменения схемы БД и опубликованного пути обновления.",
+      "Личные оповещения отделены от обнаружения на камере; доступны чтение правил ONVIF и только предоставляемые камерой переключатели с проверкой версии и результата.",
+      "Приём событий не зависит от включения Recorder. Android push в фоне, фирменные API обнаружения и запись только по событию в выпуск не входят.",
+      "Состояние системы растянуто до общей ширины, фон настроек ограничен без растягивания форм; короткая кнопка «Обновить» выровнена по верхним значкам."
     ],
     "zh-CN": [
-      "时间轴录像同步等待加载和缓冲；已确认的录像空缺不阻塞播放组，也不掩盖实际故障。",
-      "公共时钟跟随视频进度，取消过期定位，保留手动暂停，并在下一段加载时保持最后一帧。",
-      "统一新建和已保存片段窗口，录像与时间轴保留独立上下文，支持取消选择、分页和确认删除。",
-      "移除固定4 GiB源文件限制，支持跨180个或更多文件生成最长三小时片段，并检查空间及按大小设置准备超时。",
-      "已完成片段保留至手动删除；可导出已删除摄像机保留的录像。删除片段不会删除源录像。",
-      "归档历史按操作分组，增加筛选和分页，区分当次结果与当前状态，并修正操作时间显示。",
-      "历史筛选和摘要固定，事件列表独立滚动；归档位置更紧凑，已删除摄像机的名称和标记保持同一行。",
-      "增加退出确认，对齐录像选择框并居中列表中的摄像机名称，不改变卡片布局。",
-      "更新按钮保留在固定第二行，时间轴按钮使用柔和高亮，播放点击反馈不改变布局。",
-      "更新README、产品限制及v0.9.11安装示例。"
+      "新增受控ONVIF PullPoint接收，支持长等待、续订、有界重试及每个物理连接的租约接收器。",
+      "规范化事件但不推测对象类别，忽略订阅初始状态，合并重复事件，断线不视为已确认结束。",
+      "增加事件历史、摄像机/类型/时段/未读筛选、个人已读状态及批量标记，不删除录像。",
+      "可进入实时画面或事件前约五秒的现有录像；时间轴显示事件标记并支持前后导航。",
+      "浏览器使用可取消的长轮询，复用现有持久存储，不改变数据库结构及已发布更新路径。",
+      "区分个人通知与摄像机检测，可读取ONVIF规则，仅对设备开放的布尔开关执行版本校验及读取确认。",
+      "事件接收不依赖Recorder开关；不包含Android后台推送、厂商私有检测API或仅事件录像。",
+      "系统状态扩展至统一宽度，仅裁剪设置装饰层而不拉伸表单，简短更新按钮与上方图标对齐。"
     ]
   }
 }

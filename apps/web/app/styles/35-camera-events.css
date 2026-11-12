@@ -1,0 +1,83 @@
+/* Camera events use the established quiet maintenance palette and type scale. */
+.cameraEventsNav { position: relative; }
+.cameraEventsBell { width: 42px; height: 42px; }
+.cameraEventsBadge { position: absolute; top: 3px; right: 1px; min-width: 19px; padding: 2px 4px; border: 1px solid #fff; border-radius: 10px; background: #456f94; color: white; font: 600 10px/1.2 Arial, sans-serif; }
+.operationFeedbackDialog.cameraEventsDialog { width: min(1120px, calc(100vw - 24px)); height: min(760px, calc(100dvh - 32px)); max-height: calc(100dvh - 32px); padding: 0; gap: 0; }
+.cameraEventsDialog .operationFeedbackHead { padding: 16px 20px; flex-shrink: 0; border-bottom: 1px solid #dce5ee; }
+.cameraEventsDialog .operationFeedbackBody { flex: 1; min-height: 0; display: flex; overflow: hidden; padding: 0; }
+.cameraEventsPanel { min-width: 0; min-height: 0; display: flex; flex: 1; flex-direction: column; color: #172238; }
+.cameraEventsTabs { display: flex; gap: 8px; padding: 12px 18px; border-bottom: 1px solid #dce5ee; flex-shrink: 0; }
+.cameraEventsTabs button { border: 1px solid transparent; border-radius: 7px; background: transparent; padding: 8px 12px; color: #64748b; font: inherit; cursor: pointer; }
+.cameraEventsTabs button.isActive { border-color: #c5d8e8; background: #eaf3fb; color: #315c80; }
+.cameraEventsWorkbench { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px 18px 12px; gap: 10px; }
+.cameraEventsFilters { display: grid; grid-template-columns: minmax(120px, 1.3fr) minmax(100px, 1fr) minmax(100px, 1fr) auto auto; align-items: end; gap: 10px; flex-shrink: 0; }
+.cameraEventsFilters label, .cameraEventsDetectorChooser > label, .cameraEventsSchedule > label:not(.cameraEventsCheck) { min-width: 0; display: grid; gap: 5px; color: #64748b; font-size: 12px; }
+.cameraEventsFilters select, .cameraEventsDetectorChooser select, .cameraEventsSchedule input[type="time"] { width: 100%; min-width: 0; height: 36px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 13px; background: #fff; color: #172238; }
+.cameraEventsCheck { display: inline-flex !important; align-items: center; gap: 8px; font-size: 13px; color: #334155; min-height: 34px; }
+.cameraEventsCheck input, .cameraEventsRow > input { margin: 0; width: 16px; height: 16px; flex: 0 0 16px; accent-color: #456f94; }
+.cameraEventsSelection { min-height: 36px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; color: #64748b; flex-shrink: 0; }
+.cameraEventsTotal { margin-left: auto; }
+.cameraEventsList { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid #dce5ee; border-radius: 8px; }
+.cameraEventsRow { display: grid; grid-template-columns: 18px minmax(130px, 1fr) 160px auto; gap: 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid #e8eef4; border-left: 3px solid transparent; background: #fff; }
+.cameraEventsRow:last-child { border-bottom: 0; }
+.cameraEventsRow.isUnread { border-left-color: #7ca3c4; background: #f8fbfe; }
+.cameraEventsDescription { min-width: 0; display: grid; gap: 4px; }
+.cameraEventsDescription strong { font-size: 14px; overflow-wrap: anywhere; }
+.cameraEventsDescription span, .cameraEventsRow time { font-size: 12px; color: #526377; }
+.cameraEventsDescription small { font-size: 11px; color: #64748b; }
+.cameraEventsRowActions { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.cameraEventsRowActions .button { font-size: 12px; min-height: 32px; padding: 6px 9px; white-space: normal; }
+.cameraEventsReadButton { border: 0; background: transparent; color: #3d688f; font: inherit; font-size: 12px; padding: 6px; cursor: pointer; }
+.cameraEventsPager { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.cameraEventsPager > span { margin-right: auto; color: #64748b; font-size: 11px; }
+.cameraEventsEmpty { display: grid; place-items: center; min-height: 160px; padding: 24px; color: #64748b; text-align: center; font-size: 13px; }
+.cameraEventsPreferences, .cameraEventsDetectors { min-height: 0; flex: 1; padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
+.cameraEventsPreferences > p, .cameraEventsDetectors > p { margin: 0; max-width: 78ch; color: #526377; font-size: 13px; line-height: 1.5; }
+.cameraEventsPreferences fieldset { margin: 0; padding: 12px; border: 1px solid #dce5ee; border-radius: 8px; min-width: 0; }
+.cameraEventsPreferences legend { padding: 0 6px; font-size: 13px; }
+.cameraEventsChoices { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.cameraEventsSchedule { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; }
+.cameraEventsPreferences > small { color: #64748b; font-size: 12px; }
+.cameraEventsPreferences > .button { align-self: flex-start; min-width: 140px; }
+.cameraEventsDetectorChooser { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
+.cameraEventsDetectorChooser > label { flex: 1; max-width: 420px; }
+.cameraEventsDetectorChooser > button { min-width: 160px; min-height: 36px; }
+.cameraEventsReceiverList { display: grid; gap: 0; border: 1px solid #dce5ee; border-radius: 8px; }
+.cameraEventsReceiverList > div, .cameraEventsDetectorRules > div { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 12px; border-bottom: 1px solid #e8eef4; font-size: 13px; }
+.cameraEventsReceiverList > div:last-child { border-bottom: 0; }
+.cameraEventsReceiverList span, .cameraEventsDetectorRules span { color: #64748b; font-size: 12px; }
+.cameraEventsDetectorRules { border-top: 1px solid #dce5ee; }
+.cameraEventsDetectorRules > div > div { display: grid; gap: 4px; }
+.cameraEventsDetectorRules small { color: #64748b; }
+.cameraEventArrival { position: fixed; top: 76px; right: 20px; z-index: 9700; width: min(460px, calc(100vw - 24px)); display: grid; gap: 8px; padding: 16px 18px; border: 1px solid #c5d8e8; border-radius: 10px; background: #f8fbfe; box-shadow: 0 10px 28px rgba(15, 23, 42, .14); color: #172238; }
+.cameraEventArrival strong { padding-right: 20px; overflow-wrap: anywhere; }
+.cameraEventArrival > span { color: #526377; font-size: 13px; }
+.cameraEventArrival > time { color: #64748b; font-size: 12px; }
+.cameraEventArrivalClose { position: absolute; right: 6px; top: 5px; border: 0; background: transparent; padding: 4px 8px; font: inherit; font-size: 20px; color: #64748b; cursor: pointer; }
+.cameraEventsTimelineMarker { position: absolute; top: 0; bottom: 0; min-width: 8px; width: 8px; padding: 0; border: 0; background: transparent; transform: translateX(-50%); z-index: 3; cursor: pointer; }
+.cameraEventsTimelineMarker::after { content: ""; display: block; width: 3px; height: 100%; margin: auto; background: #a36b29; border-radius: 2px; }
+.cameraEventsTimelineNav { display: inline-flex; align-items: center; gap: 6px; }
+.cameraEventsTimelineNav button { width: 30px; height: 28px; border: 1px solid #cbd7e4; background: #f8fbfe; color: #3d688f; border-radius: 6px; cursor: pointer; }
+.cameraEventsTimelineNav button:disabled { opacity: .4; cursor: default; }
+.cameraEventsTimelineNav span { color: #64748b; font-size: 11px; }
+@media (max-width: 760px) {
+  .cameraEventsDialog .operationFeedbackHead { padding: 12px 14px; }
+  .cameraEventsWorkbench { padding: 12px; }
+  .cameraEventsFilters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .cameraEventsTabs { padding: 10px; gap: 4px; }
+  .cameraEventsTabs button { padding: 8px; font-size: 13px; }
+  .cameraEventsRow { grid-template-columns: 18px minmax(0, 1fr); gap: 8px 10px; padding: 12px 10px; }
+  .cameraEventsRow > input { grid-row: 1 / span 3; }
+  .cameraEventsRow time, .cameraEventsRowActions { grid-column: 2; }
+  .cameraEventsRowActions { justify-content: flex-start; }
+  .cameraEventsPager > span { flex-basis: 100%; }
+  .cameraEventsDialog .cameraEventsSelection .button,
+  .cameraEventsDialog .cameraEventsRowActions .button,
+  .cameraEventsDialog .cameraEventsPager .button { width: auto; flex: 0 0 auto; }
+  .cameraEventsDialog .cameraEventsFilters > .button { width: auto; justify-self: start; }
+  .cameraEventsSelection { gap: 8px; }
+  .cameraEventsReceiverList > div, .cameraEventsDetectorRules > div { align-items: flex-start; }
+  .cameraEventsReceiverList strong { min-width: 0; overflow-wrap: anywhere; }
+  .cameraEventsReceiverList span { text-align: right; }
+  .cameraEventsBell { width: 36px; height: 36px; }
+}

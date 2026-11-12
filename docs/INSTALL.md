@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.9.11](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.11)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.9.12](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.12)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.11/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.11
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.12/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.12
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.11 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.12 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.11 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.12 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -102,6 +102,12 @@ In **Cameras**, add a camera using its RTSP or ONVIF connection details. Verify 
 ONVIF Media1/Media2 configuration is available when the camera exposes the required services and options. RTSP, H.265/browser playback, and hardware acceleration are not universal across all devices and clients.
 
 Use **Settings → Language** to choose **English**, **简体中文**, or **Русский**.
+
+## Camera events
+
+Use the bell in the top navigation to open camera events. Supported ONVIF cameras are subscribed automatically after setup, independently of whether continuous recording is enabled. **Notifications** changes only your KM VMS camera/type/time preferences; **Detection**, available to camera managers, reads the camera's own rules. A detection switch is shown only when the device exposes a supported ONVIF boolean control. Devices without such controls remain usable for video and for events they provide.
+
+An event can open its camera's live view or available archive footage around five seconds before the event. Chronology also has event markers and previous/next navigation. Missing recordings are not created by clicking an event. Notifications require the browser application to be open; native mobile background push and event-only recording are not included.
 
 ## Updating an existing installation
 

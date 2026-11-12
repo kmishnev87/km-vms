@@ -4,6 +4,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fitCameraFrames, sameFrameLayout, savedFrameRatio } from "../../lib/liveAspectLayout";
 import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
 import { useAuthSession } from "../../lib/useAuthSession";
+import useCameraEventHandoff from "../../lib/useCameraEventHandoff";
+import { cameraEventId, eventErrorKey } from "../../lib/cameraEvents";
 import useChronologyClock from "../../lib/useChronologyClock";
 import useChronologySources from "../../lib/useChronologySources";
 import useChronologyPlaybackCoordinator from "../../lib/useChronologyPlaybackCoordinator";
@@ -194,6 +196,8 @@ export default function ChronologyPage() {
   const timelinePanelRef = useRef(null);
   const hydratedRef = useRef(false);
   const backendReadyRef = useRef(false);
+  const eventViewRef = useRef(false);
+  const eventCameraRef = useRef(null);
   const saveTimerRef = useRef(null);
   const pendingLayoutSaveRef = useRef(null);
   const lastBackendLayoutPayloadRef = useRef("");
@@ -296,7 +300,9 @@ export default function ChronologyPage() {
       const data = await apiFetch("/viewer/cameras");
       if (!isWorkspaceCurrent(ownerSession, generation)) return;
       cameraLoadErrorRef.current = "";
-      setCameras(Array.isArray(data) ? data : []);
+      const loaded = Array.isArray(data) ? data : [];
+      const retained = eventCameraRef.current;
+      setCameras(retained && !loaded.some(camera => String(camera.id) === String(retained.id)) ? [...loaded, retained] : loaded);
     } catch (err) {
       if (!isWorkspaceCurrent(ownerSession, generation)) return;
       if (cameraLoadErrorRef.current !== (err.message || TEXT.loadError)) {
@@ -332,6 +338,7 @@ export default function ChronologyPage() {
       if (!isWorkspaceCurrent(ownerSession, generation)) return;
       cacheOwnerRef.current = user?.id ?? null;
       setCurrentUser(user);
+      if (eventViewRef.current) return; // Temporary event view never replaces the saved workspace.
       backendReadyRef.current = true;
       const backendTiles = Array.isArray(layout?.tiles) ? dedupeTiles(layout.tiles.map(normalizeTile)) : [];
       const backendSidebarOrder = sanitizeSidebarCameraOrder(layout?.sidebarCameraOrder);
@@ -366,7 +373,7 @@ export default function ChronologyPage() {
     } catch (err) {
       if (!isWorkspaceCurrent(ownerSession, generation)) return;
       backendReadyRef.current = false;
-      setTiles(readSavedTiles(cacheOwnerRef.current));
+      setTiles(eventViewRef.current ? [] : readSavedTiles(cacheOwnerRef.current));
       setSidebarCameraOrder([]);
       setLastPersistedSidebarCameraOrder([]);
       showWorkspaceError(err.message || TEXT.loadError);
@@ -399,6 +406,8 @@ export default function ChronologyPage() {
   useEffect(() => {
     const ownerSession = workspaceSession;
     const generation = ++workspaceGenerationRef.current;
+    eventViewRef.current = Boolean(cameraEventId(window.location.search));
+    eventCameraRef.current = null;
     hydratedRef.current = backendReadyRef.current = false;
     cacheOwnerRef.current = null;
     lastBackendLayoutPayloadRef.current = "";
@@ -433,6 +442,7 @@ export default function ChronologyPage() {
 
   useEffect(() => {
     if (!hydratedRef.current) return;
+    if (eventViewRef.current) return;
     const ownerSession = workspaceSession;
     const generation = workspaceGenerationRef.current;
     if (!isWorkspaceCurrent(ownerSession, generation)) return;
@@ -609,6 +619,22 @@ export default function ChronologyPage() {
     setPreviewTs(nextDate);
     syncFormDateTime(nextDate);
   }
+
+  useCameraEventHandoff({ ready: workspaceLayoutReady && camerasLoaded, mode: "archive",
+    onError: error => showWorkspaceError(t(`cameraEvents.errors.${eventErrorKey(error)}`)),
+    onTarget: target => {
+      const instant = productCalendarDate(target.timestamp_system);
+      if (!Number.isFinite(instant.getTime())) { showWorkspaceError(t("cameraEvents.errors.event_archive_unavailable")); return; }
+      calendarTouchedRef.current = true;
+      invalidateSeekActions(); cancelPlaybackCoordinator("event-navigation"); setIsPlaying(false);
+      const camera = cameraMap.get(String(target.camera_id)) || { id: target.camera_id, name: target.camera_name };
+      eventCameraRef.current = camera;
+      setCameras(previous => previous.some(value => String(value.id) === String(camera.id)) ? previous : [...previous, camera]);
+      const tile = { id: `event-${target.camera_id}-${Date.now()}`, cameraId: String(target.camera_id), xPct: .06, yPct: .06, wPct: .85, hPct: .85, z: nextZIndex(tiles) };
+      setTiles(previous => eventViewRef.current ? [tile] : previous.some(value => String(value.cameraId) === String(target.camera_id)) ? previous : [...previous, tile]);
+      commitCurrentTimestamp(instant);
+    },
+  });
 
   function invalidateLoadedRangesWindow() {
     loadedRangesWindowRef.current = null;

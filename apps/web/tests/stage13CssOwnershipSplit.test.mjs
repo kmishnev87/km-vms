@@ -24,6 +24,7 @@ const expectedImports = [
   "styles/20-08-settings-recording-format.css",
   "styles/20-09-support-reports.css",
   "styles/30-system-status-apk.css",
+  "styles/35-camera-events.css",
   "styles/40-01-storage-base.css",
   "styles/40-02-page-layout-shared.css",
   "styles/40-03-recordings-toolbar.css",

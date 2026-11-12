@@ -12,6 +12,7 @@ import {
   storageMigrationActivitySnapshot,
 } from "../lib/storageOperations";
 import SystemHealthIndicator from "./SystemHealthIndicator";
+import CameraEventsHub from "./CameraEventsHub";
 import { OperationDialog, OperationToast } from "./OperationFeedback";
 
 const items = [
@@ -179,6 +180,7 @@ export default function Layout({ children, className = "" }) {
 
           <div className="topNavRight">
             <MigrationActivityIndicator enabled={Boolean(currentUser && canOpenStorage)} onStoragePage={pathname === "/storage"} t={t} />
+            <CameraEventsHub currentUser={currentUser} />
             {canOpenStorage ? (
               <Link
                 href="/storage"

@@ -10,8 +10,8 @@ const baseline = {
   // Approved left-column roots, shared clips, one-line deleted labels and fixed history workbench.
   // Management remains full width; stylesheet identity and import order stay enforced.
   "40-storage-records-shared.css": "29d72a234a3da9958d35929ec8645eb996d1c14d9d84c69a85118adddec64133",
-  // Approved persistent second-row update action advances only this stylesheet baseline.
-  "20-settings-maintenance.css": "98952c196b90f01d5a329f7bbf560e1262c0a410683c94ba0fa4c5ca43019629"
+  // Approved compact apply action and decorative Settings clipping; forms stay 920px.
+  "20-settings-maintenance.css": "28c256682087cac092a9d73ed805ac0d04dfc979fe00d4ab7f604a33c65f2d47"
 };
 for (const [logical, files] of Object.entries(CSS_OWNERS)) {
   test(`CSS: ${logical} matches its approved baseline and preserves import order`, () => {

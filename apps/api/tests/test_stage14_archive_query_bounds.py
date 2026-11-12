@@ -35,6 +35,8 @@ def test_status_loads_one_orm_segment_per_camera_from_100k_rows(api_db):
 @pytest.mark.parametrize("count", [120, 121])
 def test_export_range_is_selected_before_limit(api_db, monkeypatch, count):
     db, root = api_db
+    # Exercise the SQL query bound, not the retired 120-file product limit.
+    monkeypatch.setattr(archive_exports, "MAX_SOURCE_SEGMENTS", 120)
     camera = add_camera(db)
     start = datetime(2026, 11, 4, 12)
     old = start - timedelta(days=1)

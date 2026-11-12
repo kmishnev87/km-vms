@@ -670,9 +670,9 @@ assert.deepEqual(
 );
 
 for (const wording of [
-  'updateApplyStart: "Обновить KM VMS"',
-  'updateApplyStart: "Update KM VMS"',
-  'updateApplyStart: "更新 KM VMS"',
+  'updateApplyStart: "Обновить"',
+  'updateApplyStart: "Update"',
+  'updateApplyStart: "更新"',
   'updateApplyConfirm: "Установить доступное обновление KM VMS?"',
   'updateApplyConfirm: "Install the available KM VMS update?"',
   'updateApplyConfirm: "安装可用的 KM VMS 更新？"',
