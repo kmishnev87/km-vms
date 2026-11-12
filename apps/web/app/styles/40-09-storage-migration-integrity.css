@@ -385,6 +385,142 @@
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
 }
 
+/* Archive review is a fixed workbench: only the record list scrolls. */
+.storageIntegrityDialog.archiveReviewDialog {
+  width: min(1280px, 100%);
+  height: min(900px, calc(100dvh - 36px));
+  max-height: calc(100dvh - 36px);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+}
+.archiveReviewSummary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 20px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  font-size: 12px;
+}
+.archiveReviewSummary > div { display: grid; gap: 3px; }
+.archiveReviewSummary strong { color: #0f172a; font-size: 13px; }
+.archiveReviewSummary span, .archiveReviewSummary time { color: #64748b; }
+.archiveReviewSummary progress { flex-basis: 100%; width: 100%; height: 5px; accent-color: #2563eb; }
+.archiveReviewFilters {
+  display: grid;
+  grid-template-columns: 1.05fr 1.35fr 1.05fr 1.4fr .95fr .95fr;
+  gap: 8px 12px;
+  padding: 12px 16px;
+  background: #ffffff;
+}
+.archiveReviewFilters label, .archiveReviewBulk label { display: grid; gap: 5px; min-width: 0; color: #64748b; font-size: 12px; }
+.archiveReviewFilters input, .archiveReviewFilters select, .archiveReviewBulk select, .archiveReviewRowAction {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  margin: 0;
+  padding: 5px 8px;
+  border: 1px solid #d9e1eb;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 12px;
+}
+.archiveReviewFilters input:focus-visible, .archiveReviewFilters select:focus-visible,
+.archiveReviewBulk select:focus-visible, .archiveReviewRowAction:focus-visible,
+.archiveReviewTextButton:focus-visible, .archiveReviewProblemButton:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+.archiveReviewSelection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; min-height: 38px; padding: 6px 16px; border-top: 1px solid #edf2f7; border-bottom: 1px solid #e2e8f0; font-size: 12px; color: #64748b; }
+.archiveReviewTextButton { padding: 3px 0; border: 0; background: none; color: #2563eb; font: inherit; cursor: pointer; }
+.archiveReviewTextButton:disabled { color: #94a3b8; cursor: default; }
+.archiveReviewRefresh { margin-left: auto; }
+.archiveReviewViewport { min-height: 0; overflow: auto; overscroll-behavior: contain; background: #ffffff; }
+.archiveReviewTable { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.archiveReviewTable .reviewSelectCol { width: 3.5%; }
+.archiveReviewTable .reviewCameraCol { width: 23%; }
+.archiveReviewTable .reviewProblemCol { width: 24%; }
+.archiveReviewTable .reviewDateCol { width: 16%; }
+.archiveReviewTable .reviewStateCol { width: 14%; }
+.archiveReviewTable .reviewActionCol { width: 19.5%; }
+.archiveReviewTable th, .archiveReviewTable td { padding: 10px 12px; border-bottom: 1px solid #edf2f7; text-align: left; vertical-align: middle; overflow-wrap: anywhere; }
+.archiveReviewTable th { position: sticky; top: 0; z-index: 1; background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 600; }
+.archiveReviewTable th:first-child, .archiveReviewTable td:first-child { padding-right: 2px; text-align: center; }
+.archiveReviewTable input[type="checkbox"] { width: 16px; height: 16px; margin: 0; vertical-align: middle; accent-color: #2563eb; }
+.archiveReviewTable td > strong { color: #0f172a; font-size: 13px; font-weight: 600; }
+.archiveReviewFilename { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; color: #64748b; font-size: 11px; }
+.archiveReviewProblemButton { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 0; border: 0; background: none; text-align: left; color: #0f172a; font: inherit; line-height: 1.45; cursor: pointer; }
+.archiveReviewProblemButton > span { flex: 0 0 auto; color: #64748b; font-size: 16px; }
+.archiveReviewState { color: #92400e; font-size: 11px; }
+.archiveReviewState.acknowledged, .archiveReviewState.resolved, .archiveReviewReviewed { color: #64748b; }
+.archiveReviewNoAction { color: #64748b; font-size: 11px; }
+.archiveReviewDetailsRow td { padding: 0 16px 0 42px; background: #f8fafc; }
+.archiveReviewDetailsRow td > div { padding: 12px 0; color: #475569; line-height: 1.5; }
+.archiveReviewDetailsRow p { max-width: 80ch; margin: 0 0 8px; }
+.archiveReviewDetailsRow dl { display: flex; flex-wrap: wrap; gap: 6px 24px; margin: 0; }
+.archiveReviewDetailsRow dl > div { display: flex; gap: 8px; min-width: 0; }
+.archiveReviewDetailsRow dt { color: #64748b; }
+.archiveReviewDetailsRow dd { margin: 0; overflow-wrap: anywhere; }
+.archiveReviewEmpty { display: grid; min-height: 120px; height: 100%; place-content: center; padding: 24px; color: #64748b; font-size: 13px; text-align: center; }
+.archiveReviewMore { padding: 12px 16px; }
+.archiveReviewFooter { border-top: 1px solid #d9e1eb; background: #f8fafc; padding: 10px 16px; }
+.archiveReviewActionArea { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; align-items: center; min-height: 82px; }
+.archiveReviewBulk { display: flex; align-items: flex-end; gap: 10px; }
+.archiveReviewBulk label { width: min(340px, 100%); }
+.archiveReviewBulk .button { flex: 0 0 auto; min-height: 34px; }
+.archiveReviewBulkHint { max-width: 35ch; color: #64748b; font-size: 12px; line-height: 1.4; }
+.archiveReviewConfirmation, .archiveReviewBatch { display: grid; gap: 5px; min-width: 0; color: #0f172a; font-size: 13px; }
+.archiveReviewConfirmation > span, .archiveReviewBatch > span { color: #64748b; font-size: 12px; line-height: 1.4; }
+.archiveReviewConfirmation > span { max-width: 80ch; }
+.archiveReviewActionButtons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.archiveReviewBatch progress { width: 100%; height: 6px; accent-color: #2563eb; }
+.archiveReviewBatch progress.isComplete { accent-color: #15803d; }
+.archiveReviewBatch .reviewComplete { color: #15803d; }
+.archiveReviewBatch .reviewAttention { color: #92400e; }
+.archiveReviewFooterBottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; }
+.archiveReviewFooterBottom > div { display: flex; gap: 8px; }
+.archiveReviewResults { padding: 14px 16px; font-size: 12px; }
+.archiveReviewResults h3 { margin: 0 0 12px; font-size: 15px; }
+.archiveReviewResult { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 12px; padding: 12px 0; border-bottom: 1px solid #e2e8f0; }
+.archiveReviewResult > div { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.archiveReviewResult span { color: #64748b; line-height: 1.4; }
+.archiveReviewResult.blocked strong, .archiveReviewResult.failed strong { color: #b91c1c; }
+@media (max-width: 1050px) {
+  .archiveReviewFilters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .archiveReviewActionArea { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .archiveReviewBulkHint { max-width: none; }
+  .archiveReviewActionButtons { justify-content: flex-start; }
+}
+@media (max-width: 760px) {
+  .storageIntegrityDialog.archiveReviewDialog { width: 100%; height: 100dvh; max-height: 100dvh; }
+  .archiveReviewFilters { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 8px 12px; gap: 6px 10px; }
+  .archiveReviewSummary, .archiveReviewSelection { padding-left: 12px; padding-right: 12px; }
+  .archiveReviewSummary time { font-size: 11px; }
+  .archiveReviewTable .reviewDateCol, .archiveReviewTable .reviewStateCol,
+  .archiveReviewTable th:nth-child(4), .archiveReviewTable th:nth-child(5),
+  .archiveReviewTable td:nth-child(4), .archiveReviewTable td:nth-child(5) { display: none; }
+  .archiveReviewTable .reviewSelectCol { width: 8%; }
+  .archiveReviewTable .reviewCameraCol { width: 30%; }
+  .archiveReviewTable .reviewProblemCol { width: 36%; }
+  .archiveReviewTable .reviewActionCol { width: 26%; }
+  .archiveReviewTable th, .archiveReviewTable td { padding: 9px 6px; font-size: 11px; }
+  .archiveReviewTable td > strong { font-size: 12px; }
+  .archiveReviewRowAction { padding-left: 4px; font-size: 11px; }
+  .archiveReviewFooter { padding: 8px 12px; }
+  .archiveReviewBulk { align-items: stretch; flex-wrap: wrap; }
+  .archiveReviewBulk label { flex: 1 1 170px; }
+  .archiveReviewBulk .button { align-self: flex-end; }
+  .archiveReviewDetailsRow td { padding-left: 12px; }
+  .archiveReviewDetailsRow dl { display: grid; gap: 5px; }
+  .archiveReviewResult { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* End archive review workbench. */
+
 .storageIntegrityDialogHead,
 .storageIntegrityDialogFooter {
   display: flex;

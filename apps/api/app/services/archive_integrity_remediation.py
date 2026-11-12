@@ -109,7 +109,7 @@ MUTATING_ACTIONS = {
         "mutation": "mark_stale_nonplayable",
     },
     "delete_unusable_recording": {
-        "categories": {"zero_size_file", "corrupted_file", "partial_file"},
+        "categories": {"zero_size_file", "corrupted_file", "partial_file", "stale_writing_segment"},
         "permission": "delete_recordings",
         "operation_type": "integrity_recording_delete",
         "mutation": "delete_trusted_unusable_recording",
@@ -266,7 +266,7 @@ def _segment_for_finding(db: Session, finding: ArchiveIntegrityFinding) -> Recor
 def _active_write_exists(db: Session, segment: RecordingSegment) -> bool:
     if str(segment.status or "") in {"starting", "stopping", "restarting"}:
         return True
-    if segment.job_id:
+    if segment.job_id and str(segment.status or "") in {"writing", "starting", "stopping", "restarting"}:
         active = (
             db.query(RecordingJob.id)
             .filter(
@@ -375,7 +375,12 @@ def _revalidate_unusable(db: Session, finding: ArchiveIntegrityFinding) -> tuple
     root = _root_for_finding(db, finding)
     relative_ref = _relative_for_finding(finding)
     category = str(finding.category or "")
-    expected_statuses = {"failed"} if category == "partial_file" else {"finalized"}
+    expected_statuses = (
+        {"failed"} if category == "partial_file" else
+        {"writing", "stale_writing"} if category == "stale_writing_segment" else
+        {"finalized", "failed", "stale_writing", "writing"} if category == "zero_size_file" else
+        {"finalized"}
+    )
     if (
         segment.ownership != "KM VMS"
         or segment.source != "recorder"
@@ -406,6 +411,9 @@ def _revalidate_unusable(db: Session, finding: ArchiveIntegrityFinding) -> tuple
     elif category == "partial_file":
         if str((finding.observed_facts or {}).get("status") or "") != "failed":
             raise IntegrityRemediationBlocked("archive_integrity_incomplete_state_changed")
+    elif category == "stale_writing_segment":
+        if str((finding.observed_facts or {}).get("status") or "") not in {"writing", "stale_writing"}:
+            raise IntegrityRemediationBlocked("archive_integrity_stale_state_changed")
     else:
         raise IntegrityRemediationBlocked("archive_integrity_unusable_category_changed")
     return segment, root, relative_ref, {

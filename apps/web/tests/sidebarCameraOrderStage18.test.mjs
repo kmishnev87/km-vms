@@ -65,9 +65,9 @@ assert.match(liveSource, /setData\(LIVE_CAMERA_DROP_MIME, String\(camera\.id\)\)
 assert.match(chronologySource, /setData\(SIDEBAR_CAMERA_REORDER_MIME, String\(camera\.id\)\)/);
 assert.match(chronologySource, /setData\(CHRONOLOGY_CAMERA_DROP_MIME, String\(camera\.id\)\)/);
 
-assert.match(liveSource, /\{TEXT\.addAll\}/);
-assert.match(liveSource, /title=\{TEXT\.align\}/);
-assert.match(liveSource, /aria-label=\{TEXT\.align\}/);
+assert.match(liveSource, /(?:\{TEXT\.addAll\}|liveWorkspace\.addAll)/);
+assert.match(liveSource, /title=\{t\("liveWorkspace\.alignTiles"\)\}/);
+assert.match(liveSource, /aria-label=\{t\("liveWorkspace\.alignTiles"\)\}/);
 assert.match(liveSource, /data-workspace-align-button="grid-2x2"/);
 assert.match(chronologySource, /data-workspace-align-button="grid-2x2"/);
 assert.match(liveSource, /data-workspace-align-icon="grid-2x2"/);

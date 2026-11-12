@@ -108,7 +108,7 @@ CAMERA_DELETE_INTEGRITY_STATUSES = frozenset({
     "missing_file", "zero_size_file", "partial_file", "corrupted_file",
     "stale_writing_segment", "unreadable_file", "orphan_metadata",
 })
-CAMERA_DELETE_SEGMENT_STATUSES = frozenset({"finalized", "ready", "failed", "error", "writing"})
+CAMERA_DELETE_SEGMENT_STATUSES = frozenset({"finalized", "ready", "failed", "error", "writing", "stale_writing"})
 CONNECTION_SENSITIVE_FIELDS = {
     "protocol",
     "host",

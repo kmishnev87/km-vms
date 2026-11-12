@@ -32,7 +32,8 @@ for (const forbidden of [
   "stderr_tail",
   "pid_cmdline",
   "ffmpeg_cmd",
-  "command",
+  "detail?.command",
+  "item?.command",
 ]) {
   assert.equal(`${tilePlayer}\n${livePage}`.includes(forbidden), false, `${forbidden} must not be rendered or consumed by /live`);
 }

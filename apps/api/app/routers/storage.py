@@ -136,6 +136,19 @@ class IntegrityApplyRequest(BaseModel):
     operation_id: str = Field(min_length=8, max_length=96, pattern=OPERATION_ID_PATTERN)
 
 
+class IntegrityReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(pattern=r"^(recheck|repair|delete|acknowledge|reopen)$")
+    selection: dict
+
+
+class IntegrityReviewApplyRequest(IntegrityReviewRequest):
+    selection_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    idempotency_key: str = Field(min_length=8, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.:-]{7,63}$")
+    confirm: bool = False
+
+
 class ArchiveRootCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -396,6 +409,8 @@ def _mark_root_segment_deleted(db: Session, segment: RecordingSegment, current_u
     segment.deletion_source = "archive_root_delete"
     segment.updated_at = now
     db.add(segment)
+    from app.services.archive_integrity_review import resolve_segment_findings
+    resolve_segment_findings(db, segment)
 
 
 def _recover_root_segment_metadata_after_file_delete(
@@ -1306,6 +1321,12 @@ def storage_integrity_findings(
     limit: int = 50,
     category: str | None = None,
     impact: str | None = None,
+    state: str = "active",
+    camera_id: int | None = None,
+    root_id: str | None = None,
+    search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
@@ -1318,9 +1339,67 @@ def storage_integrity_findings(
             limit=limit,
             category=category,
             impact=impact,
+            state=state, camera_id=camera_id, root_id=root_id, search=search,
+            date_from=date_from, date_to=date_to,
         )
     except StorageOperationContractError as exc:
         raise HTTPException(status_code=404, detail={"reason_code": safe_reason_code(str(exc), fallback="archive_integrity_scan_not_found")}) from exc
+
+
+def _review_error(exc: Exception) -> HTTPException:
+    reason = safe_reason_code(str(exc), fallback="integrity_review_action_failed")
+    return HTTPException(status_code=403 if reason == "integrity_review_permission_denied" else 409,
+                         detail={"reason_code": reason})
+
+
+@router.post("/integrity/scans/{scan_id}/actions/preview")
+def storage_integrity_review_preview(scan_id: str, payload: IntegrityReviewRequest,
+    db: Session = Depends(get_db), current_user: User = Depends(require_permission("run_diagnostics"))):
+    from app.services.archive_integrity_review import preview_review_action
+    try:
+        return preview_review_action(db, scan_id=scan_id, action=payload.action,
+                                     selection=payload.selection, actor=current_user)
+    except StorageOperationContractError as exc:
+        raise _review_error(exc) from exc
+
+
+@router.post("/integrity/scans/{scan_id}/actions")
+def storage_integrity_review_apply(scan_id: str, payload: IntegrityReviewApplyRequest,
+    db: Session = Depends(get_db), current_user: User = Depends(require_permission("run_diagnostics"))):
+    from app.services.archive_integrity_review import enqueue_review_action
+    try:
+        return enqueue_review_action(db, scan_id=scan_id, action=payload.action, selection=payload.selection,
+            selection_hash=payload.selection_hash, idempotency_key=payload.idempotency_key,
+            confirm=payload.confirm, actor=current_user)
+    except StorageOperationContractError as exc:
+        raise _review_error(exc) from exc
+
+
+@router.get("/integrity/actions/latest")
+def storage_integrity_review_latest(db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics"))):
+    from app.services.archive_integrity_review import get_review_batch
+    return get_review_batch(db, None, actor=current_user)
+
+
+@router.get("/integrity/actions/{batch_id}")
+def storage_integrity_review_status(batch_id: str, cursor: str | None = None, db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics"))):
+    from app.services.archive_integrity_review import get_review_batch
+    result = get_review_batch(db, batch_id, actor=current_user, cursor=cursor)
+    if result is None:
+        raise HTTPException(status_code=404, detail={"reason_code": "integrity_review_batch_not_found"})
+    return result
+
+
+@router.post("/integrity/actions/{batch_id}/cancel")
+def storage_integrity_review_cancel(batch_id: str, db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics"))):
+    from app.services.archive_integrity_review import cancel_review_batch
+    try:
+        return cancel_review_batch(db, batch_id, actor=current_user)
+    except StorageOperationContractError as exc:
+        raise _review_error(exc) from exc
 
 
 def _create_integrity_plan(

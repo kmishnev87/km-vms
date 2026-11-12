@@ -71,18 +71,17 @@ for (const [asset, approvedSha256] of [
 ]) {
   const product = readProductSourceFile(resolve(webRoot, "public/assets/icons/ui", asset));
   assert.equal(createHash("sha256").update(product).digest("hex"), approvedSha256, `${asset} must keep its approved bytes`);
-  assert.match(page, new RegExp(asset.replace(".", "\\.")));
 }
 
-assert.match(page, /storageIntegrityConfirmationOverlay/);
-assert.match(page, /ref=\{confirmationRef\}/);
-assert.match(page, /if \(event\.key === "Escape" && !busy\)/);
-assert.match(page, /onKeyDown=\{handleConfirmationKeyDown\}/);
+assert.match(page, /archiveReviewConfirmation/);
+assert.doesNotMatch(page, /storageIntegrityConfirmationOverlay/);
+assert.match(page, /ref=\{dialog\}/);
+assert.match(page, /if \(event\.key === "Escape" && !c\.integrityBusy\)/);
+assert.match(page, /onKeyDown=\{onKeyDown\}/);
 assert.match(page, /confirm:\s*true/);
-assert.doesNotMatch(page, /integrityConfirmed|type="checkbox"/);
-assert.match(page, /title=\{copy\[item\.actionLabelKey\]\}/);
-assert.match(page, /aria-label=\{copy\[item\.actionLabelKey\]\}/);
-assert.match(page, /settingsInfoBubble" role="tooltip">\{copy\[item\.actionLabelKey\]\}/);
+assert.doesNotMatch(page, /integrityConfirmed/);
+assert.match(page, /type="checkbox"/);
+assert.match(page, /aria-label=\{t\("archiveReview\.actionsFor"/);
 assert.match(css, /\.storageIntegrityConfirmationOverlay\s*\{[\s\S]*place-items:\s*center/);
 assert.match(css, /\.storageIntegrityIconAction\s*\{[\s\S]*width:\s*40px !important;[\s\S]*height:\s*40px/);
 

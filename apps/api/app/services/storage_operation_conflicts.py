@@ -47,6 +47,9 @@ MAX_ACTIVE_OPERATION_SCAN = 256
 
 OPERATION_TYPES = frozenset(
     {
+        "integrity_review_batch",
+        "integrity_review_item",
+        "integrity_review_decision",
         "manual_single_delete",
         "manual_bulk_delete",
         "manual_delete_by_camera",

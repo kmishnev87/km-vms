@@ -146,6 +146,7 @@ const ARCHIVE_INTEGRITY_CATEGORY_KEYS = Object.freeze({
 });
 
 const ARCHIVE_INTEGRITY_IMPACT_KEYS = Object.freeze({
+  recording_state_unconfirmed: "integrityImpactStateUnconfirmed",
   recording_unavailable: "integrityImpactRecordingUnavailable",
   recording_unplayable: "integrityImpactRecordingUnplayable",
   recording_in_progress: "integrityImpactRecordingInProgress",
@@ -274,7 +275,7 @@ export function archiveIntegrityFindingPresentation(finding = {}) {
     cameraName: String(finding?.camera_name || "").slice(0, 120),
     rootLabel: String(finding?.root_label || "").slice(0, 120),
     displayName: safeIntegrityReference(finding?.display_name),
-    stale: finding?.stale === true || finding?.state !== "active",
+    stale: finding?.stale === true || ["stale", "superseded"].includes(finding?.state),
   };
 }
 

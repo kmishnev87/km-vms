@@ -279,6 +279,13 @@ function storageWarnings(domain, items) {
       action_hint: "Проверьте правила хранения и настройки хранилища.",
     });
   }
+  if (reasons.includes("storage_archive_root_unavailable")) {
+    pushBanner(items, {
+      id: "storage-archive-root-unavailable", domain: "storage", severity: "warning",
+      title: "Часть архива недоступна", message: "Не удалось получить доступ к одному из расположений архива.",
+      reason_codes: reasons, action_hint: "Откройте хранилище и проверьте подключение расположений архива.",
+    });
+  }
 }
 
 function recorderWarnings(domain, items) {
@@ -429,10 +436,10 @@ function reconciliationWarnings(domain, items) {
       domain: "reconciliation",
       severity: domain.path_outside_storage_count > 0 ? "error" : "warning",
       title: "Найдены проблемы целостности архива",
-      message: "Проверка архива нашла расхождения между метаданными и файлами.",
+      message: "В архиве есть фрагменты, требующие разбора. Это не обязательно означает сбой текущей записи.",
       affected_count: countFrom(domain.problem_file_count),
       reason_codes: reasons,
-      action_hint: "Проверьте диагностику целостности архива перед действиями с архивом.",
+      action_hint: "Откройте проверку архива: замечания можно перепроверить, исправить или разобрать группой.",
     });
   }
   if (reasons.includes("cleanup_candidates_present")) {
@@ -460,6 +467,17 @@ export function buildOperatorWarnings(runtimeStatus, options = {}) {
   if (include.has("live")) liveWarnings(asObject(domains.live), items);
   if (include.has("retention")) retentionWarnings(asObject(domains.retention), items);
   if (include.has("reconciliation")) reconciliationWarnings(asObject(domains.reconciliation), items);
+
+  // A newly introduced/degraded server state must not make the indicator red
+  // with an empty explanation list, even if its reason is not mapped yet.
+  for (const domainName of include) {
+    const domain = asObject(domains[domainName]);
+    if (["warning", "error"].includes(domain.severity) && !items.some((item) => item.domain === domainName)) {
+      pushBanner(items, { id: `${domainName}-status-unexplained`, domain: domainName, severity: domain.severity,
+        title: "Раздел требует внимания", message: "Раздел сообщает о проблеме, но подробная причина не получена. Обновите состояние или откройте диагностику.",
+        reason_codes: asArray(domain.reason_codes), action_hint: "Откройте соответствующий раздел для уточнения состояния." });
+    }
+  }
 
   return sortAndBound(items, options.limit || MAX_BANNERS);
 }

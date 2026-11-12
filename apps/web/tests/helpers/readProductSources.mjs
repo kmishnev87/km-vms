@@ -41,6 +41,8 @@ const JS_OWNERS = {
     "lib/storagePagePresentation.js",
     "lib/useStorageMigrationController.js",
     "lib/useStorageIntegrityController.js",
+    "lib/useArchiveIntegrityReviewController.js",
+    "components/storage/ArchiveIntegrityDialog.js",
     "lib/useStorageActivationController.js"
   ],
   "app/settings/page.js": [

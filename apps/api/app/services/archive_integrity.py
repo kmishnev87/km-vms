@@ -110,6 +110,9 @@ REMEDIATION_ACTION_MUTATIONS = {
 RESTORE_INVALIDATED_REASON = "archive_integrity_restore_invalidated"
 RESTORE_INTEGRITY_OPERATION_TYPES = frozenset(
     {
+        "integrity_review_batch",
+        "integrity_review_item",
+        "integrity_review_decision",
         SCAN_OPERATION_TYPE,
         "integrity_plan_prepare",
         *REMEDIATION_ACTION_OPERATION_TYPES.values(),
@@ -144,8 +147,10 @@ CATEGORY_CONTRACT: dict[str, dict[str, Any]] = {
     },
     "stale_writing_segment": {
         "severity": "warning",
-        "impact": "recording_unplayable",
-        "no_action": "automatic_reconciliation_pending",
+        "impact": "recording_state_unconfirmed",
+        "action": "delete_unusable_recording",
+        "permission": "delete_recordings",
+        "confirmation": "destructive_media",
     },
     "partial_file": {
         "severity": "info",
@@ -719,6 +724,8 @@ def _upsert_metadata_finding(
         finding.metadata_version = _metadata_version(segment)
         finding.last_observed_at = scan.scan_cutoff_at
     _apply_contract(finding, category)
+    from app.services.archive_integrity_review import apply_saved_review
+    apply_saved_review(db, finding)
     db.add(finding)
     return finding
 
@@ -785,6 +792,8 @@ def _upsert_file_finding(
         and bool(observed_facts.get("receipt_verified"))
     )
     _apply_contract(finding, category, orphan_actionable=orphan_actionable)
+    from app.services.archive_integrity_review import apply_saved_review
+    apply_saved_review(db, finding)
     db.add(finding)
     return finding
 
@@ -821,7 +830,7 @@ def _safe_probe(path: Path) -> tuple[bool | None, str]:
             timeout=MEDIA_PROBE_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return False, "probe_timeout"
+        return None, "probe_timeout"
     except OSError:
         return None, "probe_unavailable"
     if result.returncode != 0:
@@ -964,7 +973,7 @@ def _converge_stale_segment(
                 or _segment_recent(locked, scan)
             ):
                 return ("changing", "segment_changed_before_finalize")
-            if locked.job_id and (
+            if str(locked.status or "") == "writing" and locked.job_id and (
                 db.query(RecordingJob.id)
                 .filter(
                     RecordingJob.id == str(locked.job_id),
@@ -1104,7 +1113,8 @@ def _classify_metadata_page(
     scan: ArchiveIntegrityScan,
     rows: list[RecordingSegment],
     heartbeat: OperationHeartbeatController,
-) -> None:
+) -> set[int]:
+    healthy_segments: set[int] = set()
     roots = _root_by_snapshot(db, scan)
     active_jobs = _active_jobs_for_page(db, rows)
     for index, segment in enumerate(rows, start=1):
@@ -1290,18 +1300,20 @@ def _classify_metadata_page(
             )
             if convergence_state == "finalized":
                 scan.checked_bytes += int(target_stat.st_size)
+                healthy_segments.add(int(segment.id))
                 continue
             if convergence_state == "changing":
                 scan.checked_count -= 1
                 scan.skipped_count = int(scan.skipped_count or 0) + 1
                 continue
-            category = "stale_writing_segment"
+            category = "probe_unavailable" if probe_status in {"probe_timeout", "probe_unavailable"} else "stale_writing_segment"
         elif str(segment.status or "") == "finalized":
             heartbeat.touch(force=True)
             probe_ok, probe_status = _safe_probe(target)
             heartbeat.touch(force=True)
             if probe_ok is True:
                 scan.checked_bytes += int(target_stat.st_size)
+                healthy_segments.add(int(segment.id))
                 continue
             category = "corrupted_file" if probe_ok is False else "probe_unavailable"
             if probe_ok is None:
@@ -1342,6 +1354,7 @@ def _classify_metadata_page(
             ),
         )
         scan.checked_bytes += int(target_stat.st_size)
+    return healthy_segments
 
 
 def _previous_file_observation(
@@ -2147,6 +2160,9 @@ def run_integrity_worker_once() -> bool:
                 return True
             if _recover_terminal_scan_audit_once(db):
                 return True
+            from app.services.archive_integrity_review import run_review_batch_once
+            if run_review_batch_once(db, worker_lease):
+                return True
             scan = _active_scan(db)
             if scan is None:
                 return False
@@ -2323,41 +2339,17 @@ def list_integrity_findings(
     limit: int = FINDING_PAGE_DEFAULT,
     category: str | None = None,
     impact: str | None = None,
+    state: str = "active",
+    camera_id: int | None = None,
+    root_id: str | None = None,
+    search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, Any]:
-    scan = db.get(ArchiveIntegrityScan, str(scan_id))
-    if scan is None:
-        raise StorageOperationContractError("archive_integrity_scan_not_found")
-    bounded_limit = max(1, min(int(limit or FINDING_PAGE_DEFAULT), FINDING_PAGE_MAX))
-    if scan.is_stale:
-        return {
-            "scan_id": scan.id,
-            "status": scan.status,
-            "items": [],
-            "next_cursor": None,
-            "has_more": False,
-            "limit": bounded_limit,
-        }
-    query = db.query(ArchiveIntegrityFinding).filter(
-        ArchiveIntegrityFinding.scan_id == scan.id,
-        ArchiveIntegrityFinding.is_active.is_(True),
-    )
-    if cursor:
-        query = query.filter(ArchiveIntegrityFinding.id > str(cursor))
-    if category:
-        query = query.filter(ArchiveIntegrityFinding.category == str(category)[:64])
-    if impact:
-        query = query.filter(ArchiveIntegrityFinding.impact_key == str(impact)[:64])
-    rows = query.order_by(ArchiveIntegrityFinding.id.asc()).limit(bounded_limit + 1).all()
-    has_more = len(rows) > bounded_limit
-    page = rows[:bounded_limit]
-    return {
-        "scan_id": scan.id,
-        "status": scan.status,
-        "items": [_public_finding(item, role=role) for item in page],
-        "next_cursor": page[-1].id if has_more and page else None,
-        "has_more": has_more,
-        "limit": bounded_limit,
-    }
+    from app.services.archive_integrity_review import list_review_findings
+    return list_review_findings(db, str(scan_id), role=role, cursor=cursor, limit=limit,
+        filters={"category": category, "impact": impact, "state": state, "camera_id": camera_id,
+                 "root_id": root_id, "search": search, "date_from": date_from, "date_to": date_to})
 
 
 def latest_integrity_summary_for_status(db: Session) -> dict[str, Any]:

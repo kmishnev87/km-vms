@@ -63,10 +63,10 @@ assert.equal((i18n.match(/contentTitle:/g) || []).length, 6);
 assert.equal((i18n.match(/integrityCheckAgain:\s*"Проверить снова"/g) || []).length, 1);
 
 const integrityFooter = storage.slice(
-  storage.indexOf('<footer className="storageIntegrityDialogFooter">'),
-  storage.indexOf("</footer>", storage.indexOf('<footer className="storageIntegrityDialogFooter">'))
+  storage.indexOf('<div className="archiveReviewFooterBottom">'),
+  storage.indexOf("</footer>", storage.indexOf('<div className="archiveReviewFooterBottom">'))
 );
-assert.ok(integrityFooter.indexOf("copy.close") < integrityFooter.indexOf("primaryStartLabel"));
+assert.ok(integrityFooter.indexOf("copy.close") < integrityFooter.indexOf("copy.integrityCheckAgain"));
 assert.match(sharedCss, /\.storageIntegrityDialogFooter\s*\{[\s\S]*?justify-content:\s*space-between;/);
 const integrityMobileCss = sharedCss.slice(sharedCss.indexOf("@media (max-width: 760px)", sharedCss.indexOf(".storageIntegrityDialogFooter")));
 assert.match(integrityMobileCss, /\.storageIntegrityDialogFooter \.button\s*\{[\s\S]*?flex:\s*0 0 auto;/);

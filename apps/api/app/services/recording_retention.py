@@ -657,6 +657,9 @@ def _mark_deleted(
     segment.updated_at = _now()
     db.add(segment)
 
+    from app.services.archive_integrity_review import resolve_segment_findings
+    resolve_segment_findings(db, segment)
+
 
 def _audit(
     db: Session,

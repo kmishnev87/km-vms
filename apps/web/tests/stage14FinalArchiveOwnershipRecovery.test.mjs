@@ -139,7 +139,7 @@ await check('F08 pause during pending token never resumes playback on late metad
 });
 
 await check('F09 JSX structure places dialog within shellRef fullscreen root',()=>{
- const source=read('app/chronology/page.js'),jsx=source.slice(source.indexOf('\n  return (\n    <Layout>'));assert.ok(jsx.length<source.length);const stack=[],nodes=[],pattern=/<\/?([A-Za-z][\w.]*)\b/g,voids=new Set(['img','input','br','hr','meta','link','source','track']);let match;
+ const source=read('app/chronology/page.js'),jsx=source.slice(source.indexOf('\n  return (\n    <Layout'));assert.ok(jsx.length<source.length);const stack=[],nodes=[],pattern=/<\/?([A-Za-z][\w.]*)\b/g,voids=new Set(['img','input','br','hr','meta','link','source','track']);let match;
  while((match=pattern.exec(jsx))){let e=pattern.lastIndex,braces=0,quote='';for(;e<jsx.length;e++){const c=jsx[e];if(quote){if(c==='\\')e++;else if(c===quote)quote='';continue;}if(c==='"'||c==="'"||c==='`'){quote=c;continue;}if(c==='{')braces++;else if(c==='}')braces--;else if(c==='>'&&braces===0)break;}assert.ok(e<jsx.length);const raw=jsx.slice(match.index,e+1),tag=match[1];pattern.lastIndex=e+1;if(raw.startsWith('</')){assert.equal(stack.pop()?.tag,tag,`unbalanced ${raw}`);continue;}const n={tag,raw,ancestors:[...stack]};nodes.push(n);if(!raw.endsWith('/>')&&!voids.has(tag))stack.push(n);}
  assert.equal(stack.length,0);const shell=nodes.find(n=>/ref=\{shellRef\}/.test(n.raw)),modal=nodes.find(n=>/className="modal archiveExportModal"/.test(n.raw));assert.ok(shell&&modal);assert.ok(modal.ancestors.includes(shell));
 });

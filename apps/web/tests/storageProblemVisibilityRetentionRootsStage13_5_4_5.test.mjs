@@ -33,10 +33,11 @@ assert.doesNotMatch(retentionRow, /retentionPlanShort|retentionConfirmed|retenti
 
 assert.match(operations, /title: copy\.archiveManagementIntegrityTitle/, "archive integrity must be a visible product row");
 assert.match(operations, /onClick=\{\(\) => openIntegrityDialog\(\)\}/, "archive findings must open the complete integrity flow");
-assert.match(page, /\/storage\/integrity\/scans\/\$\{encodeURIComponent\(scanId\)\}\/findings\?limit=50/, "integrity findings are loaded through the bounded endpoint");
+assert.match(page, /\/storage\/integrity\/scans\/\$\{encodeURIComponent\(scanId\)\}\/findings\?\$\{query\}/, "integrity findings are loaded through the bounded filtered endpoint");
+assert.match(page, /limit: "50"/);
 assert.match(page, /archiveIntegrityFindingPresentation/, "problem findings use sanitized presentation fields");
 assert.match(page, /archiveIntegrityActionContract/, "problem findings expose only typed executable actions");
-assert.match(page, /copy\[item\.noActionLabelKey\] \|\| copy\.integrityNoActionUnavailable/, "problem viewer must show a localized reason when no action is available");
+assert.match(page, /copy\[row\.noActionLabelKey\] \|\| copy\.integrityNoActionUnavailable/, "problem viewer must show a localized reason when no action is available");
 assert.equal((i18n.match(/integrityNoActionUnavailable:/g) || []).length, 3, "problem no-action reasons support all three locales");
 assert.doesNotMatch(operations, /statusLabel\((reconciliationScenario|retentionScenario|migrationScenario)\.status/, "primary rows must not use legacy generic preview-ready statuses");
 

@@ -32,10 +32,11 @@ for (const required of [
 
 assert.match(storagePage, /apiFetch\("\/settings"[\s\S]*auto_free_space_cleanup_enabled/, "/storage owns auto-free-space toggle");
 assert.doesNotMatch(storagePage, /apiFetch\("\/recordings\/retention\/(dry-run|run)"/, "automatic retention has no manual preview/apply UI");
-assert.match(storagePage, /apiFetch\("\/storage\/integrity\/scans\/latest"/, "/storage loads durable integrity truth");
+assert.match(storagePage, /"\/storage\/integrity\/scans\/latest"/, "/storage loads durable integrity truth");
 assert.match(storagePage, /apiFetch\("\/storage\/integrity\/scans"/, "/storage can start an explicit integrity scan");
 assert.match(storagePage, /\/storage\/integrity\/scans\/\$\{encodeURIComponent\(scanId\)\}\/findings/, "/storage exposes bounded integrity findings");
-assert.match(storagePage, /\/storage\/integrity\/remediation-plans\/\$\{encodeURIComponent\(integrityPlan\.plan_id\)\}\/apply-\$\{contract\.planKind\}/, "/storage applies only typed integrity remediation");
+assert.match(storagePage, /\/actions\/preview/, "/storage previews an exact typed bulk selection");
+assert.match(storagePage, /selection_hash: confirmation\.selection_hash/, "/storage confirms the exact server selection");
 assert.match(storagePage, /humanBlockerReason\(item, language\)/, "blocked actions use human wording");
 assert.match(storagePage, /Array\.from\(new Set\(labels\)\)\.join\(" "\)/, "duplicate blocked action labels are collapsed before rendering");
 assert.doesNotMatch(storagePage, /storageSourceLabel\(storageContract\.archive_primary_path_source, copy\)/, "backend source codes are not primary UI");

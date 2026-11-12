@@ -591,11 +591,12 @@ def test_camera_delete_ignores_deleted_history_and_accepts_already_absent_files(
 @pytest.mark.parametrize(("segment_status", "integrity_status"), [
     ("finalized", "corrupted_file"), ("failed", "partial_file"),
     ("ready", "zero_size_file"), ("writing", "stale_writing_segment"),
+    ("stale_writing", "stale_writing_segment"),
 ])
 def test_camera_delete_removes_owned_stopped_damaged_files(db, segment_status, integrity_status):
     camera = add_camera(db)
     segment, path = add_segment(db, camera, status=segment_status, integrity_status=integrity_status)
-    if segment_status == "writing":
+    if segment_status in {"writing", "stale_writing"}:
         segment.started_at = segment.updated_at = datetime.utcnow() - timedelta(days=1)
         db.commit()
     result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))

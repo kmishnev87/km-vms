@@ -44,7 +44,7 @@ CROSS_ACTOR_RECOVERY_TYPES = frozenset({"archive_migration_apply"})
 
 TERMINAL_OPERATION_STATUSES = frozenset({"completed", "partial", "blocked", "failed", "cancelled"})
 ACTIVE_OPERATION_STATUSES = frozenset({"queued", "running", "cancel_requested"})
-ALL_OPERATION_STATUSES = ACTIVE_OPERATION_STATUSES | TERMINAL_OPERATION_STATUSES
+ALL_OPERATION_STATUSES = ACTIVE_OPERATION_STATUSES | TERMINAL_OPERATION_STATUSES | {"prepared"}
 PUBLIC_OPERATION_STATUSES = ALL_OPERATION_STATUSES | {"interrupted"}
 INTERRUPTED_RECOVERABLE_TYPES = frozenset(
     {
@@ -56,6 +56,7 @@ INTERRUPTED_RECOVERABLE_TYPES = frozenset(
         "retention_auto_run",
         "retention_auto_free_space",
         "integrity_scan",
+        "integrity_review_batch",
         "integrity_metadata_repair",
         "integrity_catalog_retirement",
         "integrity_recording_delete",
@@ -1123,6 +1124,16 @@ def _cleanup_terminal_operations_once(db: Session, *, current: datetime) -> int:
     if keep_ids:
         delete_conditions.append(~StorageOperation.id.in_(keep_ids))
     protected_reference = or_(
+        StorageOperation.operation_type == "integrity_review_decision",
+        and_(
+            StorageOperation.operation_type == "integrity_review_item",
+            StorageOperation.progress["batch_id"].as_string().in_(
+                select(StorageOperation.id).where(
+                    StorageOperation.operation_type == "integrity_review_batch",
+                    StorageOperation.status.in_(tuple(ACTIVE_OPERATION_STATUSES)),
+                )
+            ),
+        ),
         exists().where(ArchiveIntegrityScan.operation_id == StorageOperation.id),
         exists().where(ArchiveIntegrityRemediationPlan.operation_id == StorageOperation.id),
         exists().where(ArchiveIntegrityRemediationPlan.apply_operation_id == StorageOperation.id),

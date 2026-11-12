@@ -19,6 +19,7 @@ function safeSeverity(value) {
 function domainMeta(row, t, liveSummary) {
   if (row.severity === "unknown") return t("systemStatus.loading");
   if (row.problem_count > 0) return t("systemStatus.affected", { count: row.affected_count || row.problem_count });
+  if (row.severity === "warning" || row.severity === "error") return t("systemStatus.problemTitle");
   if (row.domain === "live" && row.severity === "ok") {
     const count = liveSummary?.active_streams_count;
     if (!Number.isFinite(count) || count < 0) return t("systemStatus.loading");

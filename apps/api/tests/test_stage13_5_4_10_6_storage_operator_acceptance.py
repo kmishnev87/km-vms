@@ -510,7 +510,11 @@ def test_missing_receipt_and_recent_segment_fail_closed_without_manual_click_req
     rows = active_findings(stage4106, scan["scan_id"])
     finding = next(item for item in rows if item.segment_id == stale.id)
     assert finding.category == "stale_writing_segment"
-    assert finding.action_key is None
+    # A stale observation may be explicitly deleted after preview/confirmation;
+    # it must still never be silently finalized without an exact receipt.
+    assert finding.action_key == "delete_unusable_recording"
+    assert stale.id in [item.segment_id for item in rows]
+    assert _path.exists() and _recent_path.exists()
     assert all(item.segment_id != recent.id for item in rows)
     assert stage4106.db.get(RecordingSegment, stale.id).status == "writing"
 

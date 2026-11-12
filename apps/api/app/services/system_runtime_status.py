@@ -60,6 +60,7 @@ SAFE_REASON_CODES = {
     "storage_unwritable",
     "storage_unreadable",
     "storage_low_space",
+    "storage_archive_root_unavailable",
     "storage_cleanup_threshold",
     "storage_critical_low_space",
     "auto_free_space_cleanup_disabled",
@@ -529,11 +530,16 @@ def _build_storage_domain(storage_summary: dict[str, Any], ctx) -> dict[str, Any
         "path_outside_storage_count": int(reconciliation.get("path_outside_storage_count") or 0),
         "problem_file_count": int(owned.get("kmvms_owned_problem_file_count") or 0),
     }
-    if any(problem_counts.values()) and severity == "ok":
-        severity = "warning"
+    # Archive fragments have their own integrity domain. Do not turn a readable,
+    # writable healthy disk into an unexplained second alert for the same files.
+    if severity == "warning" and not reasons and problem_counts["problem_file_count"]:
+        severity = "ok"
+    if problem_counts["root_unavailable_count"]:
+        severity = "warning" if severity == "ok" else severity
+        _append_reason(reasons, "storage_archive_root_unavailable")
 
     return {
-        "status": str(storage_summary.get("status") or "unknown"),
+        "status": "available" if severity == "ok" else str(storage_summary.get("status") or "unknown"),
         "severity": severity,
         "available": bool(storage_summary.get("available")),
         "readable": bool(checks.get("readable")),
@@ -675,7 +681,7 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
     has_reconciliation_evidence = isinstance(raw_reconciliation, dict)
     has_cleanup_evidence = isinstance(raw_cleanup, dict)
     evidence_status = str((raw_reconciliation or {}).get("evidence_status") or "missing") if has_reconciliation_evidence else "missing"
-    has_status_friendly_evidence = has_reconciliation_evidence and evidence_status == "fresh"
+    has_status_friendly_evidence = has_reconciliation_evidence and evidence_status in {"fresh", "completed"}
     reconciliation = raw_reconciliation if has_reconciliation_evidence else {}
     cleanup = raw_cleanup if has_cleanup_evidence else {}
     missing = int(reconciliation.get("missing_file_count") or 0)
@@ -684,12 +690,16 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
     orphan = int(reconciliation.get("orphan_file_count") or 0)
     path_outside = int(reconciliation.get("path_outside_storage_count") or 0)
     invalid = int(reconciliation.get("invalid_path_count") or 0)
+    category_counts = _as_dict(reconciliation.get("category_counts"))
+    problem_count = max(int(reconciliation.get("problem_file_count") or 0),
+                        sum(int(value or 0) for value in category_counts.values()),
+                        missing + root_unavailable + root_unresolved + orphan + path_outside + invalid)
     cleanup_count = int(cleanup.get("count") or 0) if has_cleanup_evidence else 0
     scan_limited = bool(storage_summary.get("scan_limited"))
     partial = bool(storage_summary.get("partial"))
     reasons: list[str] = []
 
-    has_known_problems = bool(missing or root_unavailable or root_unresolved or orphan or path_outside or invalid)
+    has_known_problems = problem_count > 0
     if has_known_problems:
         severity = "error" if path_outside else "warning"
         _append_reason(reasons, "reconciliation_problems_found")
@@ -714,7 +724,10 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
         "root_unresolved_count": root_unresolved,
         "orphan_file_count": orphan,
         "path_outside_storage_count": path_outside,
-        "problem_file_count": missing + root_unavailable + root_unresolved + orphan + path_outside + invalid,
+        "problem_file_count": problem_count,
+        "category_counts": category_counts,
+        "scan_id": reconciliation.get("scan_id"),
+        "reviewed_count": int(reconciliation.get("reviewed_count") or 0),
         "cleanup_candidate_count": cleanup_count,
         "scan_limited": scan_limited,
         "partial": partial,

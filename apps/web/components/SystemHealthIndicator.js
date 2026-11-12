@@ -102,12 +102,14 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
     };
     window.addEventListener("kmvms:camera-runtime-changed", refreshRuntime);
     window.addEventListener("kmvms:live-runtime-changed", refreshRuntime);
+    window.addEventListener("kmvms:storage-runtime-changed", refreshRuntime);
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
       if (refreshTimer) clearTimeout(refreshTimer);
       window.removeEventListener("kmvms:camera-runtime-changed", refreshRuntime);
       window.removeEventListener("kmvms:live-runtime-changed", refreshRuntime);
+      window.removeEventListener("kmvms:storage-runtime-changed", refreshRuntime);
     };
   }, [canRead, enabled, userIdentity, cacheIdentity, authSession]);
 

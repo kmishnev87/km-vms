@@ -6,6 +6,7 @@ import Layout from "../../components/Layout";
 import { createSingleFlight } from "../../lib/singleFlight";
 import useStorageMigrationController from "../../lib/useStorageMigrationController";
 import useStorageIntegrityController from "../../lib/useStorageIntegrityController";
+import ArchiveIntegrityDialog from "../../components/storage/ArchiveIntegrityDialog";
 import useStorageActivationController from "../../lib/useStorageActivationController";
 import { newStorageOperationId, blockerText, errorDetailText, archiveRootPath, activationProgressTone, activationProgressStatusText, activationProgressReasonText, activationProgressItems, ACTIVATION_ACK_KEY } from "../../lib/storagePagePresentation";
 import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
@@ -29,10 +30,6 @@ import {
   humanBlockerReason,
   isStorageAccessDeniedError,
   actionPermissionState,
-  archiveIntegrityActionContract,
-  archiveIntegrityCategoryPresentations,
-  archiveIntegrityFindingPresentation,
-  archiveIntegrityScanModel,
   autoFreeOperationPresentation,
   archiveRootCleanupCapabilityModel,
   archiveRootScenarioModel,
@@ -106,293 +103,6 @@ function TrashIcon() {
       <path d="M10.1 10.7v6.6"></path>
       <path d="M13.9 10.7v6.6"></path>
     </svg>
-  );
-}
-
-const INTEGRITY_ACTION_ICONS = Object.freeze({
-  retire_missing_recording: "/assets/icons/ui/retire-missing-recording.svg",
-  delete_unusable_recording: "/assets/icons/ui/delete-recording.svg",
-  delete_proven_orphan: "/assets/icons/ui/delete-orphan-file.svg",
-});
-
-function dialogFocusableElements(container) {
-  if (!container) return [];
-  return Array.from(container.querySelectorAll(
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-  )).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
-}
-
-function ArchiveIntegrityDialog({
-  open,
-  scan,
-  findings,
-  nextCursor,
-  busy,
-  error,
-  selectedFinding,
-  plan,
-  copy,
-  language,
-  permission,
-  onClose,
-  onStart,
-  onCancel,
-  onLoadMore,
-  onPrepare,
-  onClearPlan,
-  onApply,
-}) {
-  const dialogRef = useRef(null);
-  const confirmationRef = useRef(null);
-  const closeRef = useRef(null);
-  const returnFocusRef = useRef(null);
-  useModalBodyScrollLock(open);
-  const scanModel = archiveIntegrityScanModel(scan || {}, permission);
-  const categories = archiveIntegrityCategoryPresentations(scanModel.stale ? {} : scan?.category_counts);
-  const findingRows = findings.map(archiveIntegrityFindingPresentation);
-  const selectedRow = selectedFinding ? archiveIntegrityFindingPresentation(selectedFinding) : null;
-  const actionContract = archiveIntegrityActionContract(selectedRow?.actionKey);
-  const resultState = plan && ["completed", "partial", "blocked", "failed", "cancelled"].includes(String(plan.state || ""))
-    ? String(plan.state)
-    : null;
-
-  useEffect(() => {
-    if (!open) return undefined;
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return () => {
-      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus({ preventScroll: true });
-      returnFocusRef.current = null;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || plan) return undefined;
-    const timer = window.setTimeout(() => {
-      const activeElement = document.activeElement;
-      const activeInsideDialog = activeElement instanceof HTMLElement && dialogRef.current?.contains(activeElement);
-      if (!busy && activeInsideDialog && activeElement !== dialogRef.current) return;
-      const target = busy ? dialogRef.current : dialogFocusableElements(dialogRef.current)[0] || dialogRef.current;
-      target?.focus({ preventScroll: true });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [open, busy, plan]);
-
-  useEffect(() => {
-    if (!open || !plan) return undefined;
-    const timer = window.setTimeout(() => {
-      const target = dialogFocusableElements(confirmationRef.current)[0] || confirmationRef.current;
-      target?.focus({ preventScroll: true });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [open, plan, busy]);
-
-  if (!open) return null;
-
-  function handleKeyDown(event) {
-    if (event.key === "Escape" && !busy) {
-      event.preventDefault();
-      onClose();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const elements = dialogFocusableElements(dialogRef.current);
-    if (!elements.length) {
-      event.preventDefault();
-      dialogRef.current?.focus();
-      return;
-    }
-    const first = elements[0];
-    const last = elements[elements.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
-  function handleConfirmationKeyDown(event) {
-    if (event.key === "Escape" && !busy) {
-      event.preventDefault();
-      onClearPlan();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const elements = dialogFocusableElements(confirmationRef.current);
-    if (!elements.length) {
-      event.preventDefault();
-      confirmationRef.current?.focus();
-      return;
-    }
-    const first = elements[0];
-    const last = elements[elements.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
-  const checkedTime = scan?.finished_at || scan?.started_at || scan?.created_at;
-  const canShowFindings = ["completed", "partial"].includes(scanModel.status) && scanModel.found > 0;
-  const primaryStartLabel = scanModel.status === "not_run" ? copy.integrityCheckArchive : copy.integrityCheckAgain;
-  const resultTone = resultState === "completed" ? "ok" : resultState === "failed" ? "error" : "warning";
-  const scanDetail = String(copy[scanModel.detailKey] || copy.integrityScanFailedText)
-    .replace("{count}", String(scanModel.found));
-
-  return (
-    <>
-    <div className="storageIntegrityOverlay" role="presentation" aria-hidden={plan ? "true" : undefined}>
-      <section
-        ref={dialogRef}
-        className="storageIntegrityDialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="storage-integrity-dialog-title"
-        aria-busy={busy ? "true" : "false"}
-        tabIndex={-1}
-        onKeyDown={handleKeyDown}
-      >
-        <header className="storageIntegrityDialogHead">
-          <div>
-            <span className="storageIntegrityEyebrow">{copy.archiveProblems}</span>
-            <h2 id="storage-integrity-dialog-title">{copy.integrityModalTitle}</h2>
-          </div>
-          <button ref={closeRef} className="storageIntegrityClose" type="button" onClick={onClose} disabled={busy} aria-label={copy.close}>×</button>
-        </header>
-
-        <div className="storageIntegrityDialogBody">
-          <section className={`storageIntegrityState storageIntegrityState-${scanModel.tone}`}>
-            <div className="storageIntegrityStateHead">
-              <div>
-                <strong>{copy[scanModel.titleKey] || copy.integrityScanFailedTitle}</strong>
-                <p>{scanModel.stale ? copy.integrityScanStaleText : scanDetail}</p>
-              </div>
-              {checkedTime ? <time dateTime={checkedTime}>{formatDateTime(checkedTime, language)}</time> : null}
-            </div>
-            {scanModel.running ? (
-              <>
-                <div className={`storageIntegrityProgress ${scanModel.progressIndeterminate ? "isIndeterminate" : ""}`} aria-label={copy.integrityProgress}>
-                  <span style={scanModel.progressIndeterminate ? undefined : { width: `${scanModel.percent}%` }} />
-                </div>
-                <div className="storageIntegrityProgressFacts">
-                  <span>{copy.integrityPhase}: {copy[scanModel.phaseKey] || copy.integrityPhaseChecking}</span>
-                  {scanModel.progressIndeterminate
-                    ? <span>{copy.integrityFilesystemChecked}: {scanModel.filesystemChecked}</span>
-                    : <span>{copy.integrityChecked}: {scanModel.metadataChecked}{scanModel.planned ? ` / ${scanModel.planned}` : ""}</span>}
-                  <span>{copy.problems}: {scanModel.found}</span>
-                  {scanModel.failed ? <span>{copy.integrityFailedItems}: {scanModel.failed}</span> : null}
-                </div>
-              </>
-            ) : null}
-          </section>
-
-          {error ? <div className="storageIntegrityMessage storageIntegrityMessage-error" role="alert">{error}</div> : null}
-          {!permission.allowed ? <div className="storageIntegrityMessage storageIntegrityMessage-warning">{permission.reason}</div> : null}
-
-          {categories.length ? (
-            <section className="storageIntegrityCategories" aria-label={copy.integrityCategorySummaryTitle}>
-              {categories.map((item) => (
-                <span key={item.category}>{copy[item.labelKey] || copy.integrityCategoryUnknown}<strong>{item.count}</strong></span>
-              ))}
-            </section>
-          ) : null}
-
-          {canShowFindings ? (
-            <section className="storageIntegrityFindings">
-              <div className="storageIntegritySectionHead">
-                <h3>{copy.integrityFindingsTitle}</h3>
-                <span>{scanModel.found}</span>
-              </div>
-              <div className="storageIntegrityFindingList">
-                {findingRows.map((item, index) => (
-                  <article className={`storageIntegrityFinding storageIntegrityFinding-${item.tone}`} key={item.key || `${item.categoryKey}-${index}`}>
-                    <div className="storageIntegrityFindingHead">
-                      <strong>{copy[item.categoryKey] || copy.integrityCategoryUnknown}</strong>
-                      <span>{copy[item.detailKey] || copy[item.impactKey] || copy.integrityImpactUnknown}</span>
-                    </div>
-                    <dl>
-                      {item.cameraName ? <div><dt>{copy.camera}</dt><dd>{item.cameraName}</dd></div> : null}
-                      {item.rootLabel ? <div><dt>{copy.integrityRootLabel}</dt><dd>{item.rootLabel}</dd></div> : null}
-                      {item.displayName ? <div><dt>{copy.integrityFileLabel}</dt><dd>{item.displayName}</dd></div> : null}
-                    </dl>
-                    <div className="storageIntegrityFindingAction">
-                      {item.actionAllowed && !item.stale ? (
-                        <button className={`button secondary small appIllustratedAction storageIntegrityIconAction settingsInfoTip ${item.destructive ? "isDestructive" : ""}`} type="button" onClick={() => onPrepare(findings[index])} disabled={busy || scanModel.stale} title={copy[item.actionLabelKey]} aria-label={copy[item.actionLabelKey]}>
-                          <img src={INTEGRITY_ACTION_ICONS[item.actionKey] || "/assets/icons/ui/open.png"} alt="" aria-hidden="true" />
-                          <span className="settingsInfoBubble" role="tooltip">{copy[item.actionLabelKey]}</span>
-                        </button>
-                      ) : (
-                        <span>{item.stale ? copy.integrityNoActionStale : copy[item.noActionLabelKey] || copy.integrityNoActionUnavailable}</span>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-              {nextCursor ? (
-                <button className="button secondary small storageIntegrityLoadMore" type="button" onClick={onLoadMore} disabled={busy}>
-                  {busy ? copy.loading : copy.integrityLoadMore}
-                </button>
-              ) : null}
-            </section>
-          ) : null}
-
-          {["completed", "partial"].includes(scanModel.status) && scanModel.found === 0 ? (
-            <div className="storageIntegrityClean">{copy.integrityNoFindings}</div>
-          ) : null}
-
-        </div>
-
-        <footer className="storageIntegrityDialogFooter">
-          <button className="button secondary small" type="button" onClick={onClose} disabled={busy}>{copy.close}</button>
-          <div className="storageIntegrityDialogPrimaryActions">
-            {scanModel.canCancel ? <button className="button secondary small" type="button" onClick={onCancel} disabled={busy}>{copy.integrityCancelScan}</button> : null}
-            {scanModel.canStart ? <button className="button small" type="button" onClick={onStart} disabled={busy || !permission.allowed}>{busy ? copy.checking : primaryStartLabel}</button> : null}
-          </div>
-        </footer>
-      </section>
-    </div>
-    {selectedRow && plan ? (
-      <div className="storageIntegrityConfirmationOverlay" role="presentation">
-        <section
-          ref={confirmationRef}
-          className={`storageIntegrityConfirmation storageIntegrityPlan-${resultTone}`}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="storage-integrity-confirmation-title"
-          tabIndex={-1}
-          onKeyDown={handleConfirmationKeyDown}
-        >
-          <header>
-            <h3 id="storage-integrity-confirmation-title">{resultState ? copy.integrityResultTitle : copy.integrityConfirmationTitle}</h3>
-            <button className="storageIntegrityClose" type="button" onClick={onClearPlan} disabled={busy} aria-label={copy.close}>×</button>
-          </header>
-          <strong>{copy[selectedRow.categoryKey] || copy.integrityCategoryUnknown}</strong>
-          {selectedRow.cameraName ? <span>{selectedRow.cameraName}</span> : null}
-          {selectedRow.displayName ? <span>{selectedRow.displayName}</span> : null}
-          <p>{resultState
-            ? copy[`integrityResult${resultState.charAt(0).toUpperCase()}${resultState.slice(1)}`] || copy.integrityResultFailed
-            : copy[actionContract.confirmationKey] || copy.integrityNoActionUnavailable}</p>
-          {error ? <div className="storageIntegrityMessage storageIntegrityMessage-error" role="alert">{error}</div> : null}
-          <footer>
-            {!resultState ? (
-              <>
-                <button className="button secondary small" type="button" onClick={onClearPlan} disabled={busy}>{copy.cancel}</button>
-                <button className={`button small ${actionContract.destructive ? "dangerButton" : ""}`} type="button" onClick={onApply} disabled={busy}>
-                  {busy ? copy.applying : copy[selectedRow.actionLabelKey] || copy.integrityApplyAction}
-                </button>
-              </>
-            ) : (
-              <button className="button secondary small" type="button" onClick={onClearPlan}>{copy.integrityAcknowledgeResult}</button>
-            )}
-          </footer>
-        </section>
-      </div>
-    ) : null}
-    </>
   );
 }
 
@@ -1028,9 +738,10 @@ function StorageOperationsPageContent() {
     allowed: Boolean(manageSettingsPermission.allowed && retentionPermission.allowed),
     reason: !manageSettingsPermission.allowed ? manageSettingsPermission.reason : !retentionPermission.allowed ? retentionPermission.reason : "",
   };
-  const { integrityDialogOpen, setIntegrityDialogOpen, integrityScan, setIntegrityScan, integrityFindings, setIntegrityFindings, integrityNextCursor, setIntegrityNextCursor, integrityBusy, setIntegrityBusy, integrityError, setIntegrityError, integritySelectedFinding, setIntegritySelectedFinding, integrityPlan, setIntegrityPlan, loadIntegrityFindingPage, openIntegrityDialog, startIntegrityScan, cancelIntegrityScan, loadMoreIntegrityFindings, prepareIntegrityAction, applyIntegrityAction, clearIntegrityPlan } = useStorageIntegrityController({
-    diagnosticsPermission, copy, language, loadStatus, requireFreshStorageStatus,
+  const integrityController = useStorageIntegrityController({
+    diagnosticsPermission, currentUser, copy, language, loadStatus, requireFreshStorageStatus, setOperationToast,
   });
+  const { openIntegrityDialog } = integrityController;
   const { migrationDialogOpen, setMigrationDialogOpen, migrationSourceRootId, setMigrationSourceRootId, migrationTargetRootId, setMigrationTargetRootId, migrationPlan, setMigrationPlan, migrationOperation, setMigrationOperation, migrationBusy, setMigrationBusy, migrationMessage, setMigrationMessage, migrationScenario, openMigrationDialog, resetMigrationDraft, selectMigrationSource, selectMigrationTarget, prepareMigrationPlan, applyMigration, cancelMigration, retryMigration, takeoverMigrationCleanup } = useStorageMigrationController({
     archiveRoots, currentArchiveRoot, currentUser, manageSettingsPermission, migrationApplyPermission, requestedMigrationOperationId, copy, language, loadStatus, requireFreshStorageStatus,
   });
@@ -1897,24 +1608,10 @@ function StorageOperationsPageContent() {
           </>
         )}
         <ArchiveIntegrityDialog
-          open={integrityDialogOpen}
-          scan={integrityScan}
-          findings={integrityFindings}
-          nextCursor={integrityNextCursor}
-          busy={integrityBusy}
-          error={integrityError}
-          selectedFinding={integritySelectedFinding}
-          plan={integrityPlan}
+          controller={integrityController}
           copy={copy}
           language={language}
           permission={diagnosticsPermission}
-          onClose={() => setIntegrityDialogOpen(false)}
-          onStart={startIntegrityScan}
-          onCancel={cancelIntegrityScan}
-          onLoadMore={loadMoreIntegrityFindings}
-          onPrepare={prepareIntegrityAction}
-          onClearPlan={clearIntegrityPlan}
-          onApply={applyIntegrityAction}
         />
         <ArchiveMigrationDialog
           open={migrationDialogOpen}

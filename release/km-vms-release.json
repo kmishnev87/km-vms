@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.7",
-  "tag": "v0.9.7",
-  "title": "Automatic PTZ control and frame-aware workspaces",
-  "summary": "Control supported ONVIF PTZ cameras directly in KM VMS, with low-latency video while PTZ is open, point and supported area positioning, and movable fullscreen controls. Fit complete frames into Online and Chronology with consistent compact toolbars, while preserving the ordinary viewing and archive workflows.",
+  "version": "0.9.8",
+  "tag": "v0.9.8",
+  "title": "Archive review and clear system status",
+  "summary": "Review archive findings with filters and exact bulk actions. Recheck, correct supported recording states, delete unneeded recordings or keep files with a persistent review decision. System status explains archive warnings separately from current recording health.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.7",
+  "source_ref": "v0.9.8",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,67 +20,59 @@
     "target_version": 10
   },
   "changelog": [
-    "Detect PTZ for the saved ONVIF profile and lens through Media1/Media2; do not confuse panoramic and moving lenses.",
-    "Provide move, zoom, Stop and existing presets with permission checks, bounded camera commands and ordered quick taps.",
-    "Use MSE/WebSocket video only for the camera whose PTZ controls are open; retain ordinary HLS viewing and fallback.",
-    "Support point positioning and advertised ONVIF area positioning, with a narrowly detected Dahua area-zoom adapter where required.",
-    "Add a discrete draggable speed slider and a translucent, movable fullscreen PTZ panel whose position lasts only for the current view.",
-    "Keep fullscreen Main/Sub and audio controls compact; preserve listening intent when switching streams.",
-    "Cache source-scoped Main/Sub dimensions from existing connection checks, without database changes or new background camera probes.",
-    "Add optional automatic full-frame packing to Online and Chronology; a second press disables it without moving tiles.",
-    "Unify both camera toolbars with five equal icon buttons, clear tooltips and a close-all-views action that does not delete cameras or recordings.",
-    "Correct Online viewport sizing and desktop Chronology height; preserve archive time and playback identities while rearranging.",
-    "Prevent initial layout loading from overwriting early actions and repair the stale single-tile close handler in Chronology."
+    "Redesign archive integrity review with a wider adaptive dialog, top filters, compact rows and full-width details.",
+    "Select individual recordings, loaded pages or all matching findings, with exclusions and an exact confirmed selection.",
+    "Run durable bulk review actions with per-item results, cancellation, retry and restart recovery; keep existing exact file-deletion safeguards.",
+    "Keep reviewed files without claiming they were repaired; unchanged findings remain reviewed across checks, while changed files require review again.",
+    "Close related findings when recordings are removed through ordinary deletion or retention.",
+    "Explain archive findings in System Status, recognize completed checks and refresh the shared indicator after actions without reloading the page.",
+    "Correct deletion eligibility for inactive empty and stuck recordings, and distinguish analysis timeout from proven corruption.",
+    "Reuse the existing operation ledger without database schema changes, new containers or recurring filesystem scans.",
+    "Use the product timezone for review dates and calendar filters, including existing local-time recordings."
   ],
   "title_i18n": {
-    "en": "Automatic PTZ control and frame-aware workspaces",
-    "ru": "Автоматическое PTZ-управление и раскладка по кадру",
-    "zh-CN": "自动云台控制与按画面排列"
+    "en": "Archive review and clear system status",
+    "ru": "Разбор архива и понятное состояние системы",
+    "zh-CN": "归档问题处理与清晰的系统状态"
   },
   "summary_i18n": {
-    "en": "Control supported ONVIF PTZ cameras directly in KM VMS, with low-latency video while PTZ is open, point and supported area positioning, and movable fullscreen controls. Fit complete frames into Online and Chronology with consistent compact toolbars, while preserving the ordinary viewing and archive workflows.",
-    "ru": "Управляйте поддерживаемыми ONVIF PTZ-камерами прямо в KM VMS: видео с малой задержкой при открытом пульте, наведение по точке и поддерживаемой рамке, перемещаемый полноэкранный пульт. В «Онлайн» и «Хронологии» добавлены раскладка по полному кадру и одинаковые компактные панели; обычный просмотр и работа с архивом сохранены.",
-    "zh-CN": "直接在 KM VMS 中控制受支持的 ONVIF 云台摄像机，打开云台控制时使用低延迟视频，并提供点击定位、受支持的框选放大及可拖动的全屏控制面板。实时与时间轴工作区新增完整画面排列和统一紧凑工具栏，同时保留原有浏览与录像流程。"
+    "en": "Review archive findings with filters and exact bulk actions. Recheck, correct supported recording states, delete unneeded recordings or keep files with a persistent review decision. System status explains archive warnings separately from current recording health.",
+    "ru": "Разбирайте замечания архива с фильтрами и массовыми действиями: перепроверка, доступное исправление состояний, удаление ненужных записей или сохранение файла с отметкой о разборе. Состояние системы объясняет предупреждения архива отдельно от текущей записи.",
+    "zh-CN": "使用筛选和精确的批量操作处理归档问题：复查、修正支持的录像状态、删除不需要的录像，或保留文件并持久记录审阅决定。系统状态分别说明归档警告与当前录像健康状况。"
   },
   "changelog_i18n": {
     "en": [
-      "Detect PTZ for the saved ONVIF profile and lens through Media1/Media2; do not confuse panoramic and moving lenses.",
-      "Provide move, zoom, Stop and existing presets with permission checks, bounded camera commands and ordered quick taps.",
-      "Use MSE/WebSocket video only for the camera whose PTZ controls are open; retain ordinary HLS viewing and fallback.",
-      "Support point positioning and advertised ONVIF area positioning, with a narrowly detected Dahua area-zoom adapter where required.",
-      "Add a discrete draggable speed slider and a translucent, movable fullscreen PTZ panel whose position lasts only for the current view.",
-      "Keep fullscreen Main/Sub and audio controls compact; preserve listening intent when switching streams.",
-      "Cache source-scoped Main/Sub dimensions from existing connection checks, without database changes or new background camera probes.",
-      "Add optional automatic full-frame packing to Online and Chronology; a second press disables it without moving tiles.",
-      "Unify both camera toolbars with five equal icon buttons, clear tooltips and a close-all-views action that does not delete cameras or recordings.",
-      "Correct Online viewport sizing and desktop Chronology height; preserve archive time and playback identities while rearranging.",
-      "Prevent initial layout loading from overwriting early actions and repair the stale single-tile close handler in Chronology."
+      "Redesign archive integrity review with a wider adaptive dialog, top filters, compact rows and full-width details.",
+      "Select individual recordings, loaded pages or all matching findings, with exclusions and an exact confirmed selection.",
+      "Run durable bulk review actions with per-item results, cancellation, retry and restart recovery; keep existing exact file-deletion safeguards.",
+      "Keep reviewed files without claiming they were repaired; unchanged findings remain reviewed across checks, while changed files require review again.",
+      "Close related findings when recordings are removed through ordinary deletion or retention.",
+      "Explain archive findings in System Status, recognize completed checks and refresh the shared indicator after actions without reloading the page.",
+      "Correct deletion eligibility for inactive empty and stuck recordings, and distinguish analysis timeout from proven corruption.",
+      "Reuse the existing operation ledger without database schema changes, new containers or recurring filesystem scans.",
+      "Use the product timezone for review dates and calendar filters, including existing local-time recordings."
     ],
     "ru": [
-      "PTZ определяется по сохранённому ONVIF-профилю и объективу через Media1/Media2; панорамный и поворотный объективы не смешиваются.",
-      "Поворот, зум, Stop и существующие позиции работают с проверкой прав, ограниченными командами камеры и очередью быстрых нажатий.",
-      "MSE/WebSocket включается только у камеры с открытым пультом PTZ; обычный HLS-просмотр и возврат к нему сохранены.",
-      "Добавлены наведение по точке и объявленная ONVIF-поддержка рамки; для нуждающихся в этом Dahua используется ограниченно определяемый адаптер.",
-      "Ползунок скорости получил дискретное перетаскивание; полупрозрачный полноэкранный пульт можно перемещать, его положение живёт только в текущем просмотре.",
-      "В fullscreen доступны компактные Main/Sub и звук; выбор прослушивания сохраняется при переключении потоков.",
-      "Размеры Main/Sub сохраняются из существующих проверок подключения с привязкой к источнику, без изменения БД и нового фонового опроса камер.",
-      "В «Онлайн» и «Хронологии» добавлена автоматическая раскладка полных кадров; повторное нажатие выключает режим, не двигая плитки.",
-      "Обе панели камер получили пять равных значков с понятными подсказками и общее закрытие просмотров без удаления камер и записей.",
-      "Исправлена высота «Онлайн» и настольной «Хронологии»; перестановка плиток не меняет выбранное время и источники архивного воспроизведения.",
-      "Начальная загрузка раскладки больше не затирает ранние действия; в «Хронологии» исправлен устаревший обработчик закрытия отдельной плитки."
+      "Проверка архива получила широкое адаптивное окно, фильтры сверху, компактные строки и подробности на полной ширине.",
+      "Можно выбрать отдельные записи, загруженную страницу или все результаты фильтра с исключением отдельных строк и подтверждением точного состава.",
+      "Массовые действия сохраняются на сервере: результат каждого объекта, остановка, повтор и восстановление после прерывания. Защита удаления файлов сохранена.",
+      "Файл можно сохранить и отметить разобранным, не выдавая его за исправный; неизменное замечание не возвращается после проверки, а изменение файла требует нового разбора.",
+      "Удаление записей обычным способом или по правилам хранения закрывает связанные замечания.",
+      "Состояние системы объясняет проблемы архива, распознаёт завершённые проверки и обновляет общий индикатор после действий без F5.",
+      "Исправлена доступность удаления неактивных пустых и зависших записей; таймаут анализа больше не считается доказанным повреждением.",
+      "Использован существующий журнал операций без изменения схемы БД, новых контейнеров и повторяющегося сканирования файлов.",
+      "Даты и календарные фильтры разбора используют часовой пояс приложения, в том числе для существующих записей с локальным временем."
     ],
     "zh-CN": [
-      "通过 Media1/Media2 根据已保存的 ONVIF 配置与镜头识别云台，区分全景与可转动镜头。",
-      "提供移动、变焦、停止及已有预置位，保留权限检查、有限时摄像机指令及快速点击队列。",
-      "仅为已打开云台控制的摄像机启用 MSE/WebSocket 视频，保留普通 HLS 浏览及回退。",
-      "支持点击定位与明确声明的 ONVIF 框选定位；对需要的 Dahua 设备使用受限识别的框选放大适配器。",
-      "速度滑块支持离散拖动，半透明全屏云台面板可移动，位置仅保留在当前浏览会话中。",
-      "全屏内提供紧凑主/子码流与音频控制，切换码流时保留收听选择。",
-      "从现有连接检查缓存与来源绑定的主/子码流尺寸，不修改数据库或新增后台摄像机探测。",
-      "实时与时间轴新增可选完整画面自动排列，再次点击关闭模式且不移动窗口。",
-      "统一两个摄像机工具栏，提供五个等宽图标、清晰提示及关闭全部浏览，不删除摄像机或录像。",
-      "修正实时工作区及桌面时间轴高度，调整窗口不改变所选录像时间或播放源标识。",
-      "防止首次布局加载覆盖过早操作，并修复时间轴单窗口关闭处理函数的失效引用。"
+      "归档完整性检查采用更宽的自适应窗口、顶部筛选、紧凑列表和全宽详情。",
+      "可选择单项、已加载页面或所有匹配结果，并排除指定项目及确认精确范围。",
+      "批量操作保存在服务器上，提供逐项结果、停止、重试和中断恢复，保留精确文件删除保护。",
+      "可保留文件并标记已审阅，而不将其标记为已修复；不变的问题不会重复出现，文件变化后重新要求审阅。",
+      "通过常规删除或保留策略移除录像时，自动关闭相关问题。",
+      "系统状态说明归档问题，识别已完成检查，并在操作后刷新共享指示器，无需重新加载页面。",
+      "修正非活动空录像及卡住录像的删除资格；分析超时不再被视为已确认损坏。",
+      "复用现有操作日志，不修改数据库结构、不新增容器或重复文件系统扫描。",
+      "处理列表的日期和日历筛选使用应用时区，兼容现有的本地时间录像。"
     ]
   }
 }

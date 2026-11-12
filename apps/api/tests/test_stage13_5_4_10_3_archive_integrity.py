@@ -756,14 +756,14 @@ def test_stable_failed_missing_recording_can_be_retired_but_reappeared_file_bloc
     assert retired.status == "deleted" and retired.deleted_at is not None
 
 
-def test_stale_writing_without_exact_receipt_stays_unresolved_without_false_action(stage4103):
+def test_stale_writing_without_exact_receipt_offers_explicit_delete_not_false_repair(stage4103):
     camera = add_camera(stage4103)
     segment, path = add_segment(stage4103, camera, name="stale-writing.mkv", status="writing")
     result = run_scan(stage4103, key="stale-writing-scan")
     finding = next(row for row in active_findings(stage4103, result["scan_id"]) if row.segment_id == segment.id)
     assert finding.category == "stale_writing_segment"
-    assert finding.action_key is None
-    assert finding.no_action_reason == "automatic_reconciliation_pending"
+    assert finding.action_key == "delete_unusable_recording"
+    assert finding.no_action_reason is None
     with pytest.raises(IntegrityRemediationBlocked):
         create_remediation_plan(
             stage4103.db,
