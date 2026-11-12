@@ -481,6 +481,8 @@
 .archiveReviewConfirmation, .archiveReviewBatch { display: grid; gap: 5px; min-width: 0; color: #0f172a; font-size: 13px; }
 .archiveReviewConfirmation > span, .archiveReviewBatch > span { color: #64748b; font-size: 12px; line-height: 1.4; }
 .archiveReviewConfirmation > span { max-width: 80ch; }
+.archiveReviewConfirmation { max-height: 110px; overflow-y: auto; overscroll-behavior: contain; }
+.archiveReviewPlanCounts { display: flex; flex-wrap: wrap; gap: 5px 20px; }
 .archiveReviewActionButtons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .archiveReviewBatch progress { width: 100%; height: 6px; accent-color: #2563eb; }
 .archiveReviewBatch progress.isComplete { accent-color: #15803d; }

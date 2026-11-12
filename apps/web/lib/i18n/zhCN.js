@@ -1,5 +1,10 @@
 export const zhCNDictionary = {
   archiveReview: {
+    checking: "归档检查仍在进行中。请等待检查完成后查看最终问题列表。",
+    scanIncomplete: "检查未完成。请重新检查以获取当前问题列表。",
+    scanStale: "检查后归档已发生变化。请重新检查。",
+    mixedActions: "已在各行分配操作", actionUnavailable: "不可用",
+    confirmPlanHint: "每条录像将执行其所在行选择的操作。",
     listFailed: "无法加载问题列表，请点击刷新。",
     resultText: { resolved: "此问题已不再适用。", confirmed: "复查已确认该问题，仍保留在列表中。", retired: "已从目录中移除缺失文件的引用。", delete: "选中的录像已删除。", acknowledge: "文件已保留，问题审阅已完成。", reopen: "此问题重新需要处理。", repair: "已修正录像状态，文件未删除。" },
     summaryHint: "归档问题与当前录像健康状态分别显示。", lastFullCheck: "完整检查", checkResult: "检查结果",
@@ -22,6 +27,8 @@ export const zhCNDictionary = {
     batchStates: { queued: "操作已接受", running: "正在处理录像", cancel_requested: "将在当前项目完成后停止", completed: "操作已完成", partial: "已完成但存在问题", blocked: "操作未完成", failed: "处理出错", cancelled: "处理已停止" },
     resultStates: { queued: "排队中", prepared: "排队中", running: "处理中", completed: "已完成", partial: "部分完成", blocked: "未完成", failed: "失败", cancelled: "已取消" },
     reasons: {
+      integrity_review_selection_invalid: "请检查选中的录像和操作。刷新列表后重新选择。",
+      archive_integrity_missing_not_finalized: "此录像的状态尚不允许移除目录引用。请在录像停止后重新检查。",
       integrity_review_selection_changed: "选择范围或录像状态已变化。请刷新并重新确认。",
       integrity_review_permission_denied: "您没有执行此操作的权限。",
       integrity_review_batch_too_large: "每次操作最多选择 2000 个对象。请使用筛选缩小范围。",

@@ -141,6 +141,7 @@ class IntegrityReviewRequest(BaseModel):
 
     action: str = Field(pattern=r"^(recheck|repair|delete|acknowledge|reopen)$")
     selection: dict
+    action_overrides: dict[str, str] = Field(default_factory=dict, max_length=2000)
 
 
 class IntegrityReviewApplyRequest(IntegrityReviewRequest):
@@ -1358,7 +1359,8 @@ def storage_integrity_review_preview(scan_id: str, payload: IntegrityReviewReque
     from app.services.archive_integrity_review import preview_review_action
     try:
         return preview_review_action(db, scan_id=scan_id, action=payload.action,
-                                     selection=payload.selection, actor=current_user)
+                                     selection=payload.selection, actor=current_user,
+                                     action_overrides=payload.action_overrides)
     except StorageOperationContractError as exc:
         raise _review_error(exc) from exc
 
@@ -1370,7 +1372,7 @@ def storage_integrity_review_apply(scan_id: str, payload: IntegrityReviewApplyRe
     try:
         return enqueue_review_action(db, scan_id=scan_id, action=payload.action, selection=payload.selection,
             selection_hash=payload.selection_hash, idempotency_key=payload.idempotency_key,
-            confirm=payload.confirm, actor=current_user)
+            confirm=payload.confirm, actor=current_user, action_overrides=payload.action_overrides)
     except StorageOperationContractError as exc:
         raise _review_error(exc) from exc
 

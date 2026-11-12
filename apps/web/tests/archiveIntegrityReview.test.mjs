@@ -5,6 +5,7 @@ import { buildDashboardStatusSummary, systemHealthIndicatorModel } from "../lib/
 import { ruDictionary } from "../lib/i18n/ru.js";
 import { enDictionary } from "../lib/i18n/en.js";
 import { zhCNDictionary } from "../lib/i18n/zhCN.js";
+import { archiveIntegrityFindingPresentation } from "../lib/storageArchiveIntegrityHelpers.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const source = read("lib/useArchiveIntegrityReviewController.js");
@@ -56,7 +57,7 @@ function mount() {
   vm.runInNewContext(executable + "\nthis.controller = useStorageIntegrityController; this.failure = reviewFailureText;", context);
   const props = { diagnosticsPermission: { allowed: true }, currentUser: { permissions: ["run_diagnostics", "manage_settings", "delete_recordings"] },
     loadStatus: async () => {}, requireFreshStorageStatus: () => true, setOperationToast: (value) => notices.push(value) };
-  return { requests, notices,
+  return { requests, notices, props,
     render() { cursor = 0; return context.controller(props); },
     effects() { while (effects.length) effects.shift()(); },
     failure: context.failure,
@@ -111,4 +112,151 @@ assert.match(styles, /\.archiveReviewTable \.archiveReviewDetailsRow > td\s*\{[^
 assert.match(styles, /\.archiveReviewDetails dl\s*\{[^}]*display:\s*grid/);
 assert.match(styles, /\.archiveReviewDetails dl > div\s*\{[^}]*display:\s*grid/);
 assert.match(styles, /@media \(max-width: 480px\)[\s\S]*?\.archiveReviewDetails dl\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
-console.log("Archive review: indicator explanations, locale parity, filter races, exact bulk scope and stale preview PASS");
+
+const fixtureRows = ["one", "two", "three"].map((id) => ({ finding_id: id, state: "active",
+  actions: ["recheck", "delete", "acknowledge"] }));
+async function loadedApp(scan = { scan_id: "scan-ready", status: "completed" }) {
+  const instance = mount();
+  let current = instance.render(); instance.effects();
+  const opening = current.openIntegrityDialog();
+  current = instance.render();
+  assert.equal(current.opening, true, "initial fetch is loading, not 'never checked'");
+  instance.requests.find((r) => r.path === "/storage/integrity/scans/latest").resolve(scan);
+  instance.requests.find((r) => r.path === "/storage/integrity/actions/latest").resolve(null);
+  await opening; await settle(); current = instance.render(); instance.effects();
+  for (const request of instance.requests.filter((r) => r.path.includes("/findings?"))) {
+    request.resolve({ items: fixtureRows, total_count: 3, next_cursor: "next-page", cameras: [], roots: [], categories: [], review_counts: {} });
+  }
+  await settle(); current = instance.render(); instance.effects();
+  return { instance, current };
+}
+
+// A row dropdown stages its own action and selection; it never launches a
+// single-row preview or silently rewrites a different selected row.
+const staged = await loadedApp();
+let s = staged.current;
+const beforeStage = staged.instance.requests.length;
+s.stageRowAction("one", "delete"); s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.rowAction("one"), "delete"); assert.equal(s.isSelected("one"), true);
+s.stageRowAction("two", "acknowledge"); s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.selectedCount, 2); assert.equal(s.rowAction("one"), "delete");
+assert.equal(s.rowAction("two"), "acknowledge"); assert.equal(s.confirmation, null);
+assert.equal(staged.instance.requests.length, beforeStage, "choosing a row action must not call the server");
+s.togglePage(); s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.selectedCount, 3); assert.equal(s.rowAction("one"), "delete", "select page preserves existing row assignments");
+assert.equal(s.rowAction("two"), "acknowledge"); assert.equal(s.rowAction("three"), "recheck");
+const mixedPreview = s.prepareAction();
+const mixedRequest = staged.instance.requests.at(-1);
+const mixedBody = JSON.parse(mixedRequest.options.body);
+assert.deepEqual(mixedBody.selection.ids.sort(), ["one", "three", "two"]);
+assert.deepEqual(mixedBody.action_overrides, { one: "delete", two: "acknowledge" });
+mixedRequest.resolve({ scan_id: "scan-ready", action: "mixed", eligible_count: 3, selection_hash: "hash",
+  action_counts: [{ action: "delete", eligible_count: 1 }, { action: "acknowledge", eligible_count: 1 }, { action: "recheck", eligible_count: 1 }] });
+await mixedPreview; s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.confirmation.action_counts.length, 3);
+s.toggleSelected("three"); s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.confirmation, null, "checkbox changes invalidate already-visible confirmation");
+const countBeforeStaleApply = staged.instance.requests.length;
+await s.applyAction();
+assert.equal(staged.instance.requests.length, countBeforeStaleApply);
+s.setBulkAction("acknowledge"); s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.rowAction("one"), "acknowledge", "an explicit bulk action replaces staged row choices");
+assert.equal(s.rowAction("two"), "acknowledge");
+s.stageRowAction("one", ""); s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.isSelected("one"), false); assert.equal(s.rowAction("one"), "");
+
+// Draft invalidation is separate from list sequencing: changing a checkbox
+// while another page arrives cannot strand the dialog in loading forever.
+const nextPage = s.loadMoreIntegrityFindings();
+const pendingPage = staged.instance.requests.at(-1);
+s.toggleSelected("three"); s = staged.instance.render(); staged.instance.effects();
+pendingPage.resolve({ items: [{ finding_id: "four", actions: ["recheck"] }], total_count: 4 });
+await nextPage; s = staged.instance.render(); staged.instance.effects();
+assert.equal(s.loading, false); assert.equal(s.page.items.length, 4);
+
+// An in-flight destructive preview cannot reappear after starting a scan.
+const scanRace = await loadedApp();
+let r = scanRace.current;
+r.stageRowAction("one", "delete"); r = scanRace.instance.render(); scanRace.instance.effects();
+const delayedPreview = r.prepareAction();
+const delayedRequest = scanRace.instance.requests.at(-1);
+const start = r.startIntegrityScan();
+const startRequest = scanRace.instance.requests.at(-1);
+assert.equal(startRequest.path, "/storage/integrity/scans");
+assert.equal(scanRace.instance.render().scanStarting, true, "the pre-response stage is explicitly busy too");
+delayedRequest.resolve({ scan_id: "scan-ready", action: "delete", eligible_count: 1, selection_hash: "old" });
+await delayedPreview;
+startRequest.resolve({ scan_id: "scan-new", status: "queued" });
+await start; await settle(); r = scanRace.instance.render(); scanRace.instance.effects();
+assert.equal(r.confirmation, null); assert.equal(r.selectedCount, 0); assert.equal(r.reviewable, false);
+const callsWhileScanning = scanRace.instance.requests.length;
+await r.prepareAction("delete"); await r.applyAction();
+assert.equal(scanRace.instance.requests.length, callsWhileScanning, "no preview/apply is sent against a running check");
+
+// A visible confirmation is cleared immediately too, before POST completes.
+const visible = await loadedApp();
+let v = visible.current;
+v.stageRowAction("one", "delete"); v = visible.instance.render(); visible.instance.effects();
+const preparingVisible = v.prepareAction();
+visible.instance.requests.at(-1).resolve({ scan_id: "scan-ready", action: "delete", eligible_count: 1, selection_hash: "visible" });
+await preparingVisible; v = visible.instance.render(); visible.instance.effects();
+assert.ok(v.confirmation);
+const startingVisible = v.startIntegrityScan();
+v = visible.instance.render();
+assert.equal(v.confirmation, null, "a new check immediately drops the previous destructive confirmation");
+visible.instance.requests.at(-1).resolve({ scan_id: "new-visible", status: "queued" }); await startingVisible;
+
+const rejectedScan = await loadedApp();
+const rejectedStart = rejectedScan.current.startIntegrityScan();
+rejectedScan.instance.requests.at(-1).reject(new Error("request lost"));
+await rejectedStart;
+const rejectedState = rejectedScan.instance.render(); rejectedScan.instance.effects();
+assert.equal(rejectedState.listFailed, true, "a failed scan request cannot turn a cleared list into a false healthy result");
+
+// A failed initial fetch can be retried; it is never reported as a virgin or
+// healthy archive, and it cannot leave destructive controls enabled.
+const failedOpen = mount(); let f = failedOpen.render(); failedOpen.effects();
+const openingFailure = f.openIntegrityDialog();
+failedOpen.requests[0].reject(new Error("offline")); failedOpen.requests[1].resolve(null);
+await openingFailure; f = failedOpen.render(); failedOpen.effects();
+assert.equal(f.listFailed, true); assert.equal(f.opening, false); assert.equal(f.reviewable, false);
+const refreshFailure = f.refreshReview();
+assert.equal(failedOpen.requests.at(-1).path, "/storage/integrity/scans/latest");
+failedOpen.requests.at(-1).resolve({ status: "not_run" }); await refreshFailure;
+f = failedOpen.render(); failedOpen.effects(); assert.equal(f.listFailed, false);
+
+// Applying a mixed confirmation sends its original base action plus bound
+// per-row overrides. Retrying failures retains each failed row's own action.
+const retry = await loadedApp(); let q = retry.current;
+q.stageRowAction("one", "delete"); q.stageRowAction("two", "acknowledge");
+q = retry.instance.render(); retry.instance.effects();
+const retryPreview = q.prepareAction();
+retry.instance.requests.at(-1).resolve({ scan_id: "scan-ready", action: "mixed", eligible_count: 2, selection_hash: "retry-hash" });
+await retryPreview; q = retry.instance.render(); retry.instance.effects();
+const applyMixed = q.applyAction();
+const applyBody = JSON.parse(retry.instance.requests.at(-1).options.body);
+assert.equal(applyBody.action, "recheck"); assert.deepEqual(applyBody.action_overrides, { one: "delete", two: "acknowledge" });
+retry.instance.requests.at(-1).resolve({ batch_id: "mixed-batch", scan_id: "scan-ready", action: "mixed", requested_action: "recheck", state: "partial", failed_count: 1 });
+await applyMixed; q = retry.instance.render(); retry.instance.effects();
+const retrying = q.retryFailed();
+retry.instance.requests.at(-1).resolve({ items: [{ finding_id: "one", action: "delete", state: "blocked" }], next_cursor: "more-results" });
+await settle();
+assert.match(retry.instance.requests.at(-1).path, /cursor=more-results/);
+retry.instance.requests.at(-1).resolve({ items: [{ finding_id: "two", action: "acknowledge", state: "completed" }] });
+await settle();
+const retryRequest = retry.instance.requests.at(-1);
+assert.match(retryRequest.path, /actions\/preview$/);
+const retryBody = JSON.parse(retryRequest.options.body);
+assert.deepEqual(retryBody.selection.ids, ["one"]); assert.deepEqual(retryBody.action_overrides, { one: "delete" });
+retryRequest.resolve({ scan_id: "scan-ready", action: "delete", eligible_count: 1 }); await retrying;
+
+assert.equal(archiveIntegrityFindingPresentation({ category: "stale_writing_segment", impact_key: "recording_unavailable" }).detailKey,
+  "integrityImpactStateUnconfirmed", "old persisted impact cannot falsely label unconfirmed media as unplayable");
+assert.match(dialog, /value=\{c\.rowAction\(finding.finding_id\)\}/);
+assert.match(dialog, /c\.stageRowAction/);
+assert.match(dialog, /model\.running \? t\("archiveReview\.checking"\)/);
+assert.match(dialog, /c\.opening \|\| c\.scanStarting \? copy\.loading/);
+assert.match(dialog, /c\.integrityBusy \|\| model\.running \? "true"/);
+assert.match(dialog, /archiveReviewPlanCounts/);
+assert.match(dialog, /confirmation\.action_counts/);
+console.log("Archive review: locale parity, staged mixed actions, exact scope, time explanation, loading, scan/preview races, confirmation and retry PASS");

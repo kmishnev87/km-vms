@@ -306,13 +306,20 @@ def _revalidate_missing(db: Session, finding: ArchiveIntegrityFinding) -> tuple[
     if (
         segment.ownership != "KM VMS"
         or segment.source != "recorder"
-        or str(segment.status) not in {"finalized", "failed"}
+        or str(segment.status) not in {"finalized", "failed", "stale_writing"}
     ):
         raise IntegrityRemediationBlocked("archive_integrity_missing_not_finalized")
-    if _active_write_exists(db, segment):
+    # A stale marker is not proof that the recorder has stopped. For this
+    # catalog-only retirement also reject a still-live owning job explicitly.
+    if _active_write_exists(db, segment) or (
+        segment.status == "stale_writing" and segment.job_id and db.query(RecordingJob.id).filter(
+            RecordingJob.id == segment.job_id,
+            RecordingJob.state.in_(("starting", "recording", "stopping", "restarting")),
+        ).first() is not None
+    ):
         raise IntegrityRemediationBlocked("archive_integrity_active_write")
     age_anchor = segment.finalized_at or segment.updated_at or segment.started_at
-    if not age_anchor or datetime.utcnow() - age_anchor < RECENT_WRITE_WINDOW:
+    if not age_anchor or database_now(db) - age_anchor < RECENT_WRITE_WINDOW:
         raise IntegrityRemediationBlocked("archive_integrity_recorder_window_active")
     target = safe_resolve_relative_for_root(relative_ref, root)
     try:
@@ -347,7 +354,7 @@ def _revalidate_stale(db: Session, finding: ArchiveIntegrityFinding) -> tuple[Re
     if _active_write_exists(db, segment):
         raise IntegrityRemediationBlocked("archive_integrity_active_write")
     anchor = segment.updated_at or segment.started_at
-    if not anchor or datetime.utcnow() - anchor < RECENT_WRITE_WINDOW:
+    if not anchor or database_now(db) - anchor < RECENT_WRITE_WINDOW:
         raise IntegrityRemediationBlocked("archive_integrity_recorder_window_active")
     target = safe_resolve_relative_for_root(relative_ref, root)
     try:
@@ -390,7 +397,7 @@ def _revalidate_unusable(db: Session, finding: ArchiveIntegrityFinding) -> tuple
     if _active_write_exists(db, segment):
         raise IntegrityRemediationBlocked("archive_integrity_active_write")
     anchor = segment.updated_at or segment.ended_at or segment.started_at
-    if not anchor or datetime.utcnow() - anchor < RECENT_WRITE_WINDOW:
+    if not anchor or database_now(db) - anchor < RECENT_WRITE_WINDOW:
         raise IntegrityRemediationBlocked("archive_integrity_recorder_window_active")
     target = safe_resolve_relative_for_root(relative_ref, root)
     try:
@@ -437,7 +444,7 @@ def _revalidate_orphan(db: Session, finding: ArchiveIntegrityFinding) -> tuple[N
         or not facts.get("receipt_verified")
         or int(finding.observation_count or 0) < 2
         or not finding.first_observed_at
-        or datetime.utcnow() - finding.first_observed_at < ORPHAN_OBSERVATION_GRACE
+        or database_now(db) - finding.first_observed_at < ORPHAN_OBSERVATION_GRACE
     ):
         raise IntegrityRemediationBlocked("archive_integrity_orphan_evidence_insufficient")
     if (
@@ -459,7 +466,9 @@ def _revalidate_orphan(db: Session, finding: ArchiveIntegrityFinding) -> tuple[N
         raise IntegrityRemediationBlocked("archive_integrity_file_changed") from exc
     if not stat_module.S_ISREG(stat_result.st_mode) or not _stat_facts_match(facts, stat_result):
         raise IntegrityRemediationBlocked("archive_integrity_file_changed")
-    if datetime.utcnow() - datetime.fromtimestamp(stat_result.st_mtime) < ORPHAN_MIN_AGE:
+    # Filesystem epochs are absolute; neither the host nor DB display zone
+    # belongs in this comparison.
+    if datetime.utcnow() - datetime.utcfromtimestamp(stat_result.st_mtime) < ORPHAN_MIN_AGE:
         raise IntegrityRemediationBlocked("archive_integrity_orphan_too_new")
     receipt_id = str(facts.get("receipt_id") or "")
     receipt = db.get(RecorderFileReceipt, receipt_id) if receipt_id else None

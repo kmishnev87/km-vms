@@ -22,6 +22,7 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 - **Your server, your archive.** Video recordings stay on storage you control. Local recording and viewing do not require a camera manufacturer's cloud account or cloud recording service.
 - **Standards-based camera connections.** Use RTSP streams and ONVIF services rather than restricting the entire installation to one camera brand.
 - **A shared view of time.** The Chronology workspace helps you compare recordings from multiple cameras around the same event.
+- **PTZ that follows the camera's capabilities.** Compatible cameras expose movement, zoom, speed, and saved positions without a separate manual PTZ setup. Low-latency video is used during control when the selected stream supports it.
 - **Storage management as part of the product.** Retention rules, archive limits, free-space monitoring, and integrity tools are available alongside recording and playback.
 - **More visibility when something goes wrong.** System Health, recording states, audit history, and diagnostics help distinguish a camera connection problem from a storage or recording problem.
 - **Everyday administration in the browser.** Manage users, camera settings, backups, and published updates through the web interface after installation.
@@ -32,21 +33,23 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 | --- | --- |
 | IP cameras | Add and edit RTSP/ONVIF cameras, check connections, select video sources and main/sub streams, and configure recording. |
 | ONVIF video settings | Discover Media1/Media2 services, read supported encoder settings, and apply camera-provided options for codec, resolution, frame rate, and bitrate where the device exposes them. |
-| Live monitoring | Build a multi-camera viewing workspace, expand individual tiles, and recover viewing after temporary connection interruptions. |
-| Recording | Record video on your NAS/server, monitor recording state, and retry recovery after temporary camera or network failures while recording remains enabled. |
+| Live monitoring | Add or remove multiple cameras, align tiles or automatically fit their frame aspect ratios, and use main/sub stream and audio controls in individual fullscreen views. Recover viewing after temporary connection interruptions. |
+| PTZ control | Automatically detect supported PTZ capabilities for the selected camera/lens. Move, zoom, choose speed or saved positions, and use a movable fullscreen control panel. Point positioning and area zoom are available only through supported device capabilities/control paths. |
+| Recording | Record video on your NAS/server, monitor recording state, and retry after temporary camera or network failures while recording remains enabled. After interruption, readable saved fragments can be finalized without rewriting video; unconfirmed files remain available for review. |
 | Records and playback | Search and filter archive files, play recordings, download source files, and export selected video clips. |
 | Synchronized chronology | Navigate a shared time point across multiple cameras and inspect archive coverage and gaps. |
-| Archive management | Configure retention and size limits, inspect storage usage, and reconcile archive metadata with files. |
+| Archive management | Configure retention and size limits, inspect storage usage, and review archive findings by camera, problem, date, and state. Stage individual or bulk actions, confirm the exact plan, and inspect each result. Keep files and mark findings reviewed, recheck them, or explicitly delete selected recordings. |
+| System Health | Distinguish current camera, recording, storage, and playback problems from findings about older archive files. Historical findings do not by themselves mean that current recording has stopped. |
 | Users and permissions | Separate access through user accounts, roles, and server-enforced permissions. |
 | Maintenance | Create and verify database/configuration backups, inspect diagnostics, and apply published updates with preflight and post-update verification. |
 | Video acceleration | Select supported server-side hardware acceleration when the host, drivers, and video format provide a usable path. |
 | Localization | Switch the interface between English, Simplified Chinese, and Russian. |
 
-ONVIF capabilities are device-dependent: a camera must expose the relevant service and supported options. RTSP compatibility, browser playback, and hardware acceleration also depend on the camera, codec, browser, and server. KM VMS does not claim compatibility with every camera or hardware combination.
+ONVIF capabilities are device-dependent: a camera must expose the relevant service and supported options. A panoramic lens and a PTZ lens on the same device can have different controls. Point positioning and area zoom are not promised for every PTZ camera. RTSP compatibility, browser playback, audio, low-latency video, and hardware acceleration also depend on the camera, codec, browser, and server. KM VMS does not claim compatibility with every camera or hardware combination.
 
 ## Quick start
 
-The example below installs the published **0.9.6** release on a **new installation**. It is not an update command for an existing installation.
+The example below installs the published **[0.9.10](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.10)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
 
 ### 1. Prepare your NAS or Linux server
 
@@ -64,8 +67,8 @@ The installer does **not** install Docker or host packages for you. Host Node.js
 Run these commands in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.6/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.6
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.10/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.10
 ```
 
 The interactive installer uses `$HOME/km-vms` as the default application directory and port `8088`. It asks for confirmation before creating a new application directory. To choose a persistent application directory on your NAS instead, add `--app-dir /path/to/km-vms` to the second command; replace that example path with your own.
@@ -108,12 +111,11 @@ The implementation uses a Python/FastAPI backend, PostgreSQL, Redis, FFmpeg-base
 
 ### Implemented versus planned
 
-Live viewing, recording, records playback, synchronized chronology, retention, ONVIF video configuration, users/roles, diagnostics, backups, and update workflows are implemented.
+Live viewing, recording recovery, records playback, synchronized chronology, retention, archive review and bulk actions, ONVIF video configuration, capability-based PTZ controls, frame-aware workspaces, users/roles, diagnostics, backups, and update workflows are implemented. Available camera controls still depend on the device and lens.
 
 The following are **future work**, not current product promises:
 
 - A native mobile client.
-- PTZ operator controls.
 - Advanced ONVIF event workflows.
 - AI video analytics and object detection.
 - Multi-storage recording placement and archive tiering.
@@ -135,6 +137,14 @@ The connection mechanisms are RTSP and ONVIF, not one manufacturer's cloud API. 
 ### Can I change a camera's video settings from KM VMS?
 
 Yes, when the camera exposes the corresponding ONVIF Media1/Media2 services and encoder options. Available settings are read from the device rather than advertised as universal controls for every camera.
+
+### Can I control a PTZ camera without configuring it separately?
+
+Add the camera normally. If the selected lens exposes supported PTZ capabilities, KM VMS shows its controls automatically. Movement, zoom, speed, and camera-provided saved positions are supported where available. Additional point/area controls appear only when a supported control path is detected; a fixed panoramic lens does not gain PTZ controls just because another lens on the same device can move.
+
+### Does marking an archive finding reviewed repair the video?
+
+No. Keeping a file and marking its finding reviewed records your decision; it does not turn damaged or unconfirmed footage into a verified recording. Rechecking, correcting a supported recording state, and deleting recordings are separate, explicitly confirmed actions. Current recording health and historical archive findings are shown separately.
 
 ### How do I update an existing installation?
 

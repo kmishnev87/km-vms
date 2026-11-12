@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **0.9.6** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.9.10](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.10)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.6/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.6
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.10/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.10
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.6 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.10 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.6 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.10 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:

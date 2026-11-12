@@ -274,18 +274,55 @@ def _selected(db: Session, scan_id: str, selection: dict) -> list[ArchiveIntegri
     return rows
 
 
-def preview_review_action(db: Session, *, scan_id: str, action: str, selection: dict, actor: Any) -> dict:
+def _action_overrides(actor: Any, overrides: dict | None) -> dict[str, str]:
+    if overrides is None:
+        return {}
+    if not isinstance(overrides, dict) or len(overrides) > BATCH_LIMIT or any(
+        not isinstance(key, str) or not key or len(key) > 36 or not isinstance(value, str)
+        for key, value in overrides.items()
+    ):
+        raise StorageOperationContractError("integrity_review_selection_invalid")
+    for action in overrides.values():
+        _require_action(actor, action)
+    return dict(overrides)
+
+
+def _selection_hash(rows: list[ArchiveIntegrityFinding], action: str, overrides: dict) -> str:
+    # Existing single-action clients keep their contract. A staged mixed plan
+    # additionally binds each exact object to its explicitly selected action.
+    if not overrides:
+        return _hash([_snapshot_hash(row) for row in rows])
+    return _hash([[row.id, overrides.get(row.id, action), _snapshot_hash(row)] for row in rows])
+
+
+def preview_review_action(db: Session, *, scan_id: str, action: str, selection: dict, actor: Any,
+                          action_overrides: dict | None = None) -> dict:
     _require_action(actor, action)
+    overrides = _action_overrides(actor, action_overrides)
     scan = db.get(ArchiveIntegrityScan, scan_id)
     if scan is None or scan.is_stale or scan.status not in {"completed", "partial"}:
         raise StorageOperationContractError("archive_integrity_scan_stale")
     rows = _selected(db, scan_id, selection)
-    eligible = [row for row in rows if action in finding_actions(row, role=actor.role)]
-    return {"scan_id": scan_id, "action": action, "selected_count": len(rows), "eligible_count": len(eligible),
-            "unavailable_count": len(rows) - len(eligible),
-            "total_bytes": sum(int((row.observed_facts or {}).get("size_bytes") or 0) for row in eligible) if action == "delete" else 0,
-            "selection_hash": _hash([_snapshot_hash(row) for row in rows]), "batch_limit": BATCH_LIMIT,
-            "destructive": action == "delete"}
+    if set(overrides) - {row.id for row in rows}:
+        raise StorageOperationContractError("integrity_review_selection_changed")
+    counts: dict[str, dict] = {}
+    for row in rows:
+        row_action = overrides.get(row.id, action)
+        count = counts.setdefault(row_action, {"action": row_action, "selected_count": 0,
+            "eligible_count": 0, "unavailable_count": 0, "total_bytes": 0})
+        eligible = row_action in finding_actions(row, role=actor.role)
+        count["selected_count"] += 1
+        count["eligible_count" if eligible else "unavailable_count"] += 1
+        if eligible and row_action == "delete":
+            count["total_bytes"] += int((row.observed_facts or {}).get("size_bytes") or 0)
+    action_counts = [counts[key] for key in ACTION_PERMISSIONS if key in counts]
+    return {"scan_id": scan_id, "action": next(iter(counts)) if len(counts) == 1 else "mixed",
+            "requested_action": action, "action_counts": action_counts,
+            "selected_count": len(rows), "eligible_count": sum(c["eligible_count"] for c in action_counts),
+            "unavailable_count": sum(c["unavailable_count"] for c in action_counts),
+            "total_bytes": sum(c["total_bytes"] for c in action_counts),
+            "selection_hash": _selection_hash(rows, action, overrides), "batch_limit": BATCH_LIMIT,
+            "destructive": bool(counts.get("delete", {}).get("eligible_count"))}
 
 
 def _require_action(actor: Any, action: str) -> None:
@@ -299,29 +336,34 @@ def _identity(progress: dict) -> dict:
 
 
 def enqueue_review_action(db: Session, *, scan_id: str, action: str, selection: dict, actor: Any,
-                          selection_hash: str, idempotency_key: str, confirm: bool) -> dict:
+                          selection_hash: str, idempotency_key: str, confirm: bool,
+                          action_overrides: dict | None = None) -> dict:
     global _next_poll
     _require_action(actor, action)
+    overrides = _action_overrides(actor, action_overrides)
     if not confirm:
         raise StorageOperationContractError("integrity_review_confirmation_required")
     kind, actor_key, user_id, owner = actor_identity(actor)
     existing = db.query(StorageOperation).filter(StorageOperation.operation_type == BATCH_TYPE,
         StorageOperation.actor_key == actor_key, StorageOperation.idempotency_key == idempotency_key).first()
     if existing is not None:
-        if (existing.progress or {}).get("selection_hash") != selection_hash or (existing.progress or {}).get("action") != action or (existing.progress or {}).get("scan_id") != scan_id:
+        saved = existing.progress or {}
+        if saved.get("selection_hash") != selection_hash or saved.get("action") != action or saved.get("scan_id") != scan_id or saved.get("action_overrides", {}) != overrides:
             raise StorageOperationContractError("operation_identity_mismatch")
         return get_review_batch(db, existing.id, actor=actor)
-    preview = preview_review_action(db, scan_id=scan_id, action=action, selection=selection, actor=actor)
+    preview = preview_review_action(db, scan_id=scan_id, action=action, selection=selection, actor=actor,
+                                    action_overrides=overrides)
     if preview["selection_hash"] != selection_hash:
         raise StorageOperationContractError("integrity_review_selection_changed")
     if not preview["eligible_count"]:
         raise StorageOperationContractError("integrity_review_action_unavailable")
     rows = _selected(db, scan_id, selection)
-    if _hash([_snapshot_hash(row) for row in rows]) != selection_hash:
+    if _selection_hash(rows, action, overrides) != selection_hash:
         raise StorageOperationContractError("integrity_review_selection_changed")
     now = database_now(db)
     batch_id = f"integrity-review-{uuid.uuid4().hex}"
     progress = {"scan_id": scan_id, "action": action, "selection_hash": selection_hash,
+                "action_overrides": overrides, "action_counts": preview["action_counts"],
                 "planned_count": preview["selected_count"], "phase": "queued"}
     scope = normalize_operation_scope({"global": False})
     batch = StorageOperation(id=batch_id, operation_type=BATCH_TYPE, actor_kind=kind, actor_key=actor_key,
@@ -333,7 +375,7 @@ def enqueue_review_action(db: Session, *, scan_id: str, action: str, selection: 
     for index, finding in enumerate(rows):
         item_id = f"review-item-{uuid.uuid4().hex}"
         item_progress = {"batch_id": batch_id, "scan_id": scan_id, "finding_id": finding.id,
-                         "action": action, "snapshot_hash": _snapshot_hash(finding), "index": index}
+                         "action": overrides.get(finding.id, action), "snapshot_hash": _snapshot_hash(finding), "index": index}
         db.add(StorageOperation(id=item_id, operation_type=ITEM_TYPE, actor_kind=kind, actor_key=actor_key,
             actor_user_id=user_id, system_owner=owner, idempotency_key=item_id,
             request_fingerprint=request_fingerprint(item_progress), status="prepared", scope=scope,
@@ -351,8 +393,11 @@ def _items(db: Session, batch_id: str):
 def _public_batch(db: Session, batch: StorageOperation) -> dict:
     counts = dict(_items(db, batch.id).with_entities(StorageOperation.status, func.count()).group_by(StorageOperation.status).all())
     finished = sum(int(counts.get(key, 0)) for key in TERMINAL_OPERATION_STATUSES)
-    return {"batch_id": batch.id, "scan_id": (batch.progress or {}).get("scan_id"),
-            "action": (batch.progress or {}).get("action"), "state": batch.status,
+    progress = batch.progress or {}
+    action_counts = progress.get("action_counts", [])
+    return {"batch_id": batch.id, "scan_id": progress.get("scan_id"),
+            "action": "mixed" if len(action_counts) > 1 else action_counts[0]["action"] if action_counts else progress.get("action"),
+            "requested_action": progress.get("action"), "action_counts": action_counts, "state": batch.status,
             "planned_count": int((batch.progress or {}).get("planned_count") or 0), "processed_count": finished,
             "completed_count": int(counts.get("completed", 0)),
             "failed_count": sum(int(counts.get(key, 0)) for key in ("failed", "blocked", "partial")),
@@ -378,6 +423,7 @@ def get_review_batch(db: Session, batch_id: str | None, *, actor: Any, cursor: s
     findings = {row.id: row for row in db.query(ArchiveIntegrityFinding).filter(
         ArchiveIntegrityFinding.id.in_([(r.progress or {}).get("finding_id") for r in rows[:50]])).all()} if rows else {}
     result["items"] = [{"id": row.id, "finding_id": (row.progress or {}).get("finding_id"),
+                        "action": (row.progress or {}).get("action"),
                         "state": "queued" if row.status == "prepared" else row.status, "reason_code": row.reason_code,
                         "camera_name": str(findings[(row.progress or {}).get("finding_id")].camera_name_snapshot or "")[:120] if (row.progress or {}).get("finding_id") in findings else "",
                         "display_name": str(findings[(row.progress or {}).get("finding_id")].display_name or "")[:160] if (row.progress or {}).get("finding_id") in findings else "",
@@ -540,7 +586,7 @@ def _recheck(db: Session, finding: ArchiveIntegrityFinding, *, actor: Any, item_
             finding.is_active = True
         db.add(finding)
         db.flush()
-        view = SimpleNamespace(id=finding.scan_id, scan_cutoff_at=integrity._utcnow(),
+        view = SimpleNamespace(id=finding.scan_id, scan_cutoff_at=database_now(db),
             segment_high_watermark=int(db.query(func.max(RecordingSegment.id)).scalar() or 0))
         integrity._classify_filesystem_entry(db, scan=view, root=root, snapshot=snapshot,
             path=target, relative_ref=str(finding.relative_ref), entry_stat=current_stat)
@@ -567,7 +613,7 @@ def _recheck(db: Session, finding: ArchiveIntegrityFinding, *, actor: Any, item_
     try:
         access = archive_root_runtime_access_state(root)
         view = SimpleNamespace(id=finding.scan_id, root_snapshot=[integrity._root_public_snapshot(root, access)],
-            scan_cutoff_at=integrity._utcnow(), checked_count=0, skipped_count=0, checked_bytes=0,
+            scan_cutoff_at=database_now(db), checked_count=0, skipped_count=0, checked_bytes=0,
             failed_count=0, is_stale=False)
         # Keep a reviewed row's decision; a changed result becomes active again.
         original_state = finding.state

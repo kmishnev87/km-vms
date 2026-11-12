@@ -262,7 +262,9 @@ export function archiveIntegrityFindingPresentation(finding = {}) {
       ? "integrityDetailZeroSize"
       : finding?.category === "partial_file"
         ? "integrityDetailPartial"
-        : null,
+        : finding?.category === "stale_writing_segment"
+          ? "integrityImpactStateUnconfirmed"
+          : null,
     actionLabelKey: ARCHIVE_INTEGRITY_ACTION_KEYS[actionKey] || null,
     noActionLabelKey: permissionDenied
       ? "integrityNoActionPermission"

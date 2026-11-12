@@ -1,5 +1,10 @@
 export const enDictionary = {
   archiveReview: {
+    checking: "The archive check is still running. Wait for it to finish to see the final findings.",
+    scanIncomplete: "The check did not finish. Start a new check to get the current findings.",
+    scanStale: "The archive changed after this check. Start a new check.",
+    mixedActions: "Actions assigned in rows", actionUnavailable: "unavailable",
+    confirmPlanHint: "Each recording will receive the action selected in its row.",
     listFailed: "The findings list could not be loaded. Choose Refresh.",
     resultText: { resolved: "The finding is no longer applicable.", confirmed: "The recheck confirmed the finding, which remains listed.", retired: "The reference to the missing file was removed from the catalog.", delete: "The selected recording was deleted.", acknowledge: "The file was kept and the finding review was completed.", reopen: "The finding needs review again.", repair: "The recording state was corrected without deleting the file." },
     summaryHint: "Archive findings and current recording health are separate.", lastFullCheck: "Full check", checkResult: "Check result",
@@ -22,6 +27,8 @@ export const enDictionary = {
     batchStates: { queued: "Action accepted", running: "Processing recordings", cancel_requested: "Stopping after the current item", completed: "Action completed", partial: "Completed with issues", blocked: "Action not completed", failed: "Processing error", cancelled: "Processing stopped" },
     resultStates: { queued: "Queued", prepared: "Queued", running: "Running", completed: "Completed", partial: "Partial", blocked: "Not completed", failed: "Failed", cancelled: "Cancelled" },
     reasons: {
+      integrity_review_selection_invalid: "Check the selected recordings and actions. Refresh the list and select again.",
+      archive_integrity_missing_not_finalized: "This recording's state does not yet allow its catalog entry to be removed. Recheck after recording has stopped.",
       integrity_review_selection_changed: "The selection or recording state changed. Refresh and confirm again.",
       integrity_review_permission_denied: "You do not have permission for this action.",
       integrity_review_batch_too_large: "Select up to 2000 objects per action. Narrow the selection with filters.",

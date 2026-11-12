@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.9",
-  "tag": "v0.9.9",
-  "title": "Archive review and recording recovery",
-  "summary": "Restore archive review actions on existing storage roots, organize recording details into readable fields, and finalize readable saved video after an interrupted recording process without deleting or rewriting it.",
+  "version": "0.9.10",
+  "tag": "v0.9.10",
+  "title": "Reliable archive review actions",
+  "summary": "Stage actions for multiple recordings, confirm the exact plan together, and safely process older missing or incomplete recordings using consistent recorder and review clocks.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.9",
+  "source_ref": "v0.9.10",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,43 +20,47 @@
     "target_version": 10
   },
   "changelog": [
-    "Prevent explicitly resource-free review queue records from blocking their own recheck or deletion operation on older archive roots.",
-    "Match conservative apply scopes in fresh and durable plan identity; keep real global conflicts and exact file checks enforced.",
-    "Explain actual storage-conflict and active-writer refusal codes in English, Russian and Chinese.",
-    "Separate archive finding explanations, recording details and check results; fix inherited centered text and simplify wording in all three languages.",
-    "Finalize readable video after recorder interruptions without rewriting files. Preserve unconfirmed files, ownership checks and retry; recover only the affected job."
+    "Keep each row's chosen action and select its recording. Confirm different actions together using the existing durable review queue.",
+    "Clear outdated confirmations before a new check; reject late previews and distinguish loading, running and incomplete checks from an empty result.",
+    "Use matching database clocks for recorder safety windows and review observations, and absolute filesystem time for orphan age checks.",
+    "Retire confirmed missing recordings with old stale-writing metadata only after the writer stops; retain root, absence and exact-object checks.",
+    "Explain older stale-writing findings without claiming that untested video is unplayable; preserve per-recording actions when retrying failures.",
+    "Refresh README and installation examples for 0.9.10; document implemented PTZ, frame-aware workspaces, recording recovery and archive review."
   ],
   "title_i18n": {
-    "en": "Archive review and recording recovery",
-    "ru": "Разбор архива и сохранение прерванной записи",
-    "zh-CN": "归档问题处理与录像恢复"
+    "en": "Reliable archive review actions",
+    "ru": "Надёжные действия разбора архива",
+    "zh-CN": "可靠的归档问题处理"
   },
   "summary_i18n": {
-    "en": "Restore archive review actions on existing storage roots, organize recording details into readable fields, and finalize readable saved video after an interrupted recording process without deleting or rewriting it.",
-    "ru": "Исправлены действия разбора на существующих хранилищах. Сведения о записи структурированы, пояснения упрощены. После прерывания записи читаемый сохранённый фрагмент корректно завершается без удаления и перезаписи видео.",
-    "zh-CN": "修复现有存储位置的归档问题处理，将录像详情整理为清晰字段，并在录像进程中断后完成可读取的已保存片段，不删除或重写视频。"
+    "en": "Stage actions for multiple recordings, confirm the exact plan together, and safely process older missing or incomplete recordings using consistent recorder and review clocks.",
+    "ru": "Выбранные действия сохраняются в строках и подтверждаются общим точным планом. Исправлены часы защиты старых записей, удаление ссылок на отсутствующие файлы и состояния выполняющейся проверки.",
+    "zh-CN": "保留多条录像各自选择的操作，统一确认精确计划，并使用一致的录像与审阅时钟安全处理较早的缺失或未完成录像。"
   },
   "changelog_i18n": {
     "en": [
-      "Prevent explicitly resource-free review queue records from blocking their own recheck or deletion operation on older archive roots.",
-      "Match conservative apply scopes in fresh and durable plan identity; keep real global conflicts and exact file checks enforced.",
-      "Explain actual storage-conflict and active-writer refusal codes in English, Russian and Chinese.",
-      "Separate archive finding explanations, recording details and check results; fix inherited centered text and simplify wording in all three languages.",
-      "Finalize readable video after recorder interruptions without rewriting files. Preserve unconfirmed files, ownership checks and retry; recover only the affected job."
+      "Keep each row's chosen action and select its recording. Confirm different actions together using the existing durable review queue.",
+      "Clear outdated confirmations before a new check; reject late previews and distinguish loading, running and incomplete checks from an empty result.",
+      "Use matching database clocks for recorder safety windows and review observations, and absolute filesystem time for orphan age checks.",
+      "Retire confirmed missing recordings with old stale-writing metadata only after the writer stops; retain root, absence and exact-object checks.",
+      "Explain older stale-writing findings without claiming that untested video is unplayable; preserve per-recording actions when retrying failures.",
+      "Refresh README and installation examples for 0.9.10; document implemented PTZ, frame-aware workspaces, recording recovery and archive review."
     ],
     "ru": [
-      "Пустые служебные записи очереди больше не блокируют собственную перепроверку или удаление на старых корнях архива.",
-      "Область защиты файлов согласована для запуска и восстановления плана; реальные конфликты и точные проверки файлов сохранены.",
-      "Добавлены понятные причины отказа при конфликте операций и активной записи на английском, русском и китайском.",
-      "Разделены описание проблемы, поля записи и результат проверки. Исправлено случайное центрирование текста, упрощены пояснения на трёх языках.",
-      "Читаемые фрагменты после прерывания записи завершаются без перезаписи видео. Неподтверждённые файлы сохраняются; привязка файлов и автоматический повтор записи защищены."
+      "Действие остаётся в строке и включает её галочку. Разные действия подтверждаются общим планом в существующей устойчивой очереди.",
+      "Новая проверка сбрасывает старое подтверждение. Запоздалый ответ не возвращает его; загрузка и текущая проверка не выдаются за пустой итог.",
+      "Окна защиты Recorder и время перепроверки используют согласованные часы БД. Возраст файла проверяется по абсолютному времени.",
+      "Старая ссылка на отсутствующий файл удаляется и при зависшем статусе, но только без активной записи и с повторной проверкой диска и отсутствия файла.",
+      "Пояснение зависшей записи не объявляет видео непригодным без проверки. Повтор невыполненных сохраняет собственное действие каждой строки.",
+      "README и примеры установки актуализированы для 0.9.10. PTZ, раскладка по кадру, восстановление записи и разбор архива описаны как реализованные."
     ],
     "zh-CN": [
-      "无文件资源的队列记录不再阻塞旧归档位置上的复查或删除操作。",
-      "新建与恢复计划使用一致的保守保护范围，保留真实操作冲突和精确文件检查。",
-      "以英语、俄语和中文说明真实操作冲突与活动录像造成的拒绝。",
-      "将问题说明、录像字段和检查结果分开显示，修复意外的居中文本，并简化三种语言的说明。",
-      "录像进程退出或被强制终止后，验证并完成可读取的片段。保留未确认的文件、精确的文件归属凭据与自动重试，并限制单个任务的恢复工作量。"
+      "保留每行选择的操作并自动勾选录像。通过现有持久队列统一确认不同操作。",
+      "开始新检查前清除旧确认，拒绝过期预览，并区分加载中、检查中、未完成与无问题的最终结果。",
+      "录像保护窗口与复查观察时间使用一致的数据库时钟，孤立文件年龄使用绝对文件系统时间。",
+      "仅在写入任务停止并重新确认磁盘与文件缺失后，移除带旧卡住状态的缺失录像目录引用。",
+      "旧卡住状态不再被解释为未经证实的视频不可播放；重试未完成项时保留每条录像原先的操作。",
+      "更新 README 与 0.9.10 安装示例，准确介绍已实现的 PTZ、按画面排列、录像恢复及归档问题处理。"
     ]
   }
 }

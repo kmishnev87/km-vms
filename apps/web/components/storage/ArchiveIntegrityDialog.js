@@ -24,14 +24,14 @@ export default function ArchiveIntegrityDialog({ controller: c, copy, language, 
   const dialog = useRef(null);
   const returnFocus = useRef(null);
   const [expanded, setExpanded] = useState([]);
-  const [action, setAction] = useState("recheck");
   const { integrityDialogOpen: open, integrityScan: scan, page, filters, selected, allMatching, batch, confirmation } = c;
   useModalBodyScrollLock(open);
   const model = archiveIntegrityScanModel(scan || {}, permission);
   const working = isReviewRunning(batch);
-  const locked = c.integrityBusy || c.loading || c.listFailed || working || model.running || !permission.allowed;
+  const locked = c.integrityBusy || c.opening || c.loading || c.listFailed || working || !c.reviewable || !permission.allowed;
   const selectable = page.items.filter((item) => item.actions?.length);
   const pageSelected = selectable.length > 0 && selectable.every((item) => c.isSelected(item.finding_id));
+  const plan = confirmation ? confirmation.action_counts || [confirmation] : [];
 
   useEffect(() => {
     if (!open) return undefined;
@@ -47,11 +47,12 @@ export default function ArchiveIntegrityDialog({ controller: c, copy, language, 
   const dateTime = (value) => formatProductDateTime(value, page.display_timezone, language === "en" ? "en-US" : language === "zh-CN" ? "zh-CN" : "ru-RU") || "—";
   const categoryLabel = (category) => copy[archiveIntegrityFindingPresentation({ category }).categoryKey] || copy.integrityCategoryUnknown;
   const resultMessage = (item) => {
+    const action = item.action || batch.requested_action || batch.action;
     if (item.reason_code) return reviewFailureText(item.reason_code, t);
     if (item.result?.resolved || item.result?.already_resolved) return t("archiveReview.resultText.resolved");
-    if (batch.action === "recheck") return t("archiveReview.resultText.confirmed");
+    if (action === "recheck") return t("archiveReview.resultText.confirmed");
     if (item.result?.retired_count) return t("archiveReview.resultText.retired");
-    return t(`archiveReview.resultText.${batch.action}`);
+    return t(`archiveReview.resultText.${action}`);
   };
   function onKeyDown(event) {
     if (event.key === "Escape" && !c.integrityBusy) {
@@ -77,7 +78,7 @@ export default function ArchiveIntegrityDialog({ controller: c, copy, language, 
           <button className="storageIntegrityClose" type="button" onClick={() => c.setIntegrityDialogOpen(false)} disabled={c.integrityBusy} aria-label={copy.close}>×</button>
         </header>
         <div className="archiveReviewSummary">
-          <div><strong>{copy[model.titleKey] || copy.integrityScanNotRunTitle}</strong><span>{t("archiveReview.summaryHint")}</span></div>
+          <div><strong>{c.opening || c.scanStarting ? copy.loading : c.listFailed && !scan ? t("archiveReview.listFailed") : copy[model.titleKey] || copy.integrityScanNotRunTitle}</strong><span>{t("archiveReview.summaryHint")}</span></div>
           {checkedAt ? <time dateTime={checkedAt}>{t("archiveReview.lastFullCheck")}: {dateTime(checkedAt)}</time> : null}
           {model.running ? <progress max="100" value={model.progressIndeterminate ? undefined : model.percent} aria-label={copy.integrityProgress} /> : null}
         </div>
@@ -104,7 +105,7 @@ export default function ArchiveIntegrityDialog({ controller: c, copy, language, 
           {!batch && c.lastBatch ? <button type="button" className="archiveReviewTextButton" onClick={c.showLastResults}>{t("archiveReview.actionResults")}</button> : null}
           <button type="button" className="archiveReviewTextButton archiveReviewRefresh" onClick={() => c.refreshReview().catch(() => {})} disabled={c.integrityBusy || c.loading}>{copy.refresh}</button>
         </div>
-        <div className="archiveReviewViewport" aria-busy={c.loading ? "true" : "false"}>
+        <div className="archiveReviewViewport" aria-busy={c.opening || c.loading || c.integrityBusy || model.running ? "true" : "false"}>
           {c.resultOpen && batch ? (
             <div className="archiveReviewResults">
               <h3>{t("archiveReview.actionResults")}</h3>
@@ -131,8 +132,9 @@ export default function ArchiveIntegrityDialog({ controller: c, copy, language, 
                     <td><button type="button" className="archiveReviewProblemButton" aria-expanded={expandedRow} onClick={() => setExpanded((previous) => expandedRow ? previous.filter((id) => id !== finding.finding_id) : [...previous, finding.finding_id])}>{copy[row.categoryKey] || copy.integrityCategoryUnknown}<span aria-hidden="true">{expandedRow ? "−" : "+"}</span></button></td>
                     <td>{dateTime(finding.recording_started_at)}</td>
                     <td><span className={`archiveReviewState ${finding.state}`}>{t(`archiveReview.states.${finding.state}`)}</span></td>
-                    <td>{finding.actions?.length ? <select className="archiveReviewRowAction" value="" aria-label={t("archiveReview.actionsFor", { name: row.cameraName || row.displayName })} onChange={(e) => { if (e.target.value) c.prepareAction(e.target.value, finding); }} disabled={locked}>
+                    <td>{finding.actions?.length ? <select className="archiveReviewRowAction" value={c.rowAction(finding.finding_id)} aria-label={t("archiveReview.actionsFor", { name: row.cameraName || row.displayName })} onChange={(e) => c.stageRowAction(finding.finding_id, e.target.value)} disabled={locked}>
                       <option value="">{t("archiveReview.chooseAction")}</option>{finding.actions.map((key) => <option key={key} value={key}>{t(`archiveReview.actions.${key}`)}</option>)}
+                      {c.rowAction(finding.finding_id) && !finding.actions.includes(c.rowAction(finding.finding_id)) ? <option value={c.rowAction(finding.finding_id)} disabled>{t(`archiveReview.actions.${c.rowAction(finding.finding_id)}`)} — {t("archiveReview.actionUnavailable")}</option> : null}
                     </select> : <span className="archiveReviewNoAction">{finding.state === "resolved" ? t("archiveReview.noFurtherAction") : t("archiveReview.requiresAttention")}</span>}</td>
                   </tr>
                   {expandedRow ? <tr className="archiveReviewDetailsRow"><td colSpan="6"><div className="archiveReviewDetails">
@@ -151,19 +153,22 @@ export default function ArchiveIntegrityDialog({ controller: c, copy, language, 
                 </Fragment>;
               })}</tbody>
             </table>
-          ) : <div className="archiveReviewEmpty">{c.loading || c.integrityBusy ? copy.loading : c.listFailed ? t("archiveReview.listFailed") : model.status === "not_run" ? copy.integrityScanNotRunTitle : t("archiveReview.emptyFilter")}</div>}
+          ) : <div className="archiveReviewEmpty">{c.opening || c.loading || c.integrityBusy ? copy.loading : c.listFailed ? t("archiveReview.listFailed") : model.running ? t("archiveReview.checking") : model.stale ? t("archiveReview.scanStale") : model.status === "not_run" ? copy.integrityScanNotRunTitle : !c.reviewable ? t("archiveReview.scanIncomplete") : t("archiveReview.emptyFilter")}</div>}
           {!c.resultOpen && page.next_cursor ? <div className="archiveReviewMore"><button type="button" className="button secondary small" onClick={c.loadMoreIntegrityFindings} disabled={locked}>{copy.integrityLoadMore}</button></div> : null}
         </div>
         <footer className="archiveReviewFooter">
           <div className="archiveReviewActionArea">
             {confirmation ? <>
-              <div className="archiveReviewConfirmation" role="status"><strong>{t(`archiveReview.actions.${confirmation.action}`)}: {confirmation.eligible_count}</strong><span>{t(`archiveReview.effects.${confirmation.action}`)}{confirmation.action === "delete" ? ` ${formatBytes(confirmation.total_bytes)}.` : ""}{confirmation.unavailable_count ? ` ${t("archiveReview.unavailableCount", { count: confirmation.unavailable_count })}` : ""}</span></div>
-              <div className="archiveReviewActionButtons"><button type="button" className="button secondary small" onClick={() => c.setConfirmation(null)} disabled={c.integrityBusy}>{copy.cancel}</button><button type="button" className={`button small ${confirmation.destructive ? "dangerButton" : ""}`} onClick={c.applyAction} disabled={c.integrityBusy || !confirmation.eligible_count}>{c.integrityBusy ? copy.applying : t("archiveReview.confirmAction")}</button></div>
+              <div className="archiveReviewConfirmation" role="status">
+                <div className="archiveReviewPlanCounts">{plan.map((item) => <strong key={item.action}>{t(`archiveReview.actions.${item.action}`)}: {item.eligible_count}</strong>)}</div>
+                <span>{confirmation.destructive ? t("archiveReview.effects.delete") : plan.length > 1 ? t("archiveReview.confirmPlanHint") : t(`archiveReview.effects.${confirmation.action}`)}{confirmation.destructive ? ` ${formatBytes(confirmation.total_bytes)}.` : ""}{confirmation.unavailable_count ? ` ${t("archiveReview.unavailableCount", { count: confirmation.unavailable_count })}` : ""}</span>
+              </div>
+              <div className="archiveReviewActionButtons"><button type="button" className="button secondary small" onClick={() => c.setConfirmation(null)} disabled={c.integrityBusy}>{copy.cancel}</button><button type="button" className={`button small ${confirmation.destructive ? "dangerButton" : ""}`} onClick={c.applyAction} disabled={locked || !confirmation.eligible_count}>{c.integrityBusy ? copy.applying : t("archiveReview.confirmAction")}</button></div>
             </> : batch ? <>
               <div className="archiveReviewBatch" role="status"><strong className={working ? "" : batch.state === "completed" ? "reviewComplete" : "reviewAttention"}>{t(`archiveReview.batchStates.${batch.state}`)}</strong><span>{t("archiveReview.processed", { count: batch.processed_count, total: batch.planned_count })}{batch.failed_count ? ` ${t("archiveReview.notCompleted", { count: batch.failed_count })}` : ""}</span><progress max={batch.planned_count || 1} value={batch.processed_count || 0} className={batch.state === "completed" ? "isComplete" : ""} /></div>
               <div className="archiveReviewActionButtons">{working ? <button type="button" className="button secondary small" disabled={c.integrityBusy || batch.state === "cancel_requested"} onClick={c.cancelBatch}>{t("archiveReview.stop")}</button> : <>{batch.failed_count ? <button type="button" className="button secondary small" onClick={c.retryFailed} disabled={c.integrityBusy}>{t("archiveReview.retryFailed")}</button> : null}<button type="button" className="button secondary small" onClick={c.dismissBatch}>{t("archiveReview.done")}</button></>}</div>
             </> : <>
-              <div className="archiveReviewBulk"><label>{t("archiveReview.forSelected")}<select value={action} onChange={(e) => setAction(e.target.value)} disabled={locked}>{c.allowedActions.map((key) => <option key={key} value={key}>{t(`archiveReview.actions.${key}`)}</option>)}</select></label><button type="button" className="button small" onClick={() => c.prepareAction(action)} disabled={locked || !c.selectedCount || !c.allowedActions.includes(action)}>{t("archiveReview.runForSelected", { count: c.selectedCount })}</button></div>
+              <div className="archiveReviewBulk"><label>{t("archiveReview.forSelected")}<select value={c.hasMixedActions ? "mixed" : c.bulkAction} onChange={(e) => c.setBulkAction(e.target.value)} disabled={locked}>{c.hasMixedActions ? <option value="mixed" disabled>{t("archiveReview.mixedActions")}</option> : null}{c.allowedActions.map((key) => <option key={key} value={key}>{t(`archiveReview.actions.${key}`)}</option>)}</select></label><button type="button" className="button small" onClick={() => c.prepareAction()} disabled={locked || !c.selectedCount || !c.allowedActions.includes(c.bulkAction)}>{t("archiveReview.runForSelected", { count: c.selectedCount })}</button></div>
               <span className="archiveReviewBulkHint">{t("archiveReview.bulkHint")}</span>
             </>}
           </div>
