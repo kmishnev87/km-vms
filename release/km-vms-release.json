@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.8",
-  "tag": "v0.9.8",
-  "title": "Archive review and clear system status",
-  "summary": "Review archive findings with filters and exact bulk actions. Recheck, correct supported recording states, delete unneeded recordings or keep files with a persistent review decision. System status explains archive warnings separately from current recording health.",
+  "version": "0.9.9",
+  "tag": "v0.9.9",
+  "title": "Archive review and recording recovery",
+  "summary": "Restore archive review actions on existing storage roots, organize recording details into readable fields, and finalize readable saved video after an interrupted recording process without deleting or rewriting it.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.8",
+  "source_ref": "v0.9.9",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,59 +20,43 @@
     "target_version": 10
   },
   "changelog": [
-    "Redesign archive integrity review with a wider adaptive dialog, top filters, compact rows and full-width details.",
-    "Select individual recordings, loaded pages or all matching findings, with exclusions and an exact confirmed selection.",
-    "Run durable bulk review actions with per-item results, cancellation, retry and restart recovery; keep existing exact file-deletion safeguards.",
-    "Keep reviewed files without claiming they were repaired; unchanged findings remain reviewed across checks, while changed files require review again.",
-    "Close related findings when recordings are removed through ordinary deletion or retention.",
-    "Explain archive findings in System Status, recognize completed checks and refresh the shared indicator after actions without reloading the page.",
-    "Correct deletion eligibility for inactive empty and stuck recordings, and distinguish analysis timeout from proven corruption.",
-    "Reuse the existing operation ledger without database schema changes, new containers or recurring filesystem scans.",
-    "Use the product timezone for review dates and calendar filters, including existing local-time recordings."
+    "Prevent explicitly resource-free review queue records from blocking their own recheck or deletion operation on older archive roots.",
+    "Match conservative apply scopes in fresh and durable plan identity; keep real global conflicts and exact file checks enforced.",
+    "Explain actual storage-conflict and active-writer refusal codes in English, Russian and Chinese.",
+    "Separate archive finding explanations, recording details and check results; fix inherited centered text and simplify wording in all three languages.",
+    "Finalize readable video after recorder interruptions without rewriting files. Preserve unconfirmed files, ownership checks and retry; recover only the affected job."
   ],
   "title_i18n": {
-    "en": "Archive review and clear system status",
-    "ru": "Разбор архива и понятное состояние системы",
-    "zh-CN": "归档问题处理与清晰的系统状态"
+    "en": "Archive review and recording recovery",
+    "ru": "Разбор архива и сохранение прерванной записи",
+    "zh-CN": "归档问题处理与录像恢复"
   },
   "summary_i18n": {
-    "en": "Review archive findings with filters and exact bulk actions. Recheck, correct supported recording states, delete unneeded recordings or keep files with a persistent review decision. System status explains archive warnings separately from current recording health.",
-    "ru": "Разбирайте замечания архива с фильтрами и массовыми действиями: перепроверка, доступное исправление состояний, удаление ненужных записей или сохранение файла с отметкой о разборе. Состояние системы объясняет предупреждения архива отдельно от текущей записи.",
-    "zh-CN": "使用筛选和精确的批量操作处理归档问题：复查、修正支持的录像状态、删除不需要的录像，或保留文件并持久记录审阅决定。系统状态分别说明归档警告与当前录像健康状况。"
+    "en": "Restore archive review actions on existing storage roots, organize recording details into readable fields, and finalize readable saved video after an interrupted recording process without deleting or rewriting it.",
+    "ru": "Исправлены действия разбора на существующих хранилищах. Сведения о записи структурированы, пояснения упрощены. После прерывания записи читаемый сохранённый фрагмент корректно завершается без удаления и перезаписи видео.",
+    "zh-CN": "修复现有存储位置的归档问题处理，将录像详情整理为清晰字段，并在录像进程中断后完成可读取的已保存片段，不删除或重写视频。"
   },
   "changelog_i18n": {
     "en": [
-      "Redesign archive integrity review with a wider adaptive dialog, top filters, compact rows and full-width details.",
-      "Select individual recordings, loaded pages or all matching findings, with exclusions and an exact confirmed selection.",
-      "Run durable bulk review actions with per-item results, cancellation, retry and restart recovery; keep existing exact file-deletion safeguards.",
-      "Keep reviewed files without claiming they were repaired; unchanged findings remain reviewed across checks, while changed files require review again.",
-      "Close related findings when recordings are removed through ordinary deletion or retention.",
-      "Explain archive findings in System Status, recognize completed checks and refresh the shared indicator after actions without reloading the page.",
-      "Correct deletion eligibility for inactive empty and stuck recordings, and distinguish analysis timeout from proven corruption.",
-      "Reuse the existing operation ledger without database schema changes, new containers or recurring filesystem scans.",
-      "Use the product timezone for review dates and calendar filters, including existing local-time recordings."
+      "Prevent explicitly resource-free review queue records from blocking their own recheck or deletion operation on older archive roots.",
+      "Match conservative apply scopes in fresh and durable plan identity; keep real global conflicts and exact file checks enforced.",
+      "Explain actual storage-conflict and active-writer refusal codes in English, Russian and Chinese.",
+      "Separate archive finding explanations, recording details and check results; fix inherited centered text and simplify wording in all three languages.",
+      "Finalize readable video after recorder interruptions without rewriting files. Preserve unconfirmed files, ownership checks and retry; recover only the affected job."
     ],
     "ru": [
-      "Проверка архива получила широкое адаптивное окно, фильтры сверху, компактные строки и подробности на полной ширине.",
-      "Можно выбрать отдельные записи, загруженную страницу или все результаты фильтра с исключением отдельных строк и подтверждением точного состава.",
-      "Массовые действия сохраняются на сервере: результат каждого объекта, остановка, повтор и восстановление после прерывания. Защита удаления файлов сохранена.",
-      "Файл можно сохранить и отметить разобранным, не выдавая его за исправный; неизменное замечание не возвращается после проверки, а изменение файла требует нового разбора.",
-      "Удаление записей обычным способом или по правилам хранения закрывает связанные замечания.",
-      "Состояние системы объясняет проблемы архива, распознаёт завершённые проверки и обновляет общий индикатор после действий без F5.",
-      "Исправлена доступность удаления неактивных пустых и зависших записей; таймаут анализа больше не считается доказанным повреждением.",
-      "Использован существующий журнал операций без изменения схемы БД, новых контейнеров и повторяющегося сканирования файлов.",
-      "Даты и календарные фильтры разбора используют часовой пояс приложения, в том числе для существующих записей с локальным временем."
+      "Пустые служебные записи очереди больше не блокируют собственную перепроверку или удаление на старых корнях архива.",
+      "Область защиты файлов согласована для запуска и восстановления плана; реальные конфликты и точные проверки файлов сохранены.",
+      "Добавлены понятные причины отказа при конфликте операций и активной записи на английском, русском и китайском.",
+      "Разделены описание проблемы, поля записи и результат проверки. Исправлено случайное центрирование текста, упрощены пояснения на трёх языках.",
+      "Читаемые фрагменты после прерывания записи завершаются без перезаписи видео. Неподтверждённые файлы сохраняются; привязка файлов и автоматический повтор записи защищены."
     ],
     "zh-CN": [
-      "归档完整性检查采用更宽的自适应窗口、顶部筛选、紧凑列表和全宽详情。",
-      "可选择单项、已加载页面或所有匹配结果，并排除指定项目及确认精确范围。",
-      "批量操作保存在服务器上，提供逐项结果、停止、重试和中断恢复，保留精确文件删除保护。",
-      "可保留文件并标记已审阅，而不将其标记为已修复；不变的问题不会重复出现，文件变化后重新要求审阅。",
-      "通过常规删除或保留策略移除录像时，自动关闭相关问题。",
-      "系统状态说明归档问题，识别已完成检查，并在操作后刷新共享指示器，无需重新加载页面。",
-      "修正非活动空录像及卡住录像的删除资格；分析超时不再被视为已确认损坏。",
-      "复用现有操作日志，不修改数据库结构、不新增容器或重复文件系统扫描。",
-      "处理列表的日期和日历筛选使用应用时区，兼容现有的本地时间录像。"
+      "无文件资源的队列记录不再阻塞旧归档位置上的复查或删除操作。",
+      "新建与恢复计划使用一致的保守保护范围，保留真实操作冲突和精确文件检查。",
+      "以英语、俄语和中文说明真实操作冲突与活动录像造成的拒绝。",
+      "将问题说明、录像字段和检查结果分开显示，修复意外的居中文本，并简化三种语言的说明。",
+      "录像进程退出或被强制终止后，验证并完成可读取的片段。保留未确认的文件、精确的文件归属凭据与自动重试，并限制单个任务的恢复工作量。"
     ]
   }
 }

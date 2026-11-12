@@ -1428,9 +1428,11 @@ def _durable_apply_context(
         raise StorageOperationContractError("archive_integrity_apply_scope_identity_mismatch")
     root_id = next(iter(root_ids))
     scope = {
-        "global": False,
+        # Match the coordinator's conservative expansion using immutable
+        # evidence, including old roots with no saved physical-volume identity.
+        "global": not bool(finding.physical_identity),
         "physical_volume_ids": [str(finding.physical_identity)] if finding.physical_identity else [],
-        "root_ids": [root_id],
+        "root_ids": [root_id] if finding.physical_identity else [],
         "camera_ids": [int(finding.camera_id)] if finding.camera_id is not None else [],
         "segment_ids": sorted(segment_ids),
     }
@@ -1564,9 +1566,9 @@ def _apply_context(
     if segment is not None and int(item.segment_id) != int(segment.id):
         raise IntegrityRemediationBlocked("archive_integrity_segment_changed")
     scope = {
-        "global": False,
+        "global": not bool(root.physical_identity),
         "physical_volume_ids": [str(root.physical_identity)] if root.physical_identity else [],
-        "root_ids": [str(root.id)],
+        "root_ids": [str(root.id)] if root.physical_identity else [],
         "camera_ids": [int(segment.camera_id)] if segment is not None and segment.camera_id is not None else [],
         "segment_ids": [int(segment.id)] if segment is not None else [],
     }

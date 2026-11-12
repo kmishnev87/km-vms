@@ -67,7 +67,8 @@
     "0.9.4": "06ed935f93320258efe278c75e14083aff5d9284",
     "0.9.5": "1cf5187f025649a8156ef3a4bb09116c282b374d",
     "0.9.6": "c7d28b35f4b4629b02698c5d2f37d9502363dce4",
-    "0.9.7": "d1420e2286598f0b7f8d0373abfa6dfaa1527ab3"
+    "0.9.7": "d1420e2286598f0b7f8d0373abfa6dfaa1527ab3",
+    "0.9.8": "a0f3eea06d5d6216d29ae64c4414e463862f5b85"
   },
   "schema_versions": {
     "0.7.2": 1,
@@ -135,7 +136,8 @@
     "0.9.4": 10,
     "0.9.5": 10,
     "0.9.6": 10,
-    "0.9.7": 10
+    "0.9.7": 10,
+    "0.9.8": 10
   },
   "shape_fingerprints": {
     "0.7.2": "7006f5b00ce1c82240ee43e6778a5730e8d2195523b1a93081694f5c7b77a0cf",
@@ -203,7 +205,8 @@
     "0.9.4": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f",
     "0.9.5": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f",
     "0.9.6": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f",
-    "0.9.7": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f"
+    "0.9.7": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f",
+    "0.9.8": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f"
   },
   "shape_alternates": {
     "0.7.24": [
@@ -285,6 +288,9 @@
       "eb1a1004514c6b4e903531096f4693bee74ffed169a1fbfe33a02aea6c2f7f0f"
     ],
     "0.9.7": [
+      "eb1a1004514c6b4e903531096f4693bee74ffed169a1fbfe33a02aea6c2f7f0f"
+    ],
+    "0.9.8": [
       "eb1a1004514c6b4e903531096f4693bee74ffed169a1fbfe33a02aea6c2f7f0f"
     ]
   }

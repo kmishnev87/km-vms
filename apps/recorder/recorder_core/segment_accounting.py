@@ -17,6 +17,7 @@ from .contracts import (
     RETENTION_SIGNAL_TYPE, SEGMENT_STATUS_FAILED, SEGMENT_STATUS_FINALIZED,
     SEGMENT_STATUS_WRITING, STORAGE_NAMESPACE,
 )
+from .segment_recovery import same_file_version
 
 def bounded_file_fingerprint(file_path: Path, stat_result: os.stat_result) -> str:
     digest = hashlib.sha256()
@@ -333,7 +334,7 @@ class SegmentAccounting:
         job.current_media_relative_path = rel_path
         return True
 
-    def finalize_segment_path(self, job: Any, file_path: Path) -> bool:
+    def finalize_segment_path(self, job: Any, file_path: Path, *, verified_stat: os.stat_result | None = None) -> bool:
         if not job.db_job_id:
             return False
         rel_path = self.storage_relative_path(file_path, root=job.archive_root_path)
@@ -342,7 +343,9 @@ class SegmentAccounting:
         if rel_path in job.segment_baseline_paths or rel_path not in job.known_segment_paths:
             return False
         try:
-            stat = file_path.stat()
+            stat = file_path.lstat() if verified_stat is not None else file_path.stat()
+            if verified_stat is not None and not same_file_version(verified_stat, stat):
+                return False
         except Exception as exc:
             self.mark_segment_failed(job, rel_path, f"segment stat failed: {exc}")
             self.remember_processed_segment(job, file_path)
@@ -359,9 +362,13 @@ class SegmentAccounting:
         try:
             final_fingerprint = bounded_file_fingerprint(file_path, stat)
         except OSError:
+            if verified_stat is not None:
+                return False
             final_fingerprint = hashlib.sha256(
                 f"unavailable:{int(stat.st_size)}:{int(stat.st_mtime_ns)}".encode("ascii")
             ).hexdigest()
+        if verified_stat is not None and not same_file_version(verified_stat, file_path.lstat()):
+            return False
         with self.engine.begin() as conn:
             result = conn.execute(
                 text(
@@ -411,7 +418,7 @@ class SegmentAccounting:
                     "storage_namespace": STORAGE_NAMESPACE,
                     "integrity_status": "ok_owned_finalized",
                     "file_mtime": ended_at,
-                    "content_probe_status": "stat_ok",
+                    "content_probe_status": "probe_ok" if verified_stat is not None else "stat_ok",
                     "container_format": media_metadata["container_format"],
                     "file_extension": media_metadata["file_extension"],
                     "mime_type": media_metadata["mime_type"],

@@ -380,3 +380,47 @@ def test_calendar_filter_and_display_use_product_timezone_including_legacy_names
     values = {row["display_name"]: row["recording_started_at"] for row in page["items"]}
     assert values["utc-inside.mkv"] == "2026-11-12T01:00:00+05:00"
     assert values["legacy-2026-11-12-00-30-00.mkv"] == "2026-11-12T00:30:00+05:00"
+
+
+@pytest.mark.parametrize("action,content", [("recheck", b"old partial file"), ("delete", b"")])
+def test_old_root_without_saved_volume_identity_does_not_conflict_with_its_own_queue(stage4103, action, content):
+    ctx = stage4103
+    ctx.root.physical_identity = None
+    ctx.db.commit()
+    scan, pairs = sample(ctx, content=content)
+    batch = enqueue(ctx, scan["scan_id"], action=action)
+    drive(ctx)
+    result = review.get_review_batch(ctx.db, batch["batch_id"], actor=actor(ctx))
+    assert result["state"] == "completed" and result["completed_count"] == 1, [(item["state"], item["reason_code"], item["result"]) for item in result["items"]]
+    assert pairs[0][1].exists() is (action == "recheck")
+
+
+def test_review_queue_exemption_never_exempts_real_or_unknown_scopes():
+    from app.services.storage_operation_conflicts import operations_conflict
+    from app.services.storage_operations_foundation import normalize_operation_scope
+    empty = normalize_operation_scope({"global": False})
+    global_scope = normalize_operation_scope({"global": True})
+    scoped = normalize_operation_scope({"root_ids": ["real-root"]})
+    for kind in review.REVIEW_OPERATION_TYPES:
+        assert not operations_conflict("integrity_metadata_repair", global_scope, kind, empty)
+        assert not operations_conflict(kind, empty, "archive_root_delete", global_scope)
+        assert operations_conflict("integrity_metadata_repair", global_scope, kind, scoped)
+        assert operations_conflict("integrity_metadata_repair", global_scope, kind, {})
+    assert operations_conflict("integrity_metadata_repair", global_scope, "manual_single_delete", empty)
+
+
+def test_old_root_still_blocks_review_during_real_global_file_operation(stage4103):
+    from app.services.storage_operations_foundation import claim_operation
+    ctx = stage4103
+    ctx.root.physical_identity = None
+    ctx.db.commit()
+    scan, pairs = sample(ctx)
+    claim_operation(ctx.db, operation_type="archive_root_delete", scope={"global": True},
+        request_identity={"unit": "real-root-operation"}, actor=actor(ctx),
+        operation_id="review-unit-real-root-operation", owner_instance_id="other-file-worker")
+    batch = enqueue(ctx, scan["scan_id"], action="recheck")
+    drive(ctx)
+    result = review.get_review_batch(ctx.db, batch["batch_id"], actor=actor(ctx))
+    assert result["state"] == "partial" and result["failed_count"] == 1
+    assert result["items"][0]["reason_code"] == "storage_operation_scope_conflict"
+    assert pairs[0][1].exists()

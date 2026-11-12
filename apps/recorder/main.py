@@ -48,6 +48,7 @@ from recorder_core.contracts import (
 from recorder_core.job_store import RecordingJobStore
 from recorder_core.storage_activation import recording_start_allowed
 from recorder_core.segment_accounting import SegmentAccounting, bounded_file_fingerprint, receipt_object_identity
+from recorder_core.segment_recovery import probe_interrupted_segment
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "/storage/archive"))
@@ -854,8 +855,8 @@ def update_writing_segment_progress(job: RecordingJob, file_path: Path) -> bool:
     return segment_accounting().update_writing_segment_progress(job, file_path)
 
 
-def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
-    return segment_accounting().finalize_segment_path(job, file_path)
+def finalize_segment_path(job: RecordingJob, file_path: Path, *, verified_stat: os.stat_result | None = None) -> bool:
+    return segment_accounting().finalize_segment_path(job, file_path, verified_stat=verified_stat)
 
 
 def mark_segment_failed(job: RecordingJob, rel_path: str, error: str) -> None:
@@ -977,6 +978,32 @@ def finalize_segments_for_job(job: RecordingJob) -> None:
     for file_path in discover_job_segments(job):
         create_segment_metadata_if_needed(job, file_path)
         finalize_segment_path(job, file_path)
+
+
+def recover_interrupted_segments(job: RecordingJob) -> None:
+    """Finish only this dead writer's pending files, without delaying retries indefinitely."""
+    if not job.db_job_id or (job.process is not None and job.process.poll() is None):
+        return
+    deadline = time.monotonic() + 6.0
+    for file_path in reversed(discover_job_segments(job)):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            log_event("warning", "segment_recovery_budget_exhausted", camera_id=job.camera_id)
+            break
+        rel_path = storage_relative_path(file_path, root=job.archive_root_path)
+        if not rel_path or rel_path in job.segment_baseline_paths:
+            continue
+        try:
+            create_segment_metadata_if_needed(job, file_path)
+            if rel_path not in job.known_segment_paths:
+                continue
+            verified_stat, reason = probe_interrupted_segment(file_path, timeout=min(3.0, remaining))
+            if verified_stat is not None and finalize_segment_path(job, file_path, verified_stat=verified_stat):
+                continue
+            log_event("warning", "segment_recovery_unconfirmed", camera_id=job.camera_id,
+                      reason=reason if verified_stat is None else "segment_recovery_finalization_refused")
+        except Exception as exc:
+            log_event("warning", "segment_recovery_failed", camera_id=job.camera_id, error=redact_text(str(exc)))
 
 
 def mark_segments_failed_for_job(job: RecordingJob, error: str) -> None:
@@ -1539,6 +1566,7 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     previous_state = job.state
     job.set_state(RecorderState.STOPPING)
     update_camera_status_from_job(job)
+    forced_stop = False
 
     if proc and proc.poll() is None:
         proc.terminate()
@@ -1555,6 +1583,7 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
                 return False
             proc.kill()
             proc.wait(timeout=5)
+            forced_stop = True
 
     if proc:
         job.last_exit_code = proc.poll()
@@ -1564,7 +1593,11 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
 
     finalized = True
     try:
-        finalize_segments_for_job(job)
+        if forced_stop:
+            recover_interrupted_segments(job)
+            mark_segments_failed_for_job(job, "recording writer required forced termination")
+        else:
+            finalize_segments_for_job(job)
         if graceful_format_change and job.db_job_id:
             with engine.begin() as conn:
                 unfinished = conn.execute(text(
@@ -1782,7 +1815,12 @@ def check_children() -> None:
 
         error_text = stderr_tail_text(job) or "ffmpeg stopped unexpectedly"
         error_type = classify_error(error_text, exit_code)
-        mark_segments_failed_for_job(job, error_text)
+        try:
+            recover_interrupted_segments(job)
+            mark_segments_failed_for_job(job, error_text)
+        except Exception as exc:
+            # Catalog failure must not strand a dead process or block other cameras.
+            log_event("warning", "segment_recovery_failed", camera_id=job.camera_id, error=redact_text(str(exc)))
         job.process = None
         job.pid = None
         job.stopped_at = time.time()

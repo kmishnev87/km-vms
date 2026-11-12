@@ -455,9 +455,26 @@ def scopes_overlap(left: dict, right: dict) -> bool:
     return any(_set(left, field) & _set(right, field) for field in dimensions)
 
 
+def _resource_free_review_envelope(operation_type: str, scope: dict) -> bool:
+    """Only a fully normalized, explicitly empty queue owns no file resources.
+
+    Old roots can conservatively escalate a real child operation to global.
+    Its queue/progress rows must not become that child's own global blocker.
+    Scoped, escalated, unknown and legacy operations keep the original matrix.
+    """
+    return (
+        operation_type in {"integrity_review_batch", "integrity_review_item", "integrity_review_decision"}
+        and scope.get("global") is False
+        and scope.get("scope_escalated") is False
+        and all(key in scope and not scope[key] for key in ("physical_volume_ids", "root_ids", "camera_ids", "segment_ids"))
+    )
+
+
 def operations_conflict(left_type: str, left_scope: dict, right_type: str, right_scope: dict) -> bool:
     if left_type not in OPERATION_TYPES or right_type not in OPERATION_TYPES:
         return True
+    if _resource_free_review_envelope(left_type, left_scope) or _resource_free_review_envelope(right_type, right_scope):
+        return False
     if "integrity_scan" in {left_type, right_type}:
         return False
     if "integrity_plan_prepare" in {left_type, right_type}:

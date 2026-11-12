@@ -135,11 +135,18 @@ export default function ArchiveIntegrityDialog({ controller: c, copy, language, 
                       <option value="">{t("archiveReview.chooseAction")}</option>{finding.actions.map((key) => <option key={key} value={key}>{t(`archiveReview.actions.${key}`)}</option>)}
                     </select> : <span className="archiveReviewNoAction">{finding.state === "resolved" ? t("archiveReview.noFurtherAction") : t("archiveReview.requiresAttention")}</span>}</td>
                   </tr>
-                  {expandedRow ? <tr className="archiveReviewDetailsRow"><td colSpan="6"><div>
-                    <p>{copy[row.detailKey] || copy[row.impactKey] || copy.integrityImpactUnknown}</p>
-                    <dl><div><dt>{copy.integrityFileLabel}</dt><dd>{row.displayName || "—"}</dd></div><div><dt>{copy.integrityRootLabel}</dt><dd>{row.rootLabel || "—"}</dd></div><div><dt>{t("archiveReview.recordedAt")}</dt><dd>{dateTime(finding.recording_started_at)}</dd></div><div><dt>{t("archiveReview.reviewState")}</dt><dd>{t(`archiveReview.states.${finding.state}`)}</dd></div><div><dt>{t("archiveReview.fileSize")}</dt><dd>{formatBytes(finding.size_bytes)}</dd></div><div><dt>{t("archiveReview.observedAt")}</dt><dd>{dateTime(finding.observed_at)}</dd></div></dl>
-                    {finding.reason_code && finding.reason_code !== "probe_ok" ? <p>{reviewFailureText(finding.reason_code, t)}</p> : null}
-                    {!finding.actions?.length && finding.state === "active" ? <p>{copy[row.noActionLabelKey] || copy.integrityNoActionUnavailable}</p> : null}
+                  {expandedRow ? <tr className="archiveReviewDetailsRow"><td colSpan="6"><div className="archiveReviewDetails">
+                    <p className="archiveReviewDetailExplanation">{copy[row.detailKey] || copy[row.impactKey] || copy.integrityImpactUnknown}</p>
+                    <dl>
+                      <div className="archiveReviewDetailWide"><dt>{copy.integrityFileLabel}</dt><dd>{row.displayName || "—"}</dd></div>
+                      <div className="archiveReviewDetailWide"><dt>{copy.integrityRootLabel}</dt><dd>{row.rootLabel || "—"}</dd></div>
+                      <div><dt>{t("archiveReview.recordedAt")}</dt><dd>{dateTime(finding.recording_started_at)}</dd></div>
+                      <div><dt>{t("archiveReview.fileSize")}</dt><dd>{formatBytes(finding.size_bytes)}</dd></div>
+                      <div><dt>{t("archiveReview.observedAt")}</dt><dd>{dateTime(finding.observed_at)}</dd></div>
+                      <div><dt>{t("archiveReview.reviewState")}</dt><dd>{t(`archiveReview.states.${finding.state}`)}</dd></div>
+                    </dl>
+                    {finding.reason_code && finding.reason_code !== "probe_ok" ? <div className="archiveReviewDetailResult"><strong>{t("archiveReview.checkResult")}</strong><p>{reviewFailureText(finding.reason_code, t)}</p></div> : null}
+                    {!finding.actions?.length && finding.state === "active" ? <p className="archiveReviewDetailAvailability">{copy[row.noActionLabelKey] || copy.integrityNoActionUnavailable}</p> : null}
                   </div></td></tr> : null}
                 </Fragment>;
               })}</tbody>
