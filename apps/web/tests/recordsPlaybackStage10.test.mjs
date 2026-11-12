@@ -11,7 +11,7 @@ assert.equal(recordsPage.includes("function isDirectPlaybackUnsupported"), false
 assert.equal(archivePlayer.includes("isUnsupportedDirectPlayback"), false);
 assert.equal(recordsPage.includes("mkv\") || value.includes(\"matroska"), false);
 assert.equal(recordsPage.includes("await buildRecordingStreamUrl(item);"), true);
-assert.equal(archivePlayer.includes("setStatus(\"unsupported\");"), true);
+assert.match(archivePlayer, /\[3, 4\]\.includes\(Number\(video\.error\?\.code\)\) \? "unsupported" : "error"/);
 
 for (const source of [recordsPage, archivePlayer]) {
   assert.equal(source.includes("????????"), false);

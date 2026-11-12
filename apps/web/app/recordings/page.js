@@ -6,14 +6,13 @@ import Layout from "../../components/Layout";
 import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import { installModalKeyboard } from "../../lib/modalKeyboard";
 import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
-import ArchiveExportResult from "../../components/ArchiveExportResult";
+import ArchiveExportDialog from "../../components/ArchiveExportDialog";
 import useArchiveExport from "../../lib/useArchiveExport";
 import { apiFetch, canDeleteRecordings, issueRecordingMediaToken, getAuthToken, captureAuthSession } from "../../lib/api";
 import { useAuthSession } from "../../lib/useAuthSession";
 import {
   buildArchiveExportPayload,
   canExportRecordings,
-  describeArchiveExportLimits,
   getArchiveExportLimits,
   validateArchiveExportSelection,
 } from "../../lib/archiveExports";
@@ -884,15 +883,19 @@ export default function RecordingsPage() {
 
   function openExportModal() {
     if (!canExport) return;
-    if (exportDraftRef.current) { setExportModal(exportDraftRef.current); return; }
+    const contextKey = JSON.stringify([selectedCamera, selectedDate, selectedPaths.slice().sort()]);
+    if (exportDraftRef.current?.contextKey === contextKey) { setExportModal(exportDraftRef.current); return; }
+    const selected = selectedPaths.length === 1 ? items.find((item) => recordingIdentityKey(item) === selectedPaths[0]) : null;
+    const camera = clipCameraOptions.find((item) => String(item.id) === String(selected?.camera_id) || item.name === (selected?.camera || selectedCamera));
     const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits, productTimezone);
     setError("");
     setExportModal({
-      cameraId: "",
+      contextKey,
+      cameraId: camera ? String(camera.id) : "",
       title: t.createClip,
       reason: "",
-      startTs,
-      endTs,
+      startTs: selected?.started_at_system ? productInstantInputValue(selected.started_at_system, productTimezone) : startTs,
+      endTs: selected?.ended_at_system ? productInstantInputValue(selected.ended_at_system, productTimezone) : endTs,
     });
   }
 
@@ -1750,79 +1753,9 @@ export default function RecordingsPage() {
           </div>
         </div>
       ) : null}
-      {exportModal ? (
-        <div className="modalBackdrop">
-          <div className="modal archiveExportModal" role="dialog" aria-modal="true" aria-label={t.exportTitle} onClick={(e) => e.stopPropagation()}>
-            <div className="modalHeader">
-              <h2 className="archiveExportTitle">{t.exportTitle}</h2>
-              <button className="iconCloseButton" onClick={closeExportModal} aria-label={t.close}>
-                {ICONS.close}
-              </button>
-            </div>
-            <div className="archiveExportForm">
-              <div className="archiveExportInfo">
-                {t.exportHelp} {describeArchiveExportLimits(exportLimits)}
-              </div>
-              <div className="archiveExportFields">
-                <label className="archiveExportField">
-                  <span>{t.exportCamera}</span>
-                  <select
-                    className="select"
-                    value={exportModal.cameraId}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
-                    disabled={exportBusy}
-                  >
-                    <option value="">{t.exportPickCamera}</option>
-                    {clipCameraOptions.map((camera) => (
-                      <option key={camera.id} value={camera.id}>
-                        {camera.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="archiveExportField">
-                  <span>{t.exportReason}</span>
-                  <input
-                    className="input"
-                    value={exportModal.reason}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, reason: event.target.value }))}
-                    disabled={exportBusy}
-                    maxLength={500}
-                  />
-                </label>
-                <label className="archiveExportField">
-                  <span>{t.exportStart}</span>
-                  <input
-                    className="input"
-                    type="datetime-local"
-                    step="1"
-                    value={toDateTimeLocal(exportModal.startTs)}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, startTs: event.target.value }))}
-                    disabled={exportBusy}
-                  />
-                </label>
-                <label className="archiveExportField">
-                  <span>{t.exportEnd}</span>
-                  <input
-                    className="input"
-                    type="datetime-local"
-                    step="1"
-                    value={toDateTimeLocal(exportModal.endTs)}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, endTs: event.target.value }))}
-                    disabled={exportBusy}
-                  />
-                </label>
-              </div>
-              <ArchiveExportResult controller={exportController} onClose={closeExportModal} />
-              <div className="actions archiveExportActions">
-                <button className="button primary" onClick={submitExport} disabled={exportBusy}>
-                  {t.exportRun}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {exportModal ? <ArchiveExportDialog draft={exportModal} onDraftChange={setExportModal}
+        onClose={closeExportModal} onCreate={submitExport} cameras={clipCameraOptions}
+        controller={exportController} formatInput={toDateTimeLocal} source="recordings" /> : null}
       <OperationDialog dialog={deleteDialog ? { ...deleteDialog, className: deleteDialog.presentation ? undefined : "recordingsDeletionFlow" } : null} onClose={closeDeleteDialog} />
       <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>

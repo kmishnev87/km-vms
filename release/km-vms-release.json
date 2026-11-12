@@ -1,66 +1,79 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.10",
-  "tag": "v0.9.10",
-  "title": "Reliable archive review actions",
-  "summary": "Stage actions for multiple recordings, confirm the exact plan together, and safely process older missing or incomplete recordings using consistent recorder and review clocks.",
+  "version": "0.9.11",
+  "tag": "v0.9.11",
+  "title": "Synchronized playback and archive tools",
+  "summary": "Keep archive playback synchronized through buffering and segment changes. Manage saved clips without the old 4 GiB cap, export retained recordings from removed cameras, and review clear archive operation history.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.10",
+  "source_ref": "v0.9.11",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
   "requires_migration": false,
-  "schema_update": {
-    "mode": "managed",
-    "target_version": 10
-  },
+  "schema_update": {"mode": "managed", "target_version": 10},
   "changelog": [
-    "Keep each row's chosen action and select its recording. Confirm different actions together using the existing durable review queue.",
-    "Clear outdated confirmations before a new check; reject late previews and distinguish loading, running and incomplete checks from an empty result.",
-    "Use matching database clocks for recorder safety windows and review observations, and absolute filesystem time for orphan age checks.",
-    "Retire confirmed missing recordings with old stale-writing metadata only after the writer stops; retain root, absence and exact-object checks.",
-    "Explain older stale-writing findings without claiming that untested video is unplayable; preserve per-recording actions when retrying failures.",
-    "Refresh README and installation examples for 0.9.10; document implemented PTZ, frame-aware workspaces, recording recovery and archive review."
+    "Synchronize chronology recordings through loading and buffering; confirmed archive gaps do not block the group or conceal actual failures.",
+    "Follow video progress, cancel obsolete seeks, preserve manual pause and hold the last frame while the next recording loads.",
+    "Use a shared New/Saved clip dialog with separate Records and Chronology context, clear selection, paged results and confirmed deletion.",
+    "Remove the fixed 4 GiB source cap, support three-hour clips across 180 or more files, and check space with size-aware preparation timeouts.",
+    "Keep completed clips until manual deletion and export retained recordings of removed cameras; deleting a clip never deletes source footage.",
+    "Group archive history steps, add filters and paging, distinguish past results from current relevance, and correct displayed operation times.",
+    "Keep history filters and summary fixed above scrolling events; compact storage roots and show removed camera names on a single line.",
+    "Confirm logout, align recording checkboxes and center camera names in list view without changing the card layout.",
+    "Keep the maintenance update action in a stable second row, soften chronology button highlights and acknowledge Play without layout shifts.",
+    "Refresh README features, current limitations and installation examples for v0.9.11."
   ],
   "title_i18n": {
-    "en": "Reliable archive review actions",
-    "ru": "Надёжные действия разбора архива",
-    "zh-CN": "可靠的归档问题处理"
+    "en": "Synchronized playback and archive tools",
+    "ru": "Синхронный просмотр и управление архивом",
+    "zh-CN": "同步播放与归档工具"
   },
   "summary_i18n": {
-    "en": "Stage actions for multiple recordings, confirm the exact plan together, and safely process older missing or incomplete recordings using consistent recorder and review clocks.",
-    "ru": "Выбранные действия сохраняются в строках и подтверждаются общим точным планом. Исправлены часы защиты старых записей, удаление ссылок на отсутствующие файлы и состояния выполняющейся проверки.",
-    "zh-CN": "保留多条录像各自选择的操作，统一确认精确计划，并使用一致的录像与审阅时钟安全处理较早的缺失或未完成录像。"
+    "en": "Keep archive playback synchronized through buffering and segment changes. Manage saved clips without the old 4 GiB cap, export retained recordings from removed cameras, and review clear archive operation history.",
+    "ru": "Синхронная хронология при подгрузке и смене файлов. Управление сохранёнными клипами без прежнего предела 4 ГБ, клипы из архива удалённых камер и понятная история операций с архивом.",
+    "zh-CN": "在缓冲及片段切换时保持归档播放同步。管理已保存片段，移除旧的4 GiB源文件限制，导出已删除摄像机保留的录像，并查看清晰的归档操作历史。"
   },
   "changelog_i18n": {
     "en": [
-      "Keep each row's chosen action and select its recording. Confirm different actions together using the existing durable review queue.",
-      "Clear outdated confirmations before a new check; reject late previews and distinguish loading, running and incomplete checks from an empty result.",
-      "Use matching database clocks for recorder safety windows and review observations, and absolute filesystem time for orphan age checks.",
-      "Retire confirmed missing recordings with old stale-writing metadata only after the writer stops; retain root, absence and exact-object checks.",
-      "Explain older stale-writing findings without claiming that untested video is unplayable; preserve per-recording actions when retrying failures.",
-      "Refresh README and installation examples for 0.9.10; document implemented PTZ, frame-aware workspaces, recording recovery and archive review."
+      "Synchronize chronology recordings through loading and buffering; confirmed archive gaps do not block the group or conceal actual failures.",
+      "Follow video progress, cancel obsolete seeks, preserve manual pause and hold the last frame while the next recording loads.",
+      "Use a shared New/Saved clip dialog with separate Records and Chronology context, clear selection, paged results and confirmed deletion.",
+      "Remove the fixed 4 GiB source cap, support three-hour clips across 180 or more files, and check space with size-aware preparation timeouts.",
+      "Keep completed clips until manual deletion and export retained recordings of removed cameras; deleting a clip never deletes source footage.",
+      "Group archive history steps, add filters and paging, distinguish past results from current relevance, and correct displayed operation times.",
+      "Keep history filters and summary fixed above scrolling events; compact storage roots and show removed camera names on a single line.",
+      "Confirm logout, align recording checkboxes and center camera names in list view without changing the card layout.",
+      "Keep the maintenance update action in a stable second row, soften chronology button highlights and acknowledge Play without layout shifts.",
+      "Refresh README features, current limitations and installation examples for v0.9.11."
     ],
     "ru": [
-      "Действие остаётся в строке и включает её галочку. Разные действия подтверждаются общим планом в существующей устойчивой очереди.",
-      "Новая проверка сбрасывает старое подтверждение. Запоздалый ответ не возвращает его; загрузка и текущая проверка не выдаются за пустой итог.",
-      "Окна защиты Recorder и время перепроверки используют согласованные часы БД. Возраст файла проверяется по абсолютному времени.",
-      "Старая ссылка на отсутствующий файл удаляется и при зависшем статусе, но только без активной записи и с повторной проверкой диска и отсутствия файла.",
-      "Пояснение зависшей записи не объявляет видео непригодным без проверки. Повтор невыполненных сохраняет собственное действие каждой строки.",
-      "README и примеры установки актуализированы для 0.9.10. PTZ, раскладка по кадру, восстановление записи и разбор архива описаны как реализованные."
+      "Записи хронологии синхронно ждут подгрузку. Подтверждённый пробел не мешает группе, а ошибка не маскируется отсутствием архива.",
+      "Часы следуют видео. Старые перемотки отменяются, ручная пауза сохраняется, последний кадр удерживается при загрузке следующего файла.",
+      "Общее окно нового и сохранённого клипа: отдельный контекст Записей и Хронологии, снятие выбора, страницы списка и подтверждение удаления.",
+      "Снят предел источников 4 ГБ, поддержаны три часа и 180+ фрагментов, добавлены проверка места и зависящие от объёма сроки подготовки.",
+      "Готовые клипы хранятся до ручного удаления; можно создать клип из архива удалённой камеры. Удаление клипа не удаляет исходные записи.",
+      "Шаги истории архива сгруппированы; добавлены фильтры, страницы, текущая актуальность старых результатов и правильное время событий.",
+      "Фильтры и сводка истории закреплены, прокручиваются события. Корни архива компактнее; имя удалённой камеры и пометка стоят в одной строке.",
+      "Добавлено подтверждение выхода, выровнены галочки записей и имена камер в списке без изменения вида карточек.",
+      "Кнопка обновления занимает постоянный второй ряд. Хронология получила мягкое выделение и отклик Пуска без сдвигов интерфейса.",
+      "README, ограничения продукта и примеры установки актуализированы для v0.9.11."
     ],
     "zh-CN": [
-      "保留每行选择的操作并自动勾选录像。通过现有持久队列统一确认不同操作。",
-      "开始新检查前清除旧确认，拒绝过期预览，并区分加载中、检查中、未完成与无问题的最终结果。",
-      "录像保护窗口与复查观察时间使用一致的数据库时钟，孤立文件年龄使用绝对文件系统时间。",
-      "仅在写入任务停止并重新确认磁盘与文件缺失后，移除带旧卡住状态的缺失录像目录引用。",
-      "旧卡住状态不再被解释为未经证实的视频不可播放；重试未完成项时保留每条录像原先的操作。",
-      "更新 README 与 0.9.10 安装示例，准确介绍已实现的 PTZ、按画面排列、录像恢复及归档问题处理。"
+      "时间轴录像同步等待加载和缓冲；已确认的录像空缺不阻塞播放组，也不掩盖实际故障。",
+      "公共时钟跟随视频进度，取消过期定位，保留手动暂停，并在下一段加载时保持最后一帧。",
+      "统一新建和已保存片段窗口，录像与时间轴保留独立上下文，支持取消选择、分页和确认删除。",
+      "移除固定4 GiB源文件限制，支持跨180个或更多文件生成最长三小时片段，并检查空间及按大小设置准备超时。",
+      "已完成片段保留至手动删除；可导出已删除摄像机保留的录像。删除片段不会删除源录像。",
+      "归档历史按操作分组，增加筛选和分页，区分当次结果与当前状态，并修正操作时间显示。",
+      "历史筛选和摘要固定，事件列表独立滚动；归档位置更紧凑，已删除摄像机的名称和标记保持同一行。",
+      "增加退出确认，对齐录像选择框并居中列表中的摄像机名称，不改变卡片布局。",
+      "更新按钮保留在固定第二行，时间轴按钮使用柔和高亮，播放点击反馈不改变布局。",
+      "更新README、产品限制及v0.9.11安装示例。"
     ]
   }
 }

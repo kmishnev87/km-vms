@@ -64,7 +64,7 @@ assert.equal(anchor.removed, true);
 assert.ok(anchor.href.startsWith('/api/archive/exports/clip-one/file?'));
 assert.ok(!('media_token' in info));
 
-const resultComponent = fs.readFileSync(new URL('../components/ArchiveExportResult.js', import.meta.url), 'utf8');
+const resultComponent = fs.readFileSync(new URL('../components/ArchiveExportDialog.js', import.meta.url), 'utf8');
 assert.ok(resultComponent.includes('closeRef.current = onClose;'));
 assert.ok(resultComponent.includes('closeRef.current?.();'));
 assert.ok(!resultComponent.includes('stopPropagation(); onClose?.();'));

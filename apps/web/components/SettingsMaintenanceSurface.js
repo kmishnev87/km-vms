@@ -397,13 +397,6 @@ export function SettingsMaintenanceModal({
                         >
                           <img src="/assets/icons/ui/update-check.svg" alt="" aria-hidden="true" />
                         </button>
-                        {updateApplyOperator.showApplyButton ? (
-                          <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                            {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyHasUnknownLaunch || updateApplyOperator.stateUnknown
-                              ? updateApplyPrimaryText
-                              : t.updateApplyStart}
-                          </button>
-                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -420,6 +413,13 @@ export function SettingsMaintenanceModal({
                         </div>
                       </dl>
                       <p>{updateApplyOperator.releaseTitle}</p>
+                    </div>
+                    <div className="settingsUpdateApplyActions settingsUpdateApplyPrimaryAction">
+                      <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
+                        {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyHasUnknownLaunch || updateApplyOperator.stateUnknown
+                          ? updateApplyPrimaryText
+                          : t.updateApplyStart}
+                      </button>
                     </div>
                   </div>
 

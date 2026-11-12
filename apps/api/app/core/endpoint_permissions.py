@@ -199,6 +199,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("archive-exports", "GET", "/archive/exports/limits", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Reads server-side evidence export UI limits."),
     EndpointPermission("archive-exports", "POST", "/archive/exports/cleanup", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Runs bounded cleanup for expired export-owned artifacts under export root."),
     EndpointPermission("archive-exports", "GET", "/archive/exports/{export_id}", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Reads safe archive export job metadata."),
+    EndpointPermission("archive-exports", "DELETE", "/archive/exports/{export_id}", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Deletes only the selected derived clip and passport, with confirmation and per-job generation lock; source recordings are preserved."),
     EndpointPermission("archive-exports", "POST", "/archive/exports/{export_id}/generate", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Generates bounded evidence clip for queued export job; no download endpoint."),
     EndpointPermission("archive-exports", "POST", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Creates or refreshes protected evidence metadata manifest; no download endpoint."),
     EndpointPermission("archive-exports", "GET", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Reads protected sanitized evidence metadata manifest; no file attachment."),

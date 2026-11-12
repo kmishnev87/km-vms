@@ -37,10 +37,10 @@ assert.match(css, /\.storageOpsTopMetricValueButton\s*\{[\s\S]*text-decoration:\
 
 assert.doesNotMatch(center, /historyCount/);
 assert.doesNotMatch(center, /archiveManagementHistoryButton[\s\S]*<strong aria-hidden/);
-assert.match(page, /apiFetch\("\/storage\/operations\/history"\)/);
-assert.match(center, /history\.summary\?\.camera_retention/);
-assert.match(center, /history\.daily_items/);
-assert.match(center, /history\.attention_items/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /apiFetch\(\x60\/storage\/operations\/history\?\$\{query\}/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /data\?\.summary\?\.\[key\]/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /data\.daily_items/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /data\?\.items/);
 assert.match(backendHistory, /or_\(deleted_expr > 0, bytes_expr > 0\)/);
 assert.match(backendHistory, /\.filter\([\s\S]*or_\(deleted_expr > 0, bytes_expr > 0\)[\s\S]*\.limit\(USEFUL_HISTORY_DAILY_LIMIT\)/);
 assert.doesNotMatch(center, /Требуют внимания:\s*0|Needs attention:\s*0/);

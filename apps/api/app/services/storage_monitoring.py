@@ -9,7 +9,7 @@ import shutil
 import threading
 import time
 
-from sqlalchemy import BigInteger, and_, cast, func, or_
+from sqlalchemy import BigInteger, and_, case, cast, func, or_
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
@@ -36,7 +36,7 @@ from app.services.recording_storage import (
 from app.services.archive_migration import bounded_migration_summary
 from app.services.storage_contract import storage_contract
 from app.services.timezone_contract import format_system_iso, timezone_context
-from app.services.storage_operations_foundation import operation_summaries, safe_reason_code
+from app.services.storage_operations_foundation import database_now, operation_summaries, safe_reason_code
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -515,6 +515,7 @@ def _safe_camera_usage(rows: list[dict] | None) -> list[dict]:
             {
                 "camera_id": row.get("camera_id"),
                 "camera_name": row.get("camera_name"),
+                "camera_deleted": bool(row.get("camera_deleted")),
                 "recording_count": int(row.get("recording_count") or 0),
                 "segment_count": int(row.get("segment_count") or 0),
                 "existing_file_count": int(row.get("existing_file_count") or 0),
@@ -844,9 +845,12 @@ def _history_source(operation_type: str) -> str:
     return "camera_retention" if operation_type == "retention_auto_run" else "auto_free_space"
 
 
-def useful_storage_operation_history(db: Session) -> dict:
+def useful_storage_operation_history(db: Session, *, period_days=30, operation_type=None, result_status=None, limit=20, offset=0) -> dict:
     """Return bounded, display-safe history only when the operator opens it."""
-    now = datetime.utcnow()
+    from app.services.archive_operation_history import archive_operation_history_items
+    # StorageOperation timestamps are DB-wall-clock values from database_now,
+    # not UTC-naive recording timestamps. Read them using their own clock.
+    now = database_now(db)
     since_24h = now - timedelta(hours=24)
     since_history = now - timedelta(days=USEFUL_HISTORY_DAYS)
     # PostgreSQL JSON.as_integer() emits INT4, which overflows above 2 GiB.
@@ -860,6 +864,7 @@ def useful_storage_operation_history(db: Session) -> dict:
             func.count(StorageOperation.id),
             func.coalesce(func.sum(deleted_expr), 0),
             func.coalesce(func.sum(bytes_expr), 0),
+            func.sum(case((StorageOperation.status.in_(("failed", "blocked", "partial", "interrupted")), 1), else_=0)),
         )
         .filter(
             StorageOperation.operation_type.in_(USEFUL_HISTORY_OPERATION_TYPES),
@@ -874,6 +879,7 @@ def useful_storage_operation_history(db: Session) -> dict:
             "run_count": int(row[1] or 0),
             "deleted_count": int(row[2] or 0),
             "bytes_freed": int(row[3] or 0),
+            "failed_runs": int(row[4] or 0),
         }
         for row in aggregate_rows
     }
@@ -897,25 +903,8 @@ def useful_storage_operation_history(db: Session) -> dict:
         .all()
     )
 
-    attention_rows = (
-        db.query(StorageOperation)
-        .filter(
-            StorageOperation.finished_at.isnot(None),
-            StorageOperation.finished_at >= since_history,
-            or_(
-                StorageOperation.status.in_(("failed", "blocked", "partial", "interrupted")),
-                StorageOperation.retry_allowed.is_(True),
-                and_(
-                    StorageOperation.retry_mode.isnot(None),
-                    StorageOperation.retry_mode != "none",
-                ),
-                StorageOperation.next_action.isnot(None),
-            ),
-        )
-        .order_by(StorageOperation.finished_at.desc(), StorageOperation.id.desc())
-        .limit(USEFUL_HISTORY_ATTENTION_LIMIT)
-        .all()
-    )
+    history = archive_operation_history_items(db, period_days=period_days, operation_type=operation_type,
+                                             result_status=result_status, limit=limit, offset=offset)
 
     summary: dict[str, dict] = {}
     for operation_type in USEFUL_HISTORY_OPERATION_TYPES:
@@ -923,7 +912,7 @@ def useful_storage_operation_history(db: Session) -> dict:
         summary[_history_source(operation_type)] = {
             **facts,
             "state": (
-                "deleted"
+                "not_run" if not facts["run_count"] else "needs_attention" if facts.get("failed_runs") else "deleted"
                 if facts["deleted_count"] > 0 or facts["bytes_freed"] > 0
                 else "no_deletion_required"
                 if operation_type == "retention_auto_run"
@@ -933,7 +922,7 @@ def useful_storage_operation_history(db: Session) -> dict:
 
     return {
         "available": True,
-        "generated_at": now.isoformat() + "Z",
+        "generated_at": _utc_now(),
         "window_hours": 24,
         "summary": summary,
         "daily_items": [
@@ -945,19 +934,7 @@ def useful_storage_operation_history(db: Session) -> dict:
             }
             for row in daily_rows
         ],
-        "attention_items": [
-            {
-                "id": str(row.id),
-                "operation_type": str(row.operation_type),
-                "status": str(row.status),
-                "finished_at": row.finished_at.isoformat() + "Z" if row.finished_at else None,
-                "reason_code": safe_reason_code(row.reason_code, fallback="storage_operation_attention_required"),
-                "retry_allowed": bool(row.retry_allowed),
-                "retry_mode": str(row.retry_mode) if row.retry_mode else None,
-                "next_action": str(row.next_action) if row.next_action else None,
-            }
-            for row in attention_rows
-        ],
+        **history,
     }
 
 
@@ -1285,6 +1262,7 @@ def _metadata_usage_aggregates(db: Session, cameras: dict[int, Camera]) -> dict:
             func.min(RecordingSegment.started_at),
             func.max(RecordingSegment.started_at),
             func.max(RecordingSegment.reconciliation_checked_at),
+            func.max(RecordingSegment.camera_name_snapshot),
         )
         .filter(*base_filters)
         .group_by(RecordingSegment.archive_root_id, RecordingSegment.camera_id)
@@ -1315,7 +1293,7 @@ def _metadata_usage_aggregates(db: Session, cameras: dict[int, Camera]) -> dict:
     total_count = 0
     total_bytes = 0
     last_reconciliation_at = None
-    for root_id, camera_id, count, size_bytes, oldest, newest, checked_at in grouped:
+    for root_id, camera_id, count, size_bytes, oldest, newest, checked_at, camera_snapshot in grouped:
         count = int(count or 0)
         size_bytes = int(size_bytes or 0)
         total_count += count
@@ -1344,6 +1322,15 @@ def _metadata_usage_aggregates(db: Session, cameras: dict[int, Camera]) -> dict:
         row = camera_usage.setdefault(
             int(camera_id),
             {**_empty_camera_usage(cameras.get(int(camera_id))), "existing_file_count": None, "evidence_status": "metadata_only"},
+        )
+        camera = cameras.get(int(camera_id))
+        row["camera_id"] = int(camera_id)
+        row["camera_deleted"] = camera is None or camera.deleted_at is not None
+        row["camera_name"] = _safe_camera_usage_label(
+            camera.name if camera is not None and camera.deleted_at is None else None,
+            TECHNICAL_DELETED_CAMERA_RE.sub("", str(camera.name)) if camera else None,
+            camera_snapshot,
+            fallback=f"Camera {camera_id}",
         )
         row["recording_count"] += count
         row["segment_count"] += count
@@ -1427,7 +1414,7 @@ def build_lightweight_storage_monitoring_summary(db: Session) -> dict:
     )
     cameras = {
         camera.id: camera
-        for camera in db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.id.asc()).all()
+        for camera in db.query(Camera).order_by(Camera.id.asc()).all()
     }
     metadata = _metadata_usage_aggregates(db, cameras)
     archive_roots = []

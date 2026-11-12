@@ -197,13 +197,13 @@ assert.match(page, /if \(!open\) return <OperationDialog dialog=\{null\} onClose
 assert.match(page, /archiveManagementIntegrityTitle/);
 assert.match(page, /archiveManagementMigrationTitle/);
 assert.match(page, /openOperationHistory/);
-assert.match(page, /apiFetch\("\/storage\/operations\/history"\)/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /apiFetch\(\x60\/storage\/operations\/history\?\$\{query\}/);
 assert.match(page, /typeof scanId === "string" && scanId \? `\/storage\/integrity\/scans\/\$\{encodeURIComponent\(scanId\)\}/);
 assert.match(center, /groups\.map/);
 assert.match(center, /role="switch"/);
 assert.match(center, /ArchiveOperationHistoryContent/);
-assert.match(center, /operationHistoryUnavailable/);
-assert.match(center, /operationHistoryCameraRetention/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /copy\.loadError/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /copy\.retention/);
 assert.doesNotMatch(center, /onOpenItem\?\.\(item\)/);
 assert.match(feedback, /useModalBodyScrollLock/);
 assert.match(feedback, /acquireModalScrollLock\(\{ freezePosition \}\)/);

@@ -63,17 +63,17 @@ const archiveIndex = storagePage.indexOf("<Section title={copy.archiveSpace}");
 const cameraIndex = storagePage.indexOf("<Section title={copy.cameras}");
 const rootsIndex = storagePage.indexOf("<Section title={copy.archiveRoots}");
 const managementIndex = storagePage.indexOf("<ArchiveManagementCenter", rootsIndex);
-assert.ok(archiveIndex > 0 && archiveIndex < cameraIndex && cameraIndex < rootsIndex && rootsIndex < managementIndex);
-assert.equal((storagePage.slice(cameraIndex, rootsIndex).match(/<th>\{copy\.problems\}<\/th>/g) || []).length, 1);
+assert.ok(archiveIndex > 0 && archiveIndex < rootsIndex && rootsIndex < cameraIndex && cameraIndex < managementIndex);
+assert.equal((storagePage.slice(cameraIndex, managementIndex).match(/<th>\{copy\.problems\}<\/th>/g) || []).length, 1);
 assert.match(storagePage, /row\.problem_counts/);
 assert.match(storagePage, /showCameraProblems\(row\)/);
 assert.match(storageHelpers, /problem_counts:\s*Object\.fromEntries/);
 
-assert.match(storageCss, /grid-template-areas:[\s\S]*?"archive cameras"[\s\S]*?"roots roots"[\s\S]*?"management management"/);
+assert.match(storageCss, /grid-template-areas:[\s\S]*?"left cameras"[\s\S]*?"management management"/);
 assert.match(storageCss, /archiveManagementRows[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
 assert.match(storageCss, /storageOpsRootForm-product[\s\S]*?height:\s*38px/);
 assert.match(storageCss, /storageOpsCameraTable[\s\S]*?font-size:\s*12px/);
-assert.match(responsiveCss, /@media \(max-width: 980px\)[\s\S]*?"archive"[\s\S]*?"cameras"[\s\S]*?"roots"[\s\S]*?"management"/);
+assert.match(responsiveCss, /@media \(max-width: 980px\)[\s\S]*?"left"[\s\S]*?"cameras"[\s\S]*?"management"/);
 
 for (const key of [
   "rootAddedTitle",

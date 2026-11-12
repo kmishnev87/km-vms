@@ -12,7 +12,7 @@ import {
   storageMigrationActivitySnapshot,
 } from "../lib/storageOperations";
 import SystemHealthIndicator from "./SystemHealthIndicator";
-import { OperationToast } from "./OperationFeedback";
+import { OperationDialog, OperationToast } from "./OperationFeedback";
 
 const items = [
   { href: "/cameras", labelKey: "nav.cameras", iconSrc: "/assets/icons/ui/camera.png" },
@@ -95,6 +95,7 @@ export default function Layout({ children, className = "" }) {
   const { t } = useI18n();
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [logoutError, setLogoutError] = useState(null);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -149,6 +150,12 @@ export default function Layout({ children, className = "" }) {
   return (
     <div className={className ? `layoutShell ${className}` : "layoutShell"}>
       <OperationToast toast={logoutError} onClose={() => setLogoutError(null)} />
+      <OperationDialog dialog={logoutConfirmOpen ? {
+        id: "logout-confirm", title: t("sessionActions.title"), message: t("sessionActions.message"),
+        tone: "neutral", presentation: "compact-confirmation", busy: logoutBusy,
+        closeLabel: t("sessionActions.cancel"), cancelLabel: t("sessionActions.cancel"), confirmLabel: t("sessionActions.confirm"),
+        onConfirm: logout,
+      } : null} onClose={() => setLogoutConfirmOpen(false)} />
       <header className="topNav">
         <div className="topNavInner">
           <Link href="/" className="topBrand" aria-label="KM VMS">
@@ -207,7 +214,7 @@ export default function Layout({ children, className = "" }) {
 
             <button
               className="topNavItem topNavButton"
-              onClick={logout}
+              onClick={() => setLogoutConfirmOpen(true)}
               disabled={logoutBusy}
               type="button"
               title={t("common.logout")}

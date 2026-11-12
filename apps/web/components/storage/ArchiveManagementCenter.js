@@ -1,4 +1,5 @@
 "use client";
+import ArchiveOperationHistory from "./ArchiveOperationHistory";
 
 export function ArchivePolicySwitch({ checked, busy = false, disabled = false, label, onChange, title = "" }) {
   return (
@@ -74,68 +75,6 @@ export function ArchiveManagementCenter({ title, subtitle, historyLabel, onOpenH
   );
 }
 
-export function ArchiveOperationHistoryContent({ history, loading, error, copy, language, formatDateTime, formatBytes, humanBlockerReason }) {
-  if (loading) {
-    return <div className="archiveManagementHistoryEmpty">{copy.loading}</div>;
-  }
-  if (error) {
-    return <div className="archiveManagementHistoryEmpty" role="alert">{error}</div>;
-  }
-  if (!history?.available) {
-    return <div className="archiveManagementHistoryEmpty">{copy.operationHistoryUnavailable}</div>;
-  }
-  const cameraRetention = history.summary?.camera_retention || {};
-  const autoFree = history.summary?.auto_free_space || {};
-  const dailyItems = Array.isArray(history.daily_items) ? history.daily_items : [];
-  const attentionItems = Array.isArray(history.attention_items) ? history.attention_items : [];
-  return (
-    <div className="archiveManagementUsefulHistory">
-      <section className="archiveManagementHistorySummary" aria-label={copy.operationHistory24Hours}>
-        {[
-          ["camera", copy.operationHistoryCameraRetention, cameraRetention],
-          ["auto", copy.operationHistoryAutoFree, autoFree],
-        ].map(([key, label, facts]) => (
-          <article key={key}>
-            <span>{label}</span>
-            <strong>{facts.state === "deleted" ? copy.operationHistorySpaceFreed : facts.state === "not_triggered" ? copy.operationHistoryNotTriggered : copy.operationHistoryNoDeletionRequired}</strong>
-            <small>{copy.operationHistoryDeletedFiles}: {Number(facts.deleted_count || 0)} · {formatBytes(facts.bytes_freed || 0)}</small>
-          </article>
-        ))}
-      </section>
-      {dailyItems.length ? (
-        <section className="archiveManagementHistorySection">
-          <h3>{copy.operationHistoryFreedByDay}</h3>
-          <div className="archiveManagementHistoryList">
-            {dailyItems.map((item) => (
-              <article className="archiveManagementHistoryItem" key={`${item.day}-${item.source}`}>
-                <div className="archiveManagementHistoryPrimary">
-                  <strong>{item.source === "camera_retention" ? copy.operationHistoryCameraRetention : copy.operationHistoryAutoFree}</strong>
-                  <time dateTime={item.day}>{formatDateTime(`${item.day}T00:00:00Z`, language)}</time>
-                </div>
-                <p>{copy.operationHistoryDeletedFiles}: <strong>{Number(item.deleted_count || 0)}</strong> · {formatBytes(item.bytes_freed || 0)}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {attentionItems.length ? (
-        <section className="archiveManagementHistorySection">
-          <h3>{copy.operationHistoryNeedsAttention}</h3>
-          <div className="archiveManagementHistoryList">
-            {attentionItems.map((item) => (
-              <article className="archiveManagementHistoryItem" key={item.id}>
-                <div className="archiveManagementHistoryPrimary">
-                  <strong>{copy.operationHistoryOperationNeedsAttention}</strong>
-                  <span className="storageOpsStatusPill storageOpsStatusPill-warning">{copy[`recentOperationStatus${String(item.status || "unknown").replace(/(^|_)([a-z])/g, (_match, _separator, letter) => letter.toUpperCase())}`] || copy.recentOperationStatusUnknown}</span>
-                  {item.finished_at ? <time dateTime={item.finished_at}>{formatDateTime(item.finished_at, language)}</time> : null}
-                </div>
-                <p>{humanBlockerReason(item.reason_code, language)}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {!dailyItems.length && !attentionItems.length ? <div className="archiveManagementHistoryEmpty">{copy.operationHistoryUsefulEmpty}</div> : null}
-    </div>
-  );
+export function ArchiveOperationHistoryContent(props) {
+  return <ArchiveOperationHistory {...props} />;
 }

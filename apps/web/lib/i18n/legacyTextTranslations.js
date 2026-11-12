@@ -1,5 +1,8 @@
 export const TEXT_TRANSLATIONS = {
   en: {
+    "Ожидание других записей": "Waiting for other recordings",
+    "Загрузка записи...": "Loading recording...",
+    "Нет записи на это время": "No recording at this time",
     "Раздел требует внимания": "A section needs attention",
     "Раздел сообщает о проблеме, но подробная причина не получена. Обновите состояние или откройте диагностику.": "A section reports an issue, but its detailed reason is unavailable. Refresh the status or open diagnostics.",
     "Откройте соответствующий раздел для уточнения состояния.": "Open the relevant section to check its status.",
@@ -246,6 +249,9 @@ export const TEXT_TRANSLATIONS = {
     "Скачать паспорт клипа": "Download clip manifest",
   },
   "zh-CN": {
+    "Ожидание других записей": "等待其他录像",
+    "Загрузка записи...": "正在加载录像...",
+    "Нет записи на это время": "此时没有录像",
     "Раздел требует внимания": "某个部分需要关注",
     "Раздел сообщает о проблеме, но подробная причина не получена. Обновите состояние или откройте диагностику.": "某个部分报告了问题，但未收到详细原因。请刷新状态或打开诊断。",
     "Откройте соответствующий раздел для уточнения состояния.": "请打开相应部分查看状态。",

@@ -50,10 +50,12 @@ test("sizing uses this archive source, not stale metadata; no video falls back t
 });
 test("closing a view no longer references the absent page-local setter", () => {
   const calls = [];
-  new Function("tileId", "cancelPlaybackCoordinator", "setTiles", "setFullscreenTileId", body("removeTile"))(
-    "a", reason => calls.push(reason), fn => assert.deepEqual(fn([{ id: "a" }, { id: "b" }]), [{ id: "b" }]),
+  const tiles = [{ id: "a" }, { id: "b" }];
+  new Function("tileId", "tilesRef", "invalidateSeekActions", "playbackResolverRef", "setIsPlaying", "setTiles", "setFullscreenTileId", body("removeTile"))(
+    "a", { current: tiles }, () => calls.push("seek"), { current: { invalidate: () => calls.push("lookup") } },
+    value => calls.push(value), fn => assert.deepEqual(fn(tiles), [{ id: "b" }]),
     fn => { assert.equal(fn("a"), null); assert.equal(fn("b"), "b"); });
-  assert.deepEqual(calls, ["tile-removed"]);
+  assert.deepEqual(calls, [], "closing one tile must not stop the remaining playback group");
   assert.doesNotMatch(page, /setPlaybackMap\(/);
 });
 test("closing all invalidates pending work, stops playback and only clears views", () => {

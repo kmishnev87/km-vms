@@ -597,9 +597,6 @@ function StorageOperationsPageContent() {
   const [archiveRootDialog, setArchiveRootDialog] = useState(null);
   const [operationToast, setOperationToast] = useState(null);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
-  const [operationHistory, setOperationHistory] = useState(null);
-  const [operationHistoryLoading, setOperationHistoryLoading] = useState(false);
-  const [operationHistoryError, setOperationHistoryError] = useState("");
   const [rootAction, setRootAction] = useState("");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
@@ -1141,16 +1138,6 @@ function StorageOperationsPageContent() {
 
   async function openOperationHistory() {
     setHistoryDialogOpen(true);
-    setOperationHistoryLoading(true);
-    setOperationHistoryError("");
-    try {
-      setOperationHistory(await apiFetch("/storage/operations/history"));
-    } catch (err) {
-      setOperationHistory(null);
-      setOperationHistoryError(errorDetailText(err, copy.operationHistoryUnavailable, language));
-    } finally {
-      setOperationHistoryLoading(false);
-    }
   }
 
   function openArchiveRootSetup() {
@@ -1314,20 +1301,19 @@ function StorageOperationsPageContent() {
   const historyDialog = historyDialogOpen ? {
     id: "archive-operation-history",
     title: copy.operationHistoryTitle,
-    message: copy.operationHistoryIntro,
+    message: "",
     className: "archiveOperationHistoryDialog",
+    showFooterClose: false,
     tone: "neutral",
     closeLabel: copy.close,
     content: (
       <ArchiveOperationHistoryContent
-        history={operationHistory}
-        loading={operationHistoryLoading}
-        error={operationHistoryError}
         copy={copy}
         language={language}
         formatDateTime={formatDateTime}
         formatBytes={formatBytes}
         humanBlockerReason={humanBlockerReason}
+        onOpenIntegrity={() => { setHistoryDialogOpen(false); openIntegrityDialog(); }}
       />
     ),
   } : null;
@@ -1381,36 +1367,167 @@ function StorageOperationsPageContent() {
             </section>
 
             <div className="storageOpsDashboard">
-              <Section title={copy.archiveSpace} className="storageOpsSection-archive">
-                <div className="storageOpsVolumeGroups">
-                  {archiveVolumeGroups.map((group) => {
-                    const groupCapacity = group.capacity || {};
-                    const groupUsagePercent = Number(groupCapacity.usage_percent || 0);
-                    const groupProblemCount = Number(group.problem_file_count || 0);
-                    return (
-                      <div className="storageOpsVolumeGroup" key={group.physical_volume_id || group.display_label || "active"}>
-                        <div className="storageOpsCapacityHeader">
-                          <div>
-                            <span>{group.display_label || group.physical_volume_id || copy.archiveSpace}</span>
-                            <strong>{formatBytes(groupCapacity.total_bytes)}</strong>
+              <div className="storageOpsLeftColumn">
+                <Section title={copy.archiveSpace} className="storageOpsSection-archive">
+                  <div className="storageOpsVolumeGroups">
+                    {archiveVolumeGroups.map((group) => {
+                      const groupCapacity = group.capacity || {};
+                      const groupUsagePercent = Number(groupCapacity.usage_percent || 0);
+                      const groupProblemCount = Number(group.problem_file_count || 0);
+                      return (
+                        <div className="storageOpsVolumeGroup" key={group.physical_volume_id || group.display_label || "active"}>
+                          <div className="storageOpsCapacityHeader">
+                            <div>
+                              <span>{group.display_label || group.physical_volume_id || copy.archiveSpace}</span>
+                              <strong>{formatBytes(groupCapacity.total_bytes)}</strong>
+                            </div>
+                            <span>{formatPercent(groupCapacity.usage_percent)} {copy.used}</span>
                           </div>
-                          <span>{formatPercent(groupCapacity.usage_percent)} {copy.used}</span>
+                          <div className="storageOpsCapacityBar" aria-label={copy.storageUsage}>
+                            <span style={{ width: `${Math.max(0, Math.min(100, groupUsagePercent))}%` }} />
+                          </div>
+                          <div className="storageOpsMiniGrid">
+                            <MiniFact label={copy.total} value={formatBytes(groupCapacity.total_bytes)} />
+                            <MiniFact label={copy.free} value={formatBytes(groupCapacity.free_bytes)} tone={freeSpaceTone(groupCapacity, policy)} />
+                            <MiniFact label={copy.archiveSize} value={formatBytes(group.archive_size_bytes)} />
+                            <MiniFact label={copy.segments} value={String(group.playable_file_count || 0)} />
+                            <MiniFact label={copy.problems} value={String(groupProblemCount)} tone={groupProblemCount ? "warning" : "ok"} />
+                          </div>
                         </div>
-                        <div className="storageOpsCapacityBar" aria-label={copy.storageUsage}>
-                          <span style={{ width: `${Math.max(0, Math.min(100, groupUsagePercent))}%` }} />
+                      );
+                    })}
+                  </div>
+                </Section>
+
+                <Section title={copy.archiveRoots} className="storageOpsSection-secondary storageOpsSection-roots">
+                  <div className="storageOpsRootList">
+                    {(archiveRoots.length ? archiveRoots : [currentArchiveRoot]).filter(Boolean).map((root) => {
+                      const rootScenario = archiveRootScenarioModel({
+                        root,
+                        permission: manageSettingsPermission,
+                        running: rootAction === `activate-${root.id}`,
+                      }, language);
+                      const active = Boolean(root.is_active);
+                      return (
+                        <div className="storageOpsRootListRow" key={root.id || archiveRootPath(root, archivePathText)}>
+                          <div className="storageOpsRootPath">
+                            <span>{active ? copy.currentArchive : copy.archiveLocation}</span>
+                            <strong>{archiveRootPath(root, archivePathText)}</strong>
+                            <small>{archiveRootLabel(root, copy)}</small>
+                          </div>
+                          <div className="storageOpsRootDeleteCell">
+                            <button
+                              className="storageOpsRootDeleteButton"
+                              type="button"
+                              title={copy.deleteArchiveRoot}
+                              aria-label={copy.deleteArchiveRoot}
+                              disabled={active || !!rootAction || !retentionPermission.allowed}
+                              onClick={() => requestDeleteRoot(root)}
+                            >
+                              <TrashIcon />
+                            </button>
+                          </div>
+                          <div><span>{copy.state}</span><strong>{archiveRootStateText(root, copy)}</strong></div>
+                          <div><span>{copy.size}</span><strong>{formatBytes(root.size_bytes ?? owned.size_bytes)}</strong></div>
+                          <div><span>{copy.segments}</span><strong>{root.segments_count ?? owned.segments_count ?? 0}</strong></div>
+                          <div>
+                            <span>{copy.problems}</span>
+                            {rootHasProblems(root) ? (
+                              <button className="storageOpsBadgeButton" type="button" onClick={() => showRootProblems(root)}>
+                                <Badge label={rootProblemLabel(root, copy, language)} tone={rootProblemTone(root)} />
+                              </button>
+                            ) : (
+                              <Badge label={rootProblemLabel(root, copy, language)} tone={rootProblemTone(root)} />
+                            )}
+                          </div>
+                          <div className="storageOpsRootActionsCell">
+                            <button
+                              className={`storageOpsRootActivateButton ${active ? "isActive" : ""}`}
+                              type="button"
+                              title={active ? copy.activeRoot : copy.makeActive}
+                              aria-label={active ? copy.activeRoot : copy.makeActive}
+                              disabled={active || !rootScenario.canActivate}
+                              onClick={() => requestActivateRoot(root)}
+                            >
+                              <CheckIcon />
+                            </button>
+                          </div>
                         </div>
-                        <div className="storageOpsMiniGrid">
-                          <MiniFact label={copy.total} value={formatBytes(groupCapacity.total_bytes)} />
-                          <MiniFact label={copy.free} value={formatBytes(groupCapacity.free_bytes)} tone={freeSpaceTone(groupCapacity, policy)} />
-                          <MiniFact label={copy.archiveSize} value={formatBytes(group.archive_size_bytes)} />
-                          <MiniFact label={copy.segments} value={String(group.playable_file_count || 0)} />
-                          <MiniFact label={copy.problems} value={String(groupProblemCount)} tone={groupProblemCount ? "warning" : "ok"} />
-                        </div>
+                      );
+                    })}
+                    {!archiveRoots.length && !currentArchiveRoot ? <div className="storageOpsEmpty">{copy.noRoots}</div> : null}
+                  </div>
+                  <details
+                    id="storage-archive-root-add"
+                    className="storageOpsDetails storageOpsAdvancedRoot"
+                    onToggle={(event) => {
+                      if (event.currentTarget.open && !archiveRootDiscoveryModel.refreshing) loadArchiveRootDiscovery();
+                    }}
+                  >
+                    <summary>
+                      <span className="storageOpsAdvancedRootSummaryContent">
+                        <span>{copy.addArchiveRoot}</span>
+                        <span
+                          className={`storageOpsDiscoveryStatus storageOpsDiscoveryStatus-${archiveRootDiscoveryHeader.tone}`}
+                          role="status"
+                          aria-live="polite"
+                          aria-atomic="true"
+                          title={copy[`discoveryStatus_${archiveRootDiscoveryHeader.state}`]}
+                        >
+                          {copy[`discoveryStatus_${archiveRootDiscoveryHeader.state}`]}
+                        </span>
+                      </span>
+                    </summary>
+                    <div className="storageOpsAdvancedRootBody">
+                      <div className="storageOpsRootForm storageOpsRootForm-product">
+                        <label className="storageOpsField">
+                          <span>{copy.storageRootLabel}</span>
+                          <select className="select" value={archiveRootChoiceId} onChange={(event) => setArchiveRootChoiceId(event.target.value)} disabled={!!rootAction}>
+                            {archiveRootChoices.map((choice) => (
+                              <option key={choice.id} value={choice.id}>
+                                {choice.label || choice.path} - {copy.discoveryFreeOfTotal
+                                  .replace("{free}", formatBytes(choice.free_bytes))
+                                  .replace("{total}", formatBytes(choice.total_bytes))}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="storageOpsField">
+                          <span>{copy.storageFolder}</span>
+                          <input className="input" value={archiveRootFolderName} onChange={(event) => setArchiveRootFolderName(event.target.value)} placeholder="KM-VMS-Recordings" />
+                        </label>
+                        <button
+                          className="button small appIllustratedAction storageOpsRootAddButton"
+                          type="button"
+                          onClick={addRoot}
+                          disabled={!!rootAction || !archiveRootSelectionReady || !manageSettingsPermission.allowed}
+                          title={rootAction === "add" ? copy.adding : copy.add}
+                          aria-label={rootAction === "add" ? copy.adding : copy.add}
+                          aria-busy={rootAction === "add" ? "true" : undefined}
+                        >
+                          <img src="/assets/icons/ui/add-storage-location.png" alt="" aria-hidden="true" />
+                        </button>
                       </div>
-                    );
-                  })}
-                </div>
-              </Section>
+                      <div className="storageOpsDiscoveryFeedback">
+                        {archiveRootDiscoveryHeader.needsRefresh ? (
+                          <button
+                            className={`button secondary small appIllustratedAction ${archiveRootDiscoveryModel.refreshing ? "isRefreshing" : ""}`}
+                            type="button"
+                            onClick={loadArchiveRootDiscovery}
+                            disabled={!!rootAction || archiveRootDiscoveryModel.refreshing}
+                            title={archiveRootDiscoveryModel.refreshing ? copy.refreshing : copy.refreshDiscovery}
+                            aria-label={archiveRootDiscoveryModel.refreshing ? copy.refreshing : copy.refreshDiscovery}
+                            aria-busy={archiveRootDiscoveryModel.refreshing ? "true" : undefined}
+                          >
+                            <span className="appIllustratedActionGlyph" aria-hidden="true">↻</span>
+                          </button>
+                        ) : null}
+                      </div>
+                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
+                    </div>
+                  </details>
+                </Section>
+              </div>
 
               <Section title={copy.cameras} className="storageOpsSection-cameras">
                 {cameraRows.length ? (
@@ -1428,7 +1545,7 @@ function StorageOperationsPageContent() {
                         <tbody>
                           {visibleCameraRows.map((row) => (
                             <tr key={row.camera_id || row.camera_name}>
-                              <td>{row.camera_name}</td>
+                              <td><div className="storageCameraIdentity"><span className="storageCameraName" title={row.camera_name}>{row.camera_name}</span>{row.camera_deleted ? <span className="storageDeletedCamera">({copy.cameraDeletedMark})</span> : null}</div></td>
                               <td>{formatBytes(row.size_bytes)}</td>
                               <td>{row.segment_count}</td>
                               <td>
@@ -1446,7 +1563,7 @@ function StorageOperationsPageContent() {
                     <div className="storageOpsCameraCards">
                       {visibleCameraRows.map((row) => (
                         <div className="storageOpsCameraCard" key={`card-${row.camera_id || row.camera_name}`}>
-                          <div className="storageOpsCameraCardIdentity"><strong>{row.camera_name}</strong></div>
+                          <div className="storageOpsCameraCardIdentity"><strong className="storageCameraIdentity"><span className="storageCameraName" title={row.camera_name}>{row.camera_name}</span>{row.camera_deleted ? <span className="storageDeletedCamera">({copy.cameraDeletedMark})</span> : null}</strong></div>
                           <div className="storageOpsCameraCardMetric"><span>{copy.size}</span><strong>{formatBytes(row.size_bytes)}</strong></div>
                           <div className="storageOpsCameraCardMetric"><span>{copy.segments}</span><strong>{row.segment_count}</strong></div>
                           <div className="storageOpsCameraCardMetric">
@@ -1465,135 +1582,6 @@ function StorageOperationsPageContent() {
                     ) : null}
                   </>
                 ) : <div className="storageOpsEmpty">{copy.noCameraOwned}</div>}
-              </Section>
-
-              <Section title={copy.archiveRoots} className="storageOpsSection-secondary storageOpsSection-roots">
-                <div className="storageOpsRootList">
-                  {(archiveRoots.length ? archiveRoots : [currentArchiveRoot]).filter(Boolean).map((root) => {
-                    const rootScenario = archiveRootScenarioModel({
-                      root,
-                      permission: manageSettingsPermission,
-                      running: rootAction === `activate-${root.id}`,
-                    }, language);
-                    const active = Boolean(root.is_active);
-                    return (
-                      <div className="storageOpsRootListRow" key={root.id || archiveRootPath(root, archivePathText)}>
-                        <div className="storageOpsRootPath">
-                          <span>{active ? copy.currentArchive : copy.archiveLocation}</span>
-                          <strong>{archiveRootPath(root, archivePathText)}</strong>
-                          <small>{archiveRootLabel(root, copy)}</small>
-                        </div>
-                        <div className="storageOpsRootDeleteCell">
-                          <button
-                            className="storageOpsRootDeleteButton"
-                            type="button"
-                            title={copy.deleteArchiveRoot}
-                            aria-label={copy.deleteArchiveRoot}
-                            disabled={active || !!rootAction || !retentionPermission.allowed}
-                            onClick={() => requestDeleteRoot(root)}
-                          >
-                            <TrashIcon />
-                          </button>
-                        </div>
-                        <div><span>{copy.state}</span><strong>{archiveRootStateText(root, copy)}</strong></div>
-                        <div><span>{copy.size}</span><strong>{formatBytes(root.size_bytes ?? owned.size_bytes)}</strong></div>
-                        <div><span>{copy.segments}</span><strong>{root.segments_count ?? owned.segments_count ?? 0}</strong></div>
-                        <div>
-                          <span>{copy.problems}</span>
-                          {rootHasProblems(root) ? (
-                            <button className="storageOpsBadgeButton" type="button" onClick={() => showRootProblems(root)}>
-                              <Badge label={rootProblemLabel(root, copy, language)} tone={rootProblemTone(root)} />
-                            </button>
-                          ) : (
-                            <Badge label={rootProblemLabel(root, copy, language)} tone={rootProblemTone(root)} />
-                          )}
-                        </div>
-                        <div className="storageOpsRootActionsCell">
-                          <button
-                            className={`storageOpsRootActivateButton ${active ? "isActive" : ""}`}
-                            type="button"
-                            title={active ? copy.activeRoot : copy.makeActive}
-                            aria-label={active ? copy.activeRoot : copy.makeActive}
-                            disabled={active || !rootScenario.canActivate}
-                            onClick={() => requestActivateRoot(root)}
-                          >
-                            <CheckIcon />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {!archiveRoots.length && !currentArchiveRoot ? <div className="storageOpsEmpty">{copy.noRoots}</div> : null}
-                </div>
-                <details
-                  id="storage-archive-root-add"
-                  className="storageOpsDetails storageOpsAdvancedRoot"
-                  onToggle={(event) => {
-                    if (event.currentTarget.open && !archiveRootDiscoveryModel.refreshing) loadArchiveRootDiscovery();
-                  }}
-                >
-                  <summary>
-                    <span className="storageOpsAdvancedRootSummaryContent">
-                      <span>{copy.addArchiveRoot}</span>
-                      <span
-                        className={`storageOpsDiscoveryStatus storageOpsDiscoveryStatus-${archiveRootDiscoveryHeader.tone}`}
-                        role="status"
-                        aria-live="polite"
-                        aria-atomic="true"
-                        title={copy[`discoveryStatus_${archiveRootDiscoveryHeader.state}`]}
-                      >
-                        {copy[`discoveryStatus_${archiveRootDiscoveryHeader.state}`]}
-                      </span>
-                    </span>
-                  </summary>
-                  <div className="storageOpsAdvancedRootBody">
-                    <div className="storageOpsRootForm storageOpsRootForm-product">
-                      <label className="storageOpsField">
-                        <span>{copy.storageRootLabel}</span>
-                        <select className="select" value={archiveRootChoiceId} onChange={(event) => setArchiveRootChoiceId(event.target.value)} disabled={!!rootAction}>
-                          {archiveRootChoices.map((choice) => (
-                            <option key={choice.id} value={choice.id}>
-                              {choice.label || choice.path} - {copy.discoveryFreeOfTotal
-                                .replace("{free}", formatBytes(choice.free_bytes))
-                                .replace("{total}", formatBytes(choice.total_bytes))}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="storageOpsField">
-                        <span>{copy.storageFolder}</span>
-                        <input className="input" value={archiveRootFolderName} onChange={(event) => setArchiveRootFolderName(event.target.value)} placeholder="KM-VMS-Recordings" />
-                      </label>
-                      <button
-                        className="button small appIllustratedAction storageOpsRootAddButton"
-                        type="button"
-                        onClick={addRoot}
-                        disabled={!!rootAction || !archiveRootSelectionReady || !manageSettingsPermission.allowed}
-                        title={rootAction === "add" ? copy.adding : copy.add}
-                        aria-label={rootAction === "add" ? copy.adding : copy.add}
-                        aria-busy={rootAction === "add" ? "true" : undefined}
-                      >
-                        <img src="/assets/icons/ui/add-storage-location.png" alt="" aria-hidden="true" />
-                      </button>
-                    </div>
-                    <div className="storageOpsDiscoveryFeedback">
-                      {archiveRootDiscoveryHeader.needsRefresh ? (
-                        <button
-                          className={`button secondary small appIllustratedAction ${archiveRootDiscoveryModel.refreshing ? "isRefreshing" : ""}`}
-                          type="button"
-                          onClick={loadArchiveRootDiscovery}
-                          disabled={!!rootAction || archiveRootDiscoveryModel.refreshing}
-                          title={archiveRootDiscoveryModel.refreshing ? copy.refreshing : copy.refreshDiscovery}
-                          aria-label={archiveRootDiscoveryModel.refreshing ? copy.refreshing : copy.refreshDiscovery}
-                          aria-busy={archiveRootDiscoveryModel.refreshing ? "true" : undefined}
-                        >
-                          <span className="appIllustratedActionGlyph" aria-hidden="true">↻</span>
-                        </button>
-                      ) : null}
-                    </div>
-                    {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
-                  </div>
-                </details>
               </Section>
 
               <ArchiveManagementCenter

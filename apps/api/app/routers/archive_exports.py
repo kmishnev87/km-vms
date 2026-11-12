@@ -21,6 +21,7 @@ from app.services.archive_exports import (
     cleanup_archive_export_artifacts,
     create_archive_export_job,
     create_archive_export_manifest,
+    delete_archive_export_job,
     generate_archive_export_job,
     prepare_archive_export_download,
     prepare_archive_manifest_download,
@@ -81,17 +82,22 @@ def list_exports(
     status: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    saved_only: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
 ):
     query = db.query(ArchiveExportJob)
+    if saved_only:
+        query = query.filter(ArchiveExportJob.status.in_(("done", "queued", "running")))
     if status:
         normalized = status.strip().lower()
         if normalized not in EXPORT_STATUSES:
             raise HTTPException(status_code=422, detail="Invalid export status")
         query = query.filter(ArchiveExportJob.status == normalized)
+    total = query.count()
     jobs = query.order_by(ArchiveExportJob.created_at.desc(), ArchiveExportJob.id.asc()).offset(offset).limit(limit).all()
-    return {"items": [serialize_archive_export_job(job) for job in jobs]}
+    return {"items": [serialize_archive_export_job(job) for job in jobs], "total": total,
+            "offset": offset, "limit": limit, "has_more": offset + len(jobs) < total}
 
 
 @router.get("/limits")
@@ -132,6 +138,19 @@ def get_export(
     if not job:
         raise HTTPException(status_code=404, detail="Export job not found")
     return {**serialize_archive_export_job(job), "can_resume": job.status == "running" and not archive_export_generation_active(db, job.id)}
+
+
+@router.delete("/{export_id}")
+def delete_export(
+    export_id: str,
+    request: Request,
+    confirm: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    if not confirm:
+        raise HTTPException(status_code=422, detail="export_delete_confirmation_required")
+    return delete_archive_export_job(db, export_id=export_id, actor=current_user, request=request)
 
 
 @router.post("/{export_id}/generate")

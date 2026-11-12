@@ -580,7 +580,7 @@ def test_stage11_request_rejects_path_like_client_fields(client, api_db):
 
 
 def test_stage11_public_statuses_are_exact():
-    assert export_service.EXPORT_STATUSES == {"queued", "running", "done", "failed", "expired"}
+    assert export_service.EXPORT_STATUSES == {"queued", "running", "done", "failed", "expired", "deleted"}
 
 
 def test_stage11_stage2_generate_route_is_registered_and_permission_gated():

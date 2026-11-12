@@ -3,6 +3,10 @@
   margin-bottom: 12px;
 }
 
+/* The header and row checkboxes share the same column axis. */
+.recordingsTable th:first-child, .recordingsTable td:first-child { text-align: center; }
+.recordingsTable th:first-child input[type="checkbox"], .recordingsTable td:first-child input[type="checkbox"] { display: block; margin: 0 auto; }
+
 .recordingsErrorBadge {
   margin-bottom: 12px;
 }

@@ -219,10 +219,16 @@ def storage_status(
 
 @router.get("/operations/history")
 def storage_operations_history(
+    period_days: int = Query(default=30, ge=1, le=30),
+    operation_type: str | None = Query(default=None, max_length=64),
+    result_status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    return useful_storage_operation_history(db)
+    return useful_storage_operation_history(db, period_days=period_days, operation_type=operation_type,
+                                            result_status=result_status, limit=limit, offset=offset)
 
 
 @router.get("/archive-roots")

@@ -38,7 +38,7 @@ assert.doesNotMatch(
   recordsPage.slice(recordsPage.indexOf("const clipCameraOptions")),
   /items\.forEach|selectedCamera !== "__all__"/
 );
-assert.match(recordsPage, /cameraId: ""/);
+assert.match(recordsPage, /cameraId: camera \? String\(camera\.id\) : ""/);
 assert.doesNotMatch(
   recordsPage.slice(recordsPage.indexOf("function openExportModal"), recordsPage.indexOf("function closeExportModal")),
   /clipCameraOptions\[0\]|selectedCamera === "__all__"/

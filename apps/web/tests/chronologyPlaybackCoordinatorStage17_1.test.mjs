@@ -26,7 +26,7 @@ test("Chronology owns a bounded playback coordinator for seek and startup", () =
 test("Chronology seek starts coordinator only after playback metadata is applied", () => {
   const page = read("app/chronology/page.js");
 
-  assert.equal(page.includes("const result = await resolvePlaybackForTimestamp(targetTs, false);"), true);
+  assert.match(page, /const result = await resolvePlaybackForTimestamp\(targetTs, false, false, (?:targetDate|nextDate)\.getTime\(\)\);/);
   assert.equal(page.includes("startPlaybackCoordinator({ targetTs, shouldResume: action.shouldResume, expectedTileIds })"), true);
   assert.equal(page.includes("resolvePlaybackForTimestamp(targetTs, true)"), false);
   assert.equal(page.includes("setIsPlaying(true);\n    }\n  }\n\n  async function handleTimelineSelect"), false);

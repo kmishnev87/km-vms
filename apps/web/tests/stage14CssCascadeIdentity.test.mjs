@@ -7,9 +7,11 @@ import { CSS_OWNERS, readProductSourceFile } from "./helpers/readProductSources.
 
 const root = path.resolve(import.meta.dirname, "..");
 const baseline = {
-  "40-storage-records-shared.css": "cac43eb452602b35b4b134aad66e3b79ca391e21554982abe83d846f2c390d82",
-  // Approved maintenance result/header repair advances only this stylesheet baseline.
-  "20-settings-maintenance.css": "7123d700d919e3114ceecc9ebfa5022f821c2f9ff52ae4a74a5437681cc620db"
+  // Approved left-column roots, shared clips, one-line deleted labels and fixed history workbench.
+  // Management remains full width; stylesheet identity and import order stay enforced.
+  "40-storage-records-shared.css": "29d72a234a3da9958d35929ec8645eb996d1c14d9d84c69a85118adddec64133",
+  // Approved persistent second-row update action advances only this stylesheet baseline.
+  "20-settings-maintenance.css": "98952c196b90f01d5a329f7bbf560e1262c0a410683c94ba0fa4c5ca43019629"
 };
 for (const [logical, files] of Object.entries(CSS_OWNERS)) {
   test(`CSS: ${logical} matches its approved baseline and preserves import order`, () => {

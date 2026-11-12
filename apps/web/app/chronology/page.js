@@ -11,7 +11,7 @@ import { WORKSPACE_KEY, normalizeTile, readSavedTiles, migrationMarkerKey, saveT
 import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
-import ArchiveExportResult from "../../components/ArchiveExportResult";
+import ArchiveExportDialog from "../../components/ArchiveExportDialog";
 import useArchiveExport from "../../lib/useArchiveExport";
 import { reconcilePlaybackMembership, timelineRangeWindow, timelineRangeWindowCovers, timelineRangesNeedReload } from "../../lib/workspaceContinuity";
 import { OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
@@ -19,7 +19,6 @@ import { apiFetch, getAuthToken } from "../../lib/api";
 import {
   buildArchiveExportPayload,
   canExportRecordings,
-  describeArchiveExportLimits,
   getArchiveExportLimits,
   normalizeChronologyDownloadError,
   startChronologyCurrentRecordingDownload,
@@ -172,7 +171,7 @@ function formatLocalNaiveTs(dt) {
 }
 
 function formatProductTimestampParam(dt) {
-  return productLocalInputToApi(formatLocalNaiveTs(dt));
+  return `${productLocalInputToApi(formatLocalNaiveTs(dt))}.${String(dt.getUTCMilliseconds()).padStart(3, "0")}`;
 }
 
 function dateTimeFromDate(dt) {
@@ -240,10 +239,26 @@ export default function ChronologyPage() {
   const [sidebarDropTargetCameraId, setSidebarDropTargetCameraId] = useState("");
   const [sidebarPointerDragMode, setSidebarPointerDragMode] = useState("");
   const [sidebarDragPreview, setSidebarDragPreview] = useState(null);
+  const emptyPlaybackClockRef = useRef(false);
+  const playbackBridgeRef = useRef(null);
   const { currentTs, setCurrentTs, currentTsRef, previewTs, setPreviewTs,
-    speed, setSpeed, isPlaying, setIsPlaying } = useChronologyClock(initialTs, isScrubbingRef);
+    speed, setSpeed, isPlaying, setIsPlaying } = useChronologyClock(initialTs, isScrubbingRef, { mediaDriven: true, emptyPlaybackRef: emptyPlaybackClockRef });
   const { playbackCoordinator, startPlaybackCoordinator, cancelPlaybackCoordinator,
-    releasePlaybackCoordinator, handleTilePlaybackState } = useChronologyPlaybackCoordinator(setIsPlaying);
+    releasePlaybackCoordinator, handleTilePlaybackState, registerPlaybackTile, setPlaybackMembership } = useChronologyPlaybackCoordinator(setIsPlaying, {
+      getTargetMs: () => currentTsRef.current?.getTime(),
+      onEmptyMode: empty => { emptyPlaybackClockRef.current = empty; },
+      onProgress: ms => { if (Number.isFinite(ms)) setCurrentTs(new Date(ms)); },
+      onHold: (ms, reason) => {
+        if (!Number.isFinite(ms)) return;
+        setCurrentTs(new Date(ms));
+        // Reactive holds can cross a file boundary too (membership/drift), not
+        // just ended. The source resolver reuses every still-covering interval.
+        if (reason !== "seek") playbackBridgeRef.current?.(ms);
+      },
+    });
+  const playPending = Boolean(playbackCoordinator?.releaseState === "holding" && playbackCoordinator.shouldResume);
+  const playRequested = Boolean(isPlaying || playPending);
+  const playButtonState = playPending ? "isWaiting" : isPlaying ? "isPlaying" : "";
   const [date, setDate] = useState(initialForm.date);
   const [time, setTime] = useState(initialForm.time);
   const [zoomKey, setZoomKey] = useState("24h");
@@ -392,6 +407,7 @@ export default function ChronologyPage() {
     setWorkspaceLayoutReady(false);
     setCameras([]); setCamerasLoaded(false); setCurrentUser(null); setExportCameraOptions([]);
     setExportModal(null); setIsPlaying(false); setFullscreenTileId(null);
+    cancelPlaybackCoordinator("session-changed");
     exportDraftRef.current = null;
     setQuickDownloadBusy(false); setDownloadChooserOpen(false); setDownloadResults([]);
     const writer = createSerializedLayoutWriter((payload) => apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
@@ -463,6 +479,8 @@ export default function ChronologyPage() {
   const { playbackMap, playbackMapRef, playbackResolverRef, resolvePlaybackForTimestamp } = useChronologySources({
     tilesRef, tileSourceKey, currentTs, isPlaying, isScrubbingRef, formatProductTimestampParam,
   });
+  playbackBridgeRef.current = ms => resolvePlaybackForTimestamp(formatProductTimestampParam(new Date(ms)), false, false, ms);
+  useEffect(() => { setPlaybackMembership(visibleTiles.map(tile => tile.id)); }, [tileSourceKey, setPlaybackMembership]);
 
   const frameLayoutKey = visibleTiles.map(tile => `${tile.id}:${tile.cameraId}:${savedFrameRatio(cameraMap.get(String(tile.cameraId)))}`).join("|");
   useEffect(() => {
@@ -600,9 +618,10 @@ export default function ChronologyPage() {
     seekActionIdRef.current += 1;
     const action = {
       id: seekActionIdRef.current,
-      shouldResume: isPlaying,
+      shouldResume: isPlaying || Boolean(playbackCoordinator?.releaseState === "holding" && playbackCoordinator.shouldResume),
     };
     activeSeekActionRef.current = action;
+    cancelPlaybackCoordinator("seeking");
     return action;
   }
 
@@ -665,7 +684,13 @@ export default function ChronologyPage() {
   }
 
   function removeTile(tileId) {
-    cancelPlaybackCoordinator("tile-removed");
+    // Membership owns the barrier. Removing one tile must not cancel the
+    // remaining group's play intent (including a group waiting on this tile).
+    if (!tilesRef.current.some((tile) => tile.id !== tileId)) {
+      invalidateSeekActions();
+      playbackResolverRef.current.invalidate();
+      setIsPlaying(false);
+    }
     setTiles((prev) => prev.filter((tile) => tile.id !== tileId));
     setFullscreenTileId((prev) => (prev === tileId ? null : prev));
     // useChronologySources owns membership cleanup; there is no page-local setter.
@@ -1124,6 +1149,7 @@ export default function ChronologyPage() {
 
   async function handleFind() {
     invalidateSeekActions();
+    cancelPlaybackCoordinator("seeking");
     const targetDate = productCalendarDate(normalizeTargetTs());
     const targetTs = formatProductTimestampParam(targetDate);
 
@@ -1131,7 +1157,7 @@ export default function ChronologyPage() {
     setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(targetDate);
-    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    const result = await resolvePlaybackForTimestamp(targetTs, false, false, targetDate.getTime());
     if (!result.applied) {
       return;
     }
@@ -1140,6 +1166,14 @@ export default function ChronologyPage() {
     if (!expectedTileIds.length) {
       releasePlaybackCoordinator(coordinator.id, "released");
     }
+  }
+
+  function acknowledgePlay(event) {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    event?.currentTarget?.querySelector(".chronologyPlayGlyph")?.animate?.(
+      [{ transform: "scale(1)", opacity: 1 }, { transform: "scale(0.72)", opacity: 0.55 }, { transform: "scale(1)", opacity: 1 }],
+      { duration: 260, easing: "ease-out" }
+    );
   }
 
   function handlePlay() {
@@ -1155,6 +1189,7 @@ export default function ChronologyPage() {
       expectedTileIds,
     });
     setIsPlaying(false);
+    void resolvePlaybackForTimestamp(formatProductTimestampParam(targetDate), false, false, targetDate.getTime());
   }
 
   function handlePause() {
@@ -1172,12 +1207,14 @@ export default function ChronologyPage() {
 
   function openExportModal() {
     if (!canExport || exportBusy) return;
-    if (exportDraftRef.current) { setExportModal(exportDraftRef.current); return; }
     const center = timelineTs || currentTs || productCalendarDate(normalizeTargetTs());
+    const contextKey = JSON.stringify([selectedCameraIds.slice().sort(), formatProductTimestampParam(center)]);
+    if (exportDraftRef.current?.contextKey === contextKey) { setExportModal(exportDraftRef.current); return; }
     const start = new Date(center.getTime() - 15_000);
     const end = new Date(center.getTime() + 15_000);
     setExportModal({
-      cameraId: "",
+      contextKey,
+      cameraId: selectedCameraIds.length === 1 ? selectedCameraIds[0] : "",
       title: `${TEXT.exportEvidence} ${formatPlaybackDateTime(center)}`,
       reason: "",
       startTs: formatProductTimestampParam(start),
@@ -1305,7 +1342,7 @@ export default function ChronologyPage() {
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    const result = await resolvePlaybackForTimestamp(targetTs, false, false, nextDate.getTime());
     if (!result.applied || seekActionIdRef.current !== action.id) {
       return;
     }
@@ -1325,7 +1362,7 @@ export default function ChronologyPage() {
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    const result = await resolvePlaybackForTimestamp(targetTs, false, false, nextDate.getTime());
     if (!result.applied || seekActionIdRef.current !== action.id) {
       return;
     }
@@ -1372,7 +1409,7 @@ export default function ChronologyPage() {
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    const result = await resolvePlaybackForTimestamp(targetTs, false, false, nextDate.getTime());
     if (!action || !result.applied || seekActionIdRef.current !== action.id) {
       return;
     }
@@ -1873,7 +1910,15 @@ export default function ChronologyPage() {
                 </span>
               </div>
               <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title={TEXT.back10} aria-label={TEXT.back10}>-10</button>
-              <button type="button" className="chronologyIconButton" onClick={handlePlay} title={TEXT.play} aria-label={TEXT.play}>{"\u25b6"}</button>
+              <button
+                type="button"
+                className={`chronologyIconButton chronologyPlayButton ${playButtonState}`}
+                onClick={(event) => { acknowledgePlay(event); handlePlay(); }}
+                title={TEXT.play}
+                aria-label={TEXT.play}
+                aria-pressed={playRequested}
+                aria-busy={playPending}
+              ><span className="chronologyPlayGlyph" aria-hidden="true">{"\u25b6"}</span></button>
               <button type="button" className="chronologyIconButton" onClick={handlePause} title={TEXT.pause} aria-label={TEXT.pause}>{"\u275a\u275a"}</button>
               <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(10)} title={TEXT.forward10} aria-label={TEXT.forward10}>+10</button>
 
@@ -1883,6 +1928,7 @@ export default function ChronologyPage() {
                     key={item.value}
                     type="button"
                     className={`chronologySpeedButton ${speed === item.value ? "active" : ""}`}
+                    aria-pressed={speed === item.value}
                     onClick={() => setSpeed(item.value)}
                   >
                     {item.label}
@@ -2006,10 +2052,12 @@ export default function ChronologyPage() {
                           operationId: playbackCoordinator?.id || "",
                           releaseState: playbackCoordinator?.releaseState || "released",
                           targetTs: playbackCoordinator?.targetTs || "",
+                          targetMs: playbackCoordinator?.targetMs,
                           shouldResume: Boolean(playbackCoordinator?.shouldResume),
                         }}
                         tileId={tile.id}
                         onTilePlaybackState={handleTilePlaybackState}
+                        registerPlaybackTile={registerPlaybackTile}
                         onDesktopDoubleClick={() => toggleTileFullscreen(tile.id)}
                         onTouchDoubleTap={({ zone }) => handleTileVideoTouchDoubleTap(tile.id, zone)}
                       />
@@ -2059,13 +2107,18 @@ export default function ChronologyPage() {
                               </button>
                               <button
                                 type="button"
-                                className="chronologyFullscreenControlButton primary"
-                                onClick={isPlaying ? handlePause : handlePlay}
+                                className={`chronologyFullscreenControlButton primary chronologyPlayButton ${playButtonState}`}
+                                onClick={(event) => {
+                                  if (isPlaying) handlePause();
+                                  else { acknowledgePlay(event); handlePlay(); }
+                                }}
                                 disabled={!playback.hasVideo}
                                 title={isPlaying ? TEXT.pause : TEXT.play}
                                 aria-label={isPlaying ? TEXT.pause : TEXT.play}
+                                aria-pressed={playRequested}
+                                aria-busy={playPending}
                               >
-                                {isPlaying ? "\u275a\u275a" : "\u25b6"}
+                                <span className="chronologyPlayGlyph" aria-hidden="true">{isPlaying ? "\u275a\u275a" : "\u25b6"}</span>
                               </button>
                               <button
                                 type="button"
@@ -2126,79 +2179,9 @@ export default function ChronologyPage() {
             })}
           </div>
         </section>
-      {exportModal ? (
-        <div className="modalBackdrop">
-          <div className="modal archiveExportModal" role="dialog" aria-modal="true" aria-label={TEXT.exportTitle} onClick={(event) => event.stopPropagation()}>
-            <div className="modalHeader">
-              <h2 className="archiveExportTitle">{TEXT.exportTitle}</h2>
-              <button type="button" className="iconCloseButton" onClick={closeExportModal} aria-label={TEXT.close}>
-                {"\u00d7"}
-              </button>
-            </div>
-            <div className="archiveExportForm">
-              <div className="archiveExportInfo">
-                {TEXT.exportHelp} {describeArchiveExportLimits(exportLimits)}
-              </div>
-              <div className="archiveExportFields">
-                <label className="archiveExportField">
-                  <span>{TEXT.exportCamera}</span>
-                  <select
-                    className="select"
-                    value={exportModal.cameraId}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
-                    disabled={exportBusy}
-                  >
-                    <option value="">{TEXT.exportPickCamera}</option>
-                    {exportCameraOptions.map((camera) => (
-                      <option key={camera.id} value={camera.id}>
-                        {camera.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="archiveExportField">
-                  <span>{TEXT.exportReason}</span>
-                  <input
-                    className="input"
-                    value={exportModal.reason}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, reason: event.target.value }))}
-                    maxLength={500}
-                    disabled={exportBusy}
-                  />
-                </label>
-                <label className="archiveExportField">
-                  <span>{TEXT.exportStart}</span>
-                  <input
-                    className="input"
-                    type="datetime-local"
-                    step="1"
-                    value={formatDateTimeLocalInput(exportModal.startTs)}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, startTs: event.target.value }))}
-                    disabled={exportBusy}
-                  />
-                </label>
-                <label className="archiveExportField">
-                  <span>{TEXT.exportEnd}</span>
-                  <input
-                    className="input"
-                    type="datetime-local"
-                    step="1"
-                    value={formatDateTimeLocalInput(exportModal.endTs)}
-                    onChange={(event) => setExportModal((prev) => ({ ...prev, endTs: event.target.value }))}
-                    disabled={exportBusy}
-                  />
-                </label>
-              </div>
-              <ArchiveExportResult controller={exportController} onClose={closeExportModal} />
-              <div className="actions archiveExportActions">
-                <button type="button" className="button primary" onClick={submitExport} disabled={exportBusy}>
-                  {TEXT.exportRun}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {exportModal ? <ArchiveExportDialog draft={exportModal} onDraftChange={setExportModal}
+        onClose={closeExportModal} onCreate={submitExport} cameras={exportCameraOptions}
+        controller={exportController} formatInput={formatDateTimeLocalInput} source="chronology" /> : null}
       </div>
     </Layout>
   );

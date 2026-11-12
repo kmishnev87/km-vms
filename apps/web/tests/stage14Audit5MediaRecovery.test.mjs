@@ -18,7 +18,7 @@ for (let pass=0; pass<3; pass++) {
 }
 const tile = read('components/ArchiveTilePlayer.js');
 const tileCode = tile.slice(tile.indexOf('const handleHealthyProgress ='), tile.indexOf('    hardReset();\n    reportTileState("loading",', tile.indexOf('const handleHealthyProgress =')));
-const tileContext = {clearTimeout, stableReadyTimer:null, isArchiveRecoveryHealthy,cancelled:false,pendingLoad:null,refreshInFlight:false,recoveryProgressStart:10,refreshAttempts:1,video:{currentTime:12,readyState:4,error:null}};
+const tileContext = {clearTimeout, reportTileState(){}, stableReadyTimer:null, isArchiveRecoveryHealthy,cancelled:false,pendingLoad:null,refreshInFlight:false,recoveryProgressStart:10,refreshAttempts:1,video:{currentTime:12,readyState:4,error:null}};
 vm.runInNewContext(tileCode+';this.healthy=handleHealthyProgress;',tileContext);
 tileContext.pendingLoad = {}; tileContext.healthy(); assert.equal(tileContext.refreshAttempts,1);
 tileContext.pendingLoad = null; tileContext.healthy(); assert.equal(tileContext.refreshAttempts,0);

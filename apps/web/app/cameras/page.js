@@ -426,12 +426,14 @@ export default function CamerasPage() {
                 <div className="cameraCardGrid">
                   <div className="cameraField cameraNameField">
                     <div className="cameraFieldLabel">{copy.camera}</div>
+                    <div className="cameraNameIdentity">
                     <div className="cameraPrimary cameraNameWithPtz" title={camera.name}>
                       <span className="cameraPtzNameText">{camera.name}</span>
                       <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
                         onClick={() => setPtzCameraId(camera.id)} expanded={ptzCameraId === camera.id} />
                     </div>
                     <div className="cameraSecondary" title={`${copy.folder}: ${camera.storage_folder_name}`}>{copy.folder}: {camera.storage_folder_name}</div>
+                    </div>
                     <div className="cameraActions">
                       <button className="cameraIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
                         <EditIcon />

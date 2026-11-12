@@ -343,12 +343,12 @@ export async function issueRecordingMediaTokenInfo(pathOrItem, action = "stream"
   };
 }
 
-export async function issueChronologyMediaToken(cameraId, relPath, playback = null) {
-  const data = await issueChronologyMediaTokenInfo(cameraId, relPath, playback);
+export async function issueChronologyMediaToken(cameraId, relPath, playback = null, options = {}) {
+  const data = await issueChronologyMediaTokenInfo(cameraId, relPath, playback, options);
   return data.mediaToken;
 }
 
-export async function issueChronologyMediaTokenInfo(cameraId, relPath, playback = null) {
+export async function issueChronologyMediaTokenInfo(cameraId, relPath, playback = null, options = {}) {
   const params = new URLSearchParams();
   const segmentId = playback?.segment_id || playback?.segmentId;
   const archiveRootId = playback?.archive_root_id || playback?.archiveRootId;
@@ -360,7 +360,7 @@ export async function issueChronologyMediaTokenInfo(cameraId, relPath, playback 
     params.set("camera_id", String(cameraId));
     params.set("rel_path", relPath);
   }
-  const data = await apiFetch(`/chronology/media-token?${params.toString()}`, { method: "POST" });
+  const data = await apiFetch(`/chronology/media-token?${params.toString()}`, { method: "POST", signal: options.signal });
   return {
     mediaToken: data?.media_token || "",
     expiresAt: data?.expires_at || null,

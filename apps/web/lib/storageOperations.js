@@ -1528,6 +1528,7 @@ export function cameraStorageRows(rows, limit = Infinity) {
     .map((row) => ({
       camera_id: row?.camera_id,
       camera_name: row?.camera_name || `Camera ${row?.camera_id || "-"}`,
+      camera_deleted: row?.camera_deleted === true,
       size_bytes: asNumber(row?.size_bytes, 0),
       segment_count: asNumber(row?.segment_count, 0),
       existing_file_count: asNumber(row?.existing_file_count, 0),

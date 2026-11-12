@@ -5,8 +5,8 @@ export const EXPORT_PERMISSION = "export_recordings";
 
 export const DEFAULT_ARCHIVE_EXPORT_LIMITS = {
   max_duration_seconds: 3 * 60 * 60,
-  max_source_segments: 120,
-  max_estimated_source_bytes: 4 * 1024 * 1024 * 1024,
+  max_source_segments: 10802,
+  max_estimated_source_bytes: null,
   format_hints: ["mkv", "mp4"],
 };
 
@@ -30,6 +30,10 @@ export function archiveExportStatusMessage(status) {
 export function normalizeArchiveExportError(message) {
   const text = String(message || "").toLowerCase();
   if (!text) return "Не удалось подготовить клип.";
+  if (text.includes("insufficient_export_space") || text.includes("not enough free space")) return "Недостаточно свободного места для подготовки клипа и временных файлов.";
+  if (text.includes("already generating")) return "Клип ещё подготавливается. Дождитесь завершения и повторите действие.";
+  if (text.includes("export_delete_failed")) return "Не удалось удалить клип. Проверьте доступность хранилища и повторите.";
+  if (text.includes("export_artifact_path_invalid")) return "Расположение клипа не подтверждено. Удаление остановлено; исходные записи не затронуты.";
   if (text.includes("no exportable source")) return "В выбранном диапазоне нет готовых записей.";
   if (text.includes("source_missing")) return "Исходная запись недоступна.";
   if (text.includes("source_gap_detected")) return "В выбранном диапазоне есть разрыв архива.";
@@ -111,11 +115,7 @@ export function formatBytes(sizeBytes) {
 }
 
 export function describeArchiveExportLimits(limits = DEFAULT_ARCHIVE_EXPORT_LIMITS) {
-  return [
-    `Максимальный диапазон: ${formatDuration(limits.max_duration_seconds)}.`,
-    `Максимум исходных фрагментов: ${limits.max_source_segments}.`,
-    `Оценочный объем исходников: до ${formatBytes(limits.max_estimated_source_bytes)}.`,
-  ].join(" ");
+  return `Максимальный диапазон: ${formatDuration(limits?.max_duration_seconds || DEFAULT_ARCHIVE_EXPORT_LIMITS.max_duration_seconds)}.`;
 }
 
 function exportCalendarDate(value, productTimezone) {

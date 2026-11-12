@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -33,6 +34,7 @@ EXPORT_STATUS_RUNNING = "running"
 EXPORT_STATUS_DONE = "done"
 EXPORT_STATUS_FAILED = "failed"
 EXPORT_STATUS_EXPIRED = "expired"
+EXPORT_STATUS_DELETED = "deleted"
 EXPORT_STATUSES = frozenset(
     {
         EXPORT_STATUS_QUEUED,
@@ -40,12 +42,15 @@ EXPORT_STATUSES = frozenset(
         EXPORT_STATUS_DONE,
         EXPORT_STATUS_FAILED,
         EXPORT_STATUS_EXPIRED,
+        EXPORT_STATUS_DELETED,
     }
 )
 
 MAX_EXPORT_DURATION_SECONDS = 3 * 60 * 60
-MAX_SOURCE_SEGMENTS = 120
-MAX_ESTIMATED_SOURCE_BYTES = 4 * 1024 * 1024 * 1024
+# Even one-second recorder files can cover the whole supported three hours.
+# This is a query bound, not the old 120-file product restriction.
+MAX_SOURCE_SEGMENTS = MAX_EXPORT_DURATION_SECONDS + 2
+MAX_ESTIMATED_SOURCE_BYTES = None
 MAX_ACTIVE_JOBS_PER_USER = 3
 MAX_NOTE_LENGTH = 500
 MAX_TITLE_LENGTH = 200
@@ -54,6 +59,7 @@ FUTURE_RANGE_TOLERANCE = timedelta(hours=24)
 GAP_TOLERANCE_SECONDS = 2
 ALLOWED_FORMAT_HINTS = frozenset({"mkv", "mp4"})
 GENERATION_TIMEOUT_SECONDS = 120
+EXPORT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024
 OUTPUT_DURATION_TOLERANCE_SECONDS = 5
 EXPORT_OUTPUT_DIR = "stage11_stage2_clips"
 EXPORT_TEMP_DIR = "stage11_stage2_tmp"
@@ -180,6 +186,7 @@ def _safe_public_message(error_code: str) -> str:
         "incompatible_segments": "Source segments are not compatible for safe generation",
         "generation_timeout": "Clip generation timed out",
         "generation_failed": "Clip generation failed",
+        "insufficient_export_space": "Not enough free space to prepare the clip",
         "output_validation_failed": "Generated clip validation failed",
         "expired_job": "Export job is expired",
         "invalid_job_status": "Export job status does not allow generation",
@@ -332,8 +339,10 @@ def _segment_interval(segment: RecordingSegment) -> tuple[datetime, datetime] | 
     return segment.started_at, ended
 
 
-def safe_camera_label(camera: Camera) -> str:
-    text = str(getattr(camera, "name", "") or "").strip()
+def safe_camera_label(camera: Camera, snapshot: str | None = None) -> str:
+    text = str((snapshot if camera.deleted_at is not None and snapshot else camera.name) or "").strip()
+    if camera.deleted_at is not None:
+        text = TECHNICAL_DELETED_CAMERA_RE.sub("", text).strip()
     if not text or TECHNICAL_DELETED_CAMERA_RE.search(text):
         return f"Camera {camera.id}"
     return text[:255]
@@ -465,7 +474,7 @@ def preflight_source_segments(
         except OSError:
             raise _safe_error(409, "Source recording file unavailable")
         estimated_bytes += max(file_size, int(segment.size_bytes or 0))
-        if estimated_bytes > MAX_ESTIMATED_SOURCE_BYTES:
+        if MAX_ESTIMATED_SOURCE_BYTES is not None and estimated_bytes > MAX_ESTIMATED_SOURCE_BYTES:
             raise _safe_error(413, "Estimated export source size is too large")
 
     return ExportPreflight(
@@ -515,7 +524,7 @@ def revalidate_job_sources(db: Session, job: ArchiveExportJob) -> list[ResolvedE
                 source_mtime_ns=int(stat.st_mtime_ns),
             )
         )
-    if not resolved or estimated_bytes > MAX_ESTIMATED_SOURCE_BYTES or len(resolved) > MAX_SOURCE_SEGMENTS:
+    if not resolved or len(resolved) > MAX_SOURCE_SEGMENTS:
         raise ValueError("source_missing")
     _validate_full_coverage(job, intervals)
     return resolved
@@ -569,10 +578,13 @@ def create_archive_export_job(
     if hint and hint not in ALLOWED_FORMAT_HINTS:
         raise _safe_error(422, "Unsupported format_hint")
 
-    camera = db.query(Camera).filter(Camera.id == int(camera_id), Camera.deleted_at.is_(None)).first()
+    camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
     if not camera:
         raise _safe_error(404, "Camera not found")
 
+    # Opportunistic, bounded cleanup only on a requested operation. No timer,
+    # no archive scan, and completed user clips are never expired by age.
+    cleanup_archive_export_artifacts(db, actor=actor, limit=10, request=request, audit_empty=False)
     assert_active_job_limit(db, actor)
     preflight = preflight_source_segments(db, camera_id=camera.id, start_ts=start_dt, end_ts=end_dt)
     now = _utcnow_naive()
@@ -580,7 +592,7 @@ def create_archive_export_job(
         id=str(uuid.uuid4()),
         actor_user_id=getattr(actor, "id", None),
         camera_id=camera.id,
-        camera_label_snapshot=safe_camera_label(camera),
+        camera_label_snapshot=safe_camera_label(camera, preflight.segments[0].camera_name_snapshot),
         start_ts=start_dt,
         end_ts=end_dt,
         duration_seconds=duration,
@@ -664,7 +676,8 @@ def _trim_segment(
             "-avoid_negative_ts",
             "make_zero",
             str(target),
-        ]
+        ],
+        timeout=_copy_timeout(source.source_size),
     )
     if result.returncode != 0 or not target.exists() or target.stat().st_size <= 0:
         raise RuntimeError("incompatible_segments")
@@ -690,7 +703,8 @@ def _concat_segments(parts: list[Path], output: Path, concat_file: Path) -> None
             "-c",
             "copy",
             str(output),
-        ]
+        ],
+        timeout=_copy_timeout(sum(part.stat().st_size for part in parts)),
     )
     if result.returncode != 0 or not output.exists() or output.stat().st_size <= 0:
         raise RuntimeError("incompatible_segments")
@@ -721,6 +735,24 @@ def _assert_sources_unchanged(sources: list[ResolvedExportSegment]) -> None:
         stat = source.path.stat()
         if int(stat.st_size) != source.source_size or int(stat.st_mtime_ns) != source.source_mtime_ns:
             raise RuntimeError("source_mutated")
+
+
+def _copy_timeout(size_bytes: int) -> int:
+    # Allow slow disks to copy large clips; a 12 GiB clip must not inherit the
+    # old two-minute limit. Keep a finite bound for a genuinely stuck process.
+    return min(MAX_EXPORT_DURATION_SECONDS, max(GENERATION_TIMEOUT_SECONDS, 60 + math.ceil(size_bytes / (4 * 1024 * 1024))))
+
+
+def _check_export_space(sources: list[ResolvedExportSegment], job: ArchiveExportJob) -> None:
+    estimated = 0
+    for index, start, end in _coverage_plan(job.start_ts, job.end_ts, [(s.start_ts, s.end_ts) for s in sources]):
+        source = sources[index]
+        fraction = (end - start).total_seconds() / max(0.001, (source.end_ts - source.start_ts).total_seconds())
+        estimated += min(source.source_size, math.ceil(source.source_size * fraction * 1.5))
+    # During concat both the trimmed parts and output exist. This is a space
+    # estimate, not a clip-size cap; the original recordings are untouched.
+    if shutil.disk_usage(_export_root()).free < estimated * 2 + EXPORT_FREE_SPACE_RESERVE_BYTES:
+        raise RuntimeError("insufficient_export_space")
 
 
 def generate_archive_export_job(
@@ -757,6 +789,7 @@ def generate_archive_export_job(
         temp_dir: Path | None = None
         try:
             sources = revalidate_job_sources(db, job)
+            _check_export_space(sources, job)
             now = _utcnow_naive()
             job.status = EXPORT_STATUS_RUNNING
             job.progress_percent = 10
@@ -863,8 +896,8 @@ def generate_archive_export_job(
                 user_agent=request_user_agent(request),
             )
             return job
-        except (RuntimeError, ValueError) as exc:
-            error_code = str(exc) if str(exc) else "generation_failed"
+        except (RuntimeError, ValueError, OSError) as exc:
+            error_code = "insufficient_export_space" if isinstance(exc, OSError) and exc.errno == 28 else str(exc) or "generation_failed"
             if error_code not in {
                 "source_missing",
                 "source_gap_detected",
@@ -873,6 +906,7 @@ def generate_archive_export_job(
                 "generation_failed",
                 "output_validation_failed",
                 "source_mutated",
+                "insufficient_export_space",
             }:
                 error_code = "generation_failed"
             if output_path and output_path.exists():
@@ -1077,6 +1111,17 @@ def _read_manifest_file(path: Path) -> dict[str, Any]:
 
 
 def create_archive_export_manifest(db: Session, *, export_id: str, actor: User, request=None) -> dict[str, Any]:
+    lock = _generation_lock(export_id)
+    if not lock.acquire(blocking=False):
+        raise _safe_error(409, "Export job is already generating")
+    try:
+        with _generation_database_lease(db, export_id):
+            return _create_archive_export_manifest(db, export_id=export_id, actor=actor, request=request)
+    finally:
+        lock.release()
+
+
+def _create_archive_export_manifest(db: Session, *, export_id: str, actor: User, request=None) -> dict[str, Any]:
     job = db.get(ArchiveExportJob, export_id)
     if not job:
         raise _safe_error(404, "Export job not found")
@@ -1232,12 +1277,15 @@ def cleanup_archive_export_artifacts(
     dry_run: bool = False,
     limit: int = EXPORT_CLEANUP_MAX_JOBS,
     request=None,
+    audit_empty: bool = True,
 ) -> dict[str, Any]:
     now = _utcnow_naive()
     bounded_limit = max(1, min(int(limit or EXPORT_CLEANUP_MAX_JOBS), EXPORT_CLEANUP_MAX_JOBS))
     jobs = (
         db.query(ArchiveExportJob)
         .filter(
+            ArchiveExportJob.status != EXPORT_STATUS_DONE,
+            ArchiveExportJob.status != EXPORT_STATUS_DELETED,
             or_(
                 ArchiveExportJob.status == EXPORT_STATUS_EXPIRED,
                 ArchiveExportJob.expires_at <= now,
@@ -1262,9 +1310,12 @@ def cleanup_archive_export_artifacts(
         "skipped_unsafe_paths": 0,
         "missing_artifacts": 0,
         "errors": 0,
+        "temporary_directories_removed": 0,
     }
 
     for job in jobs:
+        if archive_export_generation_active(db, job.id):
+            continue
         if job.status != EXPORT_STATUS_EXPIRED and job.expires_at and job.expires_at <= now:
             result["jobs_marked_expired"] += 1
             if not dry_run:
@@ -1302,6 +1353,17 @@ def cleanup_archive_export_artifacts(
                 result["bytes_removed"] += max(0, size)
             except OSError:
                 result["errors"] += 1
+        temp_root = _safe_child(_export_root(), EXPORT_TEMP_DIR)
+        if temp_root.is_dir() and re.fullmatch(r"[A-Za-z0-9_-]+", str(job.id)):
+            for entry in list(temp_root.glob(f"stage11_stage2_{job.id}_*"))[:10]:
+                if entry.is_dir() and not entry.is_symlink():
+                    try:
+                        _safe_child(_export_root(), EXPORT_TEMP_DIR, entry.name)
+                        if not dry_run:
+                            shutil.rmtree(entry)
+                        result["temporary_directories_removed"] += 1
+                    except (OSError, RuntimeError):
+                        result["errors"] += 1
         if not dry_run:
             # Failed/unsafe artifacts rotate behind unattempted work instead
             # of monopolising every bounded cleanup batch.
@@ -1311,6 +1373,8 @@ def cleanup_archive_export_artifacts(
     if not dry_run:
         db.commit()
 
+    if not jobs and not audit_empty:
+        return result
     create_event(
         db=db,
         actor=actor,
@@ -1325,6 +1389,53 @@ def cleanup_archive_export_artifacts(
         user_agent=request_user_agent(request),
     )
     return result
+
+
+def delete_archive_export_job(db: Session, *, export_id: str, actor: User, request=None) -> dict[str, Any]:
+    lock = _generation_lock(export_id)
+    if not lock.acquire(blocking=False):
+        raise _safe_error(409, "Export job is already generating")
+    try:
+        with _generation_database_lease(db, export_id):
+            job = db.get(ArchiveExportJob, export_id)
+            if job is None or job.status == EXPORT_STATUS_DELETED:
+                return {"deleted": True, "already_deleted": True}
+            paths = []
+            for internal in (job.internal_output_path, job.internal_manifest_path):
+                try:
+                    path = _path_from_internal(internal)
+                except RuntimeError as exc:
+                    raise _safe_error(409, "export_artifact_path_invalid") from exc
+                if path is not None:
+                    if not _cleanup_path_allowed(path) or job.id not in path.name or path.is_symlink() or (path.exists() and not path.is_file()):
+                        raise _safe_error(409, "export_artifact_path_invalid")
+                    paths.append(path)
+            try:
+                for path in paths:
+                    path.unlink(missing_ok=True)
+                temp_root = _safe_child(_export_root(), EXPORT_TEMP_DIR)
+                if temp_root.is_dir():
+                    for entry in temp_root.iterdir():
+                        if entry.name.startswith(f"stage11_stage2_{job.id}_") and entry.is_dir() and not entry.is_symlink():
+                            _safe_child(_export_root(), EXPORT_TEMP_DIR, entry.name)
+                            shutil.rmtree(entry)
+            except OSError as exc:
+                raise _safe_error(409, "export_delete_failed") from exc
+            job.status = EXPORT_STATUS_DELETED
+            job.internal_output_path = None
+            job.internal_manifest_path = None
+            job.internal_checksum = None
+            job.updated_at = _utcnow_naive()
+            db.add(job)
+            db.commit()
+            create_event(db=db, actor=actor, category="archive", event_type="archive_export_deleted", severity="info",
+                         message_ru="Клип удалён", message_en="Clip deleted", target_type="archive_export_job",
+                         target_id=job.id, target_name=job.camera_label_snapshot,
+                         metadata={"export_job_id": job.id, "source_recordings_preserved": True},
+                         ip_address=request_ip(request), user_agent=request_user_agent(request))
+            return {"deleted": True, "already_deleted": False}
+    finally:
+        lock.release()
 
 
 def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
@@ -1353,7 +1464,8 @@ def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
         "duration_seconds": job.duration_seconds,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
-        "expires_at": job.expires_at.isoformat() if job.expires_at else None,
+        "expires_at": job.expires_at.isoformat() if job.expires_at and job.status != EXPORT_STATUS_DONE else None,
+        "retention": "until_deleted" if job.status == EXPORT_STATUS_DONE else "temporary",
         "progress_percent": job.progress_percent,
         "title": job.title,
         "reason": job.reason,

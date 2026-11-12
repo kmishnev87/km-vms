@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export default function useChronologyClock(initialTs, isScrubbingRef) {
+export default function useChronologyClock(initialTs, isScrubbingRef, { mediaDriven = false, emptyPlaybackRef } = {}) {
   const currentTsRef = useRef(initialTs);
   const [currentTs, setCurrentTsState] = useState(initialTs);
   const [previewTs, setPreviewTs] = useState(initialTs);
@@ -16,10 +16,11 @@ export default function useChronologyClock(initialTs, isScrubbingRef) {
   useEffect(() => {
     if (!isPlaying || !currentTsRef.current) return undefined;
     const timer = setInterval(() => {
+      if (mediaDriven && !emptyPlaybackRef?.current) return;
       setCurrentTs((prev) => prev ? new Date(prev.getTime() + 1000 * Number(speed || 1)) : prev);
     }, 1000);
     return () => clearInterval(timer);
-  }, [isPlaying, speed]);
+  }, [isPlaying, speed, mediaDriven]);
   useEffect(() => {
     if (!isScrubbingRef.current) setPreviewTs(currentTs);
   }, [currentTs]);

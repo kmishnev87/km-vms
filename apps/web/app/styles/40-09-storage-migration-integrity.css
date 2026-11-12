@@ -5,6 +5,48 @@
 
 .archiveOperationHistoryDialog, .recordingsDeletionFlow { height: min(600px, calc(100dvh - 40px)); }
 
+.operationFeedbackDialog.archiveOperationHistoryDialog { width: min(1020px, calc(100vw - 32px)); height: min(760px, calc(100dvh - 32px)); }
+.archiveOperationHistoryDialog .operationFeedbackBody { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.archiveManagementUsefulHistory.archiveHistoryProduct { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 24px auto auto minmax(0, 1fr) auto; gap: 10px; }
+.archiveHistoryFilters { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.5fr) minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.archiveHistoryFilters label { min-width: 0; display: grid; gap: 5px; font-size: 12px; color: #64748b; }
+.archiveHistoryFilters .select { width: 100%; min-width: 0; height: 38px; min-height: 38px; font-size: 13px; }
+.archiveHistoryFilters .button { height: 38px; }
+.archiveHistoryFeedback { color: #64748b; font-size: 13px; line-height: 24px; overflow: hidden; }
+.archiveHistoryScroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding-right: 4px; }
+.archiveHistorySummary h3, .archiveHistoryJournalTitle { margin: 0; font-size: 14px; }
+.archiveHistorySummary h3 { margin-bottom: 8px; }
+.archiveHistoryProduct .archiveManagementHistorySummary { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 0; }
+.archiveHistoryProduct .archiveManagementHistorySummary article { min-width: 0; padding: 12px; }
+.archiveHistoryProduct .archiveManagementHistorySummary strong { font-size: 14px; }
+.archiveHistoryProduct .archiveManagementHistoryItem { display: block; padding: 10px 12px; }
+.archiveHistoryAction > header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.archiveHistoryAction time { flex-shrink: 0; color: #64748b; font-size: 12px; }
+.archiveHistoryObject { margin-top: 5px; color: #475569; font-size: 13px; overflow-wrap: anywhere; }
+.archiveHistoryResult { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 8px 0 0; }
+.archiveHistoryResult > div { display: flex; align-items: baseline; gap: 8px; }
+.archiveHistoryResult dt { color: #64748b; font-size: 12px; }
+.archiveHistoryResult dd { margin: 0; color: #334155; font-size: 13px; }
+.archiveHistoryResult .needsAttention { color: #b91c1c; }
+.archiveHistoryAction > p { margin: 10px 0 0; font-size: 13px; color: #475569; line-height: 1.5; }
+.archiveHistoryAction .archiveHistoryCounts { color: #64748b; }
+.archiveHistoryDetails { margin-top: 12px; border-top: 1px solid #e2e8f0; padding-top: 10px; font-size: 13px; }
+.archiveHistoryDetails summary, .archiveHistoryDaily summary { cursor: pointer; color: #475569; }
+.archiveHistoryDetails > div { display: grid; gap: 5px; padding: 10px 0; border-bottom: 1px solid #edf2f7; overflow-wrap: anywhere; }
+.archiveHistoryDetails p { margin: 0; color: #64748b; line-height: 1.5; }
+.archiveHistoryActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.archiveHistoryActions:empty { display: none; }
+.archiveHistoryPagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.archiveHistoryPagination > span { flex: 0 0 auto; white-space: nowrap; }
+.archiveHistoryProduct .archiveHistoryPagination .button { flex: 0 0 auto; width: auto; }
+.archiveHistoryDaily { margin-top: 16px; padding: 12px; border: 1px solid #dbe3ef; border-radius: 8px; font-size: 13px; }
+.archiveHistoryDaily > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding-top: 10px; }
+.archiveHistoryProduct .isStale { opacity: .55; pointer-events: none; }
+@media (max-width: 640px) {
+  .archiveHistoryFilters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .archiveHistoryAction > header { flex-direction: column; gap: 5px; }
+}
+
 .archiveMigrationWizard {
   display: grid;
   gap: 12px;
@@ -1009,10 +1051,15 @@
 .storageOpsDashboard {
   grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
   grid-template-areas:
-    "archive cameras"
-    "roots roots"
+    "left cameras"
     "management management";
 }
+
+.storageOpsLeftColumn { grid-area: left; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.storageCameraIdentity { display: flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; }
+.storageCameraName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storageOpsTable td .storageCameraName { color: inherit; font-size: inherit; }
+.storageDeletedCamera { flex: 0 0 auto; color: #64748b; font-size: 12px; white-space: nowrap; font-weight: 400; }
 
 .storageOpsSection-archiveManagement {
   grid-area: management;
@@ -1024,9 +1071,8 @@
   .storageOpsDashboard {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "archive"
+      "left"
       "cameras"
-      "roots"
       "management";
   }
 }

@@ -791,7 +791,7 @@ def collect_recording_camera_options(db: Session, query) -> list[dict]:
         if not camera_id or key in seen:
             continue
         seen.add(key)
-        options.append({"id": key, "name": name})
+        options.append({"id": key, "name": name, "deleted": bool(camera and camera.deleted_at is not None)})
     return sorted(options, key=lambda item: item["name"].lower())
 
 
@@ -821,7 +821,10 @@ def list_recording_cameras(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_recordings")),
 ):
-    export_query = finalized_segments_query(db).join(Camera, Camera.id == RecordingSegment.camera_id).filter(Camera.deleted_at.is_(None))
+    # Retained, healthy recordings remain exportable after camera removal.
+    # Keep a real camera relation; removal is not permission to export deleted
+    # or unusable source files.
+    export_query = finalized_segments_query(db).join(Camera, Camera.id == RecordingSegment.camera_id).filter(RecordingSegment.deleted_at.is_(None))
     return {
         "items": collect_camera_names(db),
         "export_items": collect_recording_camera_options(db, export_query),
@@ -1007,7 +1010,7 @@ def stream_recording(
     archive_root_id: str | None = Query(default=None),
     recording_ref: str | None = Query(default=None),
     media_token: str | None = Query(default=None),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     segment = get_finalized_segment_by_identity(
         db,

@@ -21,7 +21,7 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 - **A complete surveillance workflow.** Connect cameras, watch live video, record, find an event in the archive, and export the relevant footage without switching between unrelated tools.
 - **Your server, your archive.** Video recordings stay on storage you control. Local recording and viewing do not require a camera manufacturer's cloud account or cloud recording service.
 - **Standards-based camera connections.** Use RTSP streams and ONVIF services rather than restricting the entire installation to one camera brand.
-- **A shared view of time.** The Chronology workspace helps you compare recordings from multiple cameras around the same event.
+- **A shared view of time.** Chronology keeps available recordings together: when one needs data, the group waits instead of drifting apart. Confirmed archive gaps do not block the other cameras.
 - **PTZ that follows the camera's capabilities.** Compatible cameras expose movement, zoom, speed, and saved positions without a separate manual PTZ setup. Low-latency video is used during control when the selected stream supports it.
 - **Storage management as part of the product.** Retention rules, archive limits, free-space monitoring, and integrity tools are available alongside recording and playback.
 - **More visibility when something goes wrong.** System Health, recording states, audit history, and diagnostics help distinguish a camera connection problem from a storage or recording problem.
@@ -36,9 +36,10 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 | Live monitoring | Add or remove multiple cameras, align tiles or automatically fit their frame aspect ratios, and use main/sub stream and audio controls in individual fullscreen views. Recover viewing after temporary connection interruptions. |
 | PTZ control | Automatically detect supported PTZ capabilities for the selected camera/lens. Move, zoom, choose speed or saved positions, and use a movable fullscreen control panel. Point positioning and area zoom are available only through supported device capabilities/control paths. |
 | Recording | Record video on your NAS/server, monitor recording state, and retry after temporary camera or network failures while recording remains enabled. After interruption, readable saved fragments can be finalized without rewriting video; unconfirmed files remain available for review. |
-| Records and playback | Search and filter archive files, play recordings, download source files, and export selected video clips. |
-| Synchronized chronology | Navigate a shared time point across multiple cameras and inspect archive coverage and gaps. |
-| Archive management | Configure retention and size limits, inspect storage usage, and review archive findings by camera, problem, date, and state. Stage individual or bulk actions, confirm the exact plan, and inspect each result. Keep files and mark findings reviewed, recheck them, or explicitly delete selected recordings. |
+| Records and playback | Search and filter archive files, play recordings, and download source files. Retained recordings remain accessible after their camera is removed. |
+| Video clips and evidence | Create clips up to three hours from Records or Chronology, including retained recordings of removed cameras. No fixed 4 GiB source-size cap; preparation checks available storage. Download the clip and its passport, clear the selection, or explicitly delete the derived result without deleting source footage. Completed clips stay until you delete them. |
+| Synchronized chronology | Navigate a shared time point across cameras. Play waits for the required recordings; buffering pauses the group and its clock. Confirmed gaps are not blockers, failed requests are not disguised as gaps, and the last frame is held while the next segment loads. |
+| Archive management | Configure retention and size limits, inspect storage usage with original names for removed cameras, and review archive findings by camera, problem, date, and state. Confirm individual or bulk actions. Filter and page the operation history, with grouped steps and a distinction between an earlier attempt and the issue's current relevance. |
 | System Health | Distinguish current camera, recording, storage, and playback problems from findings about older archive files. Historical findings do not by themselves mean that current recording has stopped. |
 | Users and permissions | Separate access through user accounts, roles, and server-enforced permissions. |
 | Maintenance | Create and verify database/configuration backups, inspect diagnostics, and apply published updates with preflight and post-update verification. |
@@ -49,7 +50,7 @@ ONVIF capabilities are device-dependent: a camera must expose the relevant servi
 
 ## Quick start
 
-The example below installs the published **[0.9.10](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.10)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
+The example below installs the published **[0.9.11](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.11)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
 
 ### 1. Prepare your NAS or Linux server
 
@@ -67,8 +68,8 @@ The installer does **not** install Docker or host packages for you. Host Node.js
 Run these commands in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.10/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.10
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.11/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.11
 ```
 
 The interactive installer uses `$HOME/km-vms` as the default application directory and port `8088`. It asks for confirmation before creating a new application directory. To choose a persistent application directory on your NAS instead, add `--app-dir /path/to/km-vms` to the second command; replace that example path with your own.
@@ -111,12 +112,12 @@ The implementation uses a Python/FastAPI backend, PostgreSQL, Redis, FFmpeg-base
 
 ### Implemented versus planned
 
-Live viewing, recording recovery, records playback, synchronized chronology, retention, archive review and bulk actions, ONVIF video configuration, capability-based PTZ controls, frame-aware workspaces, users/roles, diagnostics, backups, and update workflows are implemented. Available camera controls still depend on the device and lens.
+Live viewing, recording recovery, records playback, strict synchronized chronology, managed clip exports, retention, archive review and bulk actions, readable operation history, ONVIF video configuration, capability-based PTZ controls, frame-aware workspaces, users/roles, diagnostics, backups, and update workflows are implemented. Available camera controls still depend on the device and lens.
 
 The following are **future work**, not current product promises:
 
 - A native mobile client.
-- Advanced ONVIF event workflows.
+- Receiving and processing ONVIF camera events. Current ONVIF diagnostics only detect advertised event services; they do not subscribe to camera events.
 - AI video analytics and object detection.
 - Multi-storage recording placement and archive tiering.
 
@@ -145,6 +146,14 @@ Add the camera normally. If the selected lens exposes supported PTZ capabilities
 ### Does marking an archive finding reviewed repair the video?
 
 No. Keeping a file and marking its finding reviewed records your decision; it does not turn damaged or unconfirmed footage into a verified recording. Rechecking, correcting a supported recording state, and deleting recordings are separate, explicitly confirmed actions. Current recording health and historical archive findings are shown separately.
+
+### What happens when a recording buffers in Chronology?
+
+The recordings present at the selected moment wait for each other, and the shared clock pauses with them. A camera with a confirmed gap does not block the group. A network or file-access error is not treated as a gap: retry playback or remove the affected tile. Segment changes can require a loading pause; zero-delay playback on every network is not promised.
+
+### Do saved clips expire or delete the original footage?
+
+Completed clips stay until you explicitly delete them. In the shared clip window, use **Saved clips** to select, download, or delete a result and its passport. Deleting a clip does not delete the recordings it was made from. Original recordings still follow their separate archive-retention rules. Clips can also be created from retained footage of a removed camera.
 
 ### How do I update an existing installation?
 

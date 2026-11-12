@@ -90,7 +90,7 @@ assert.equal(settingsPage.includes("settingsMaintenanceCoreGrid"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupDetail"), true);
 assert.match(cssRule(".settingsMaintenanceModal"), /width:\s*min\(980px,\s*calc\(100vw - 32px\)\)/);
 assert.match(cssRule(".settingsMaintenanceCoreGrid"), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
 assert.equal(settingsPage.includes("settingsMaintenanceSupportStatus"), false);
 assert.equal(settingsPage.includes("maintenanceSupportStatusOk"), true);
 assert.equal(settingsPage.includes("<dt>{t.maintenanceWarningActionable}</dt>"), false);

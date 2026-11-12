@@ -69,9 +69,9 @@
 
 .chronologyShell.systemFullscreen .chronologyPrimaryButton,
 .chronologyShell.systemFullscreen .chronologySpeedButton.active {
-  border-color: rgba(147, 197, 253, 0.78);
-  background: rgba(37, 99, 235, 0.72);
-  color: #ffffff;
+  border-color: #93c5fd;
+  background: #dbeafe;
+  color: #1e40af;
 }
 
 .chronologyShell.systemFullscreen .chronologyDateInput,
@@ -583,9 +583,9 @@
 }
 
 .chronologyPrimaryButton {
-  background: #0f172a;
-  border-color: #0f172a;
-  color: #ffffff;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1e40af;
   font-weight: 700;
 }
 
@@ -702,8 +702,9 @@
 }
 
 .chronologyPrimaryButton:hover:not(:disabled) {
-  background: #1e293b;
-  color: #ffffff;
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e40af;
 }
 
 .chronologyPrimaryButton:disabled,
@@ -726,9 +727,9 @@
 }
 
 .chronologySpeedButton.active {
-  background: #0f172a;
-  border-color: #0f172a;
-  color: #ffffff;
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e40af;
 }
 
 .chronologyTimeBox {
@@ -1065,8 +1066,49 @@
 
 .chronologyFullscreenControlButton.primary {
   min-width: 44px;
-  background: rgba(37, 99, 235, 0.8);
-  border-color: rgba(147, 197, 253, 0.78);
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1e40af;
+}
+
+/* Feedback stays inside the original button bounds; no toolbar reflow. */
+.chronologyPlayButton[aria-pressed="true"],
+.chronologyShell.systemFullscreen .chronologyPlayButton[aria-pressed="true"] {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e40af;
+}
+
+.chronologyPlayGlyph {
+  display: inline-block;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.chronologyPlayButton.isWaiting .chronologyPlayGlyph {
+  animation: chronologyPlayWaiting 1.2s ease-in-out infinite;
+}
+
+.chronologyPlayButton.isWaiting {
+  border-style: dashed;
+}
+
+.chronologyPrimaryButton:focus-visible,
+.chronologySpeedButton:focus-visible,
+.chronologyPlayButton:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+@keyframes chronologyPlayWaiting {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chronologyPlayButton.isWaiting .chronologyPlayGlyph {
+    animation: none;
+  }
 }
 
 .chronologyFullscreenControlButton.danger {

@@ -33,17 +33,19 @@ test('only the current seek can release its barrier or timers', () => {
   assert.equal(h.resumes.length, 1);
 });
 
-test('timeouts are bounded and preserve ready tiles', () => {
+test('timeouts preserve ready tiles without releasing unready recordings', () => {
   const h = harness();
   const operation = h.store.start({targetTs:'now', shouldResume:false, expectedTileIds:['a','b']});
   h.store.updateTile('a', operation.id, 'ready', {position:42});
   h.all[0]();
-  assert.equal(h.store.getSnapshot().state, 'partial');
+  assert.equal(h.store.getSnapshot().state, 'waiting');
   assert.equal(h.store.getSnapshot().releaseState, 'holding');
   h.all[1]();
   assert.equal(h.store.getSnapshot().tileStates.a.state, 'ready');
   assert.equal(h.store.getSnapshot().tileStates.b.state, 'timeout');
-  assert.equal(h.store.getSnapshot().releaseState, 'partial');
+  assert.equal(h.store.getSnapshot().releaseState, 'holding');
+  h.store.updateTile('b', operation.id, 'ready');
+  assert.equal(h.store.getSnapshot().releaseState, 'released');
   assert.deepEqual(h.resumes, []);
 });
 

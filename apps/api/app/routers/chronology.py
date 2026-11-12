@@ -422,7 +422,7 @@ def chronology_playback(
             continue
 
         rel_path = segment.relative_path.replace("\\", "/").lstrip("/")
-        offset_sec = int((effective_target - start_dt).total_seconds())
+        offset_sec = (effective_target - start_dt).total_seconds()
         if offset_sec < 0:
             continue
         media_metadata = _segment_media_metadata(segment, file_path)
@@ -435,6 +435,7 @@ def chronology_playback(
             "file_url": f"/api/chronology/file?segment_id={segment.id}&archive_root_id={_segment_root_id(segment)}",
             "rel_path": rel_path,
             "offset_sec": offset_sec,
+            "duration_sec": (end_dt - start_dt).total_seconds(),
             "file_start": start_dt.isoformat(),
             "file_end": end_dt.isoformat(),
             "file_start_system": format_system_iso(start_dt, ctx, local_naive=local_naive_display),
@@ -714,7 +715,7 @@ def chronology_file(
     archive_root_id: str | None = Query(default=None),
     playback_ref: str | None = Query(default=None),
     media_token: str = Query(...),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     request: Request = None,
 ):
     segment = _segment_by_identity(

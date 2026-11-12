@@ -353,129 +353,57 @@
   background: #f0f9ff;
 }
 
-.archiveExportModal {
-  width: min(720px, calc(100vw - 32px));
+/* Shared clip dialog: fixed shell, quiet status and one aligned action row. */
+.archiveExportModal.archiveClipDialog {
+  width: min(760px, calc(100vw - 32px));
+  height: min(480px, calc(100dvh - 32px));
   box-sizing: border-box;
-  max-height: calc(100dvh - 32px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
   padding: 22px;
-  border-radius: 22px;
-}
-
-.archiveExportModal .modalHeader {
-  margin-bottom: 14px;
-}
-
-.archiveExportForm {
+  border-radius: 18px;
   display: grid;
-  gap: 12px;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 16px;
+  overflow: hidden;
 }
-
-.archiveExportTitle {
-  margin: 0;
-  font-size: 26px;
-  line-height: 1.15;
-  font-weight: 800;
-}
-
-.archiveExportInfo {
-  padding: 10px 12px;
-  border: 1px solid #dbeafe;
-  background: #f8fafc;
-  color: #334155;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.archiveExportFields {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.9fr) minmax(220px, 1fr);
-  gap: 10px 12px;
-}
-
-.archiveExportField {
-  display: grid;
-  gap: 6px;
-  color: #475569;
-  font-size: 14px;
-  font-weight: 400;
-}
-
-.archiveExportField > span {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 400;
-}
-
-.archiveExportField .input,
-.archiveExportField .select {
-  min-height: 40px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 400;
-}
-
-.archiveExportStatus {
-  height: 80px;
-  box-sizing: border-box;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  color: #1d4ed8;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.archiveExportStatus.error { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
-.archiveExportResult { display: grid; gap: 10px; min-width: 0; }
-.archiveExportFile { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
-.archiveExportResultActions { display: grid; grid-template-columns: minmax(0, 1fr) 190px 150px; gap: 8px; }
-.archiveExportResultActions .select { min-width: 0; width: 100%; }
-
-.archiveExportModal .actions {
-  margin-top: 4px;
-}
-
-.archiveExportActions {
-  justify-content: flex-end;
-}
-
-.archiveExportActions .button {
-  width: 172px;
-  justify-content: center;
-}
-
-@media (max-width: 720px) {
-  .archiveExportStatus { height: 100px; }
-  .archiveExportResultActions { grid-template-columns: 1fr 1fr; }
-  .archiveExportResultActions .select { grid-column: 1 / -1; }
-  .archiveExportResultActions .button { padding-inline: 8px; min-width: 0; height: 52px; font-size: 12px; white-space: normal; }
-  .archiveExportModal {
-    width: calc(100vw - 24px);
-    padding: 18px;
-  }
-
-  .archiveExportFields {
-    grid-template-columns: 1fr;
-  }
-
-  .archiveExportActions {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .archiveExportActions .button {
-    width: 100%;
-  }
+.archiveClipDialog .modalHeader { display: flex; align-items: center; gap: 14px; margin: 0; }
+.archiveClipDialog .modalHeader > div:first-child { flex: 1; min-width: 0; }
+.archiveExportTitle { margin: 0; font-size: 24px; line-height: 1.2; }
+.archiveClipSource { display: block; color: #64748b; margin-top: 5px; font-size: 13px; }
+.archiveClipHelp { position: relative; color: #475569; }
+.archiveClipHelp > summary { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #dbe3ef; border-radius: 50%; cursor: pointer; list-style: none; }
+.archiveClipHelp > summary::-webkit-details-marker { display: none; }
+.archiveClipHelp > div { position: absolute; right: 0; top: 38px; width: min(310px, calc(100vw - 100px)); padding: 14px; border: 1px solid #dbe3ef; background: #fff; box-shadow: 0 6px 20px #0f172a18; border-radius: 10px; z-index: 5; font-size: 13px; line-height: 1.5; }
+.archiveClipHelp p { margin: 8px 0 0; }
+.archiveClipTabs { display: flex; border-bottom: 1px solid #dbe3ef; gap: 16px; }
+.archiveClipTabs button { padding: 8px 2px; border: 0; border-bottom: 2px solid transparent; color: #64748b; background: transparent; font: inherit; cursor: pointer; }
+.archiveClipTabs button.isActive { color: #1d4ed8; border-color: #93c5fd; }
+.archiveClipTabs button:disabled { cursor: default; }
+.archiveClipPanel { min-height: 0; overflow: auto; padding: 2px; display: flex; flex-direction: column; gap: 14px; }
+.archiveExportFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.archiveExportField { display: grid; gap: 6px; min-width: 0; color: #475569; font-size: 13px; font-weight: 400; }
+.archiveExportField .input, .archiveExportField .select { min-width: 0; width: 100%; min-height: 42px; box-sizing: border-box; padding: 8px 10px; border-radius: 9px; font: inherit; }
+.archiveClipLimit, .archiveClipListState { margin: 0; color: #64748b; font-size: 12px; line-height: 1.5; }
+.archiveClipSavedFacts { min-width: 0; }
+.archiveClipSavedFacts dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; margin: 0 0 12px; }
+.archiveClipSavedFacts dl > div:last-child { grid-column: 1 / -1; }
+.archiveClipSavedFacts dt { color: #64748b; font-size: 12px; }
+.archiveClipSavedFacts dd { margin: 4px 0 0; font-size: 14px; overflow-wrap: anywhere; }
+.archiveExportFile { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 12px; }
+.archiveExportResult { display: grid; gap: 12px; min-width: 0; }
+.archiveClipNotice { height: 42px; overflow: auto; font-size: 13px; line-height: 1.5; color: #475569; }
+.archiveClipNotice.isError { color: #b91c1c; }
+.archiveClipActions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.archiveClipDialog .button { width: 100%; min-width: 0; height: 44px; padding: 6px 10px; border: 1px solid #dbe3ef; border-radius: 9px; background: #f8fafc; color: #334155; font-size: 14px; justify-content: center; white-space: normal; }
+.archiveClipDialog .archiveClipMainAction { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+.archiveClipDialog .archiveClipDelete { color: #b91c1c; }
+.archiveClipDialog .button:hover:not(:disabled) { background: #eaf2fb; }
+.archiveClipDialog button:focus-visible, .archiveClipHelp summary:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+.archiveClipListState .button { width: auto; height: 34px; font-size: 12px; }
+@media (max-width: 620px) {
+  .archiveExportModal.archiveClipDialog { height: min(620px, calc(100dvh - 32px)); padding: 16px; gap: 12px; }
+  .archiveExportFields { grid-template-columns: 1fr; gap: 10px; }
+  .archiveClipDialog .button { font-size: 12px; padding: 5px; }
+  .archiveClipTabs { gap: 12px; font-size: 13px; }
 }
 
 .cameraTileGrid {
@@ -715,6 +643,13 @@
   align-content: start;
   justify-items: stretch;
 }
+
+.cameraCardGrid .cameraNameField { grid-template-rows: auto minmax(58px, 1fr) auto; }
+.cameraCardGrid .cameraNameField .cameraFieldLabel { margin-bottom: 0; }
+.cameraNameIdentity { min-width: 0; position: relative; display: flex; align-items: center; }
+.cameraNameField .cameraNameIdentity .cameraPrimary.cameraNameWithPtz { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.cameraNameIdentity .cameraSecondary { position: absolute; top: calc(50% + 15px); left: 0; margin: 0; min-height: 0; }
+.cameraCardGrid .cameraNameField .cameraActions { margin-top: 0; }
 
 .cameraNameField .cameraFieldLabel {
   width: 114px;

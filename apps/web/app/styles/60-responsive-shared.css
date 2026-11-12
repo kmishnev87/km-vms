@@ -662,9 +662,8 @@
   .storageOpsDashboard {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "archive"
+      "left"
       "cameras"
-      "roots"
       "management";
   }
 
@@ -977,9 +976,8 @@
   .storageOpsDashboard {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "archive"
+      "left"
       "cameras"
-      "roots"
       "management";
   }
 

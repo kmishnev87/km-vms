@@ -134,7 +134,7 @@ assert.doesNotMatch(page, /runRetentionPreview/);
 assert.doesNotMatch(page, /applyRetentionPlan/);
 assert.doesNotMatch(page, /\/recordings\/retention\/dry-run/);
 assert.doesNotMatch(page, /\/recordings\/retention\/run/);
-assert.match(page, /apiFetch\("\/storage\/operations\/history"\)/);
+assert.match(read("components/storage/ArchiveOperationHistory.js"), /apiFetch\(\x60\/storage\/operations\/history\?\$\{query\}/);
 assert.doesNotMatch(page, /recentOperationPresentations\(recent\.items, 5\)/);
 assert.match(page, /<ArchiveManagementCenter/);
 assert.match(page, /<OperationDialog dialog=\{historyDialog\}/);
@@ -162,7 +162,8 @@ assert.match(
   /grid-template-columns:\s*minmax\(0, 1fr\) 40px/,
 );
 assert.match(lastCssRule(".archiveManagementHistoryList"), /display:\s*grid/);
-assert.match(lastCssRule(".archiveManagementHistoryItem"), /border-bottom:\s*1px solid/);
+// Component padding may be refined without removing the shared row separator.
+assert.match(css, /\.archiveManagementHistoryItem\s*\{[^}]*border-bottom:\s*1px solid/);
 
 for (const key of [
   "autoFreeConfirmTitle",

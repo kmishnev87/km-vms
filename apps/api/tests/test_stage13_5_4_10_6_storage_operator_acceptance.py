@@ -330,7 +330,15 @@ def test_useful_history_aggregates_deletions_filters_zero_rows_before_limit_and_
     assert history["summary"]["auto_free_space"]["deleted_count"] == 3
     assert any(item["day"] == (now - timedelta(days=5)).date().isoformat() for item in history["daily_items"])
     assert all(item["deleted_count"] > 0 or item["bytes_freed"] > 0 for item in history["daily_items"])
-    assert [item["id"] for item in history["attention_items"]] == ["attention"]
+    # Later successful passes supersede this attempt, but do not erase or
+    # rewrite its historical partial result.
+    assert history["attention_items"] == []
+    previous = next(item for item in history["items"] if item["id"] == "attention")
+    assert previous["status"] == "partial" and previous["current_state"] == "historical"
+    add_operation(stage4106, operation_id="current-attention", operation_type="retention_auto_run",
+                  when=now + timedelta(seconds=1), status="partial", retry=True)
+    stage4106.db.commit()
+    assert [item["id"] for item in useful_storage_operation_history(stage4106.db)["attention_items"]] == ["current-attention"]
     assert "owner_instance_id" not in str(history) and "scope" not in str(history)
 
 

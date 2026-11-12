@@ -230,7 +230,7 @@
 
 .settingsUpdateApplyCompact {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 18px;
 }
@@ -295,6 +295,10 @@
   min-height: 40px;
   justify-content: center;
   white-space: nowrap;
+}
+
+.settingsUpdateApplyPrimaryAction {
+  align-self: start;
 }
 
 .settingsUpdateApplyCompactMessage {
@@ -648,6 +652,22 @@
 
   .settingsMaintenanceHeaderTools {
     flex-wrap: wrap;
+  }
+
+  .settingsUpdateApplyPanel .settingsMaintenanceCardHeadingAligned {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .settingsUpdateApplyPanel .settingsMaintenanceHeaderTools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-self: stretch;
+  }
+
+  .settingsUpdateApplyPanel .settingsMaintenanceHeaderTools > .settingsUpdateApplyActions {
+    grid-column: 2;
+    grid-row: 1;
   }
 
   .settingsUpdateApplyActions .button {

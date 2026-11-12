@@ -14,6 +14,11 @@ export default function useArchiveExport() {
   const [transferBusy, setTransferBusy] = useState(false);
   const [recent, setRecent] = useState([]);
   const [recentState, setRecentState] = useState("loading");
+  const [recentTotal, setRecentTotal] = useState(0);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const recentRequestRef = useRef(0);
+  const recentRef = useRef([]);
+  recentRef.current = recent;
   const activeRef = useRef(null);
   const selectionRef = useRef("");
   const jobRef = useRef(null);
@@ -28,7 +33,8 @@ export default function useArchiveExport() {
     operationsRef.current.clear(); activeRef.current = null;
     selectionRef.current = ""; jobRef.current = null;
     setJob(null); setStatus(""); setPhase("idle"); setBusy(false); setTransferBusy(false);
-    setRecent([]); setRecentState("loading");
+    recentRequestRef.current += 1;
+    setRecent([]); setRecentTotal(0); setDeleteBusy(false); setRecentState("loading");
     return () => {
       owner.mounted = false;
       for (const controller of operationsRef.current) controller.abort();
@@ -50,15 +56,19 @@ export default function useArchiveExport() {
       finish: () => operationsRef.current.delete(controller) };
   }
 
-  async function loadRecent() {
+  async function loadRecent({ append = false } = {}) {
     const operation = beginOperation();
     if (!operation) return;
+    const requestId = ++recentRequestRef.current;
+    const offset = append ? recentRef.current.length : 0;
+    setRecentState("loading");
     try {
-      const result = await apiFetch("/archive/exports?limit=200", { signal: operation.signal });
-      if (!operation.isCurrent()) return;
-      setRecent((result?.items || []).filter((item) => item.download_ready || ["queued", "running"].includes(item.status)));
+      const result = await apiFetch(`/archive/exports?saved_only=true&limit=20&offset=${offset}`, { signal: operation.signal });
+      if (!operation.isCurrent() || requestId !== recentRequestRef.current) return;
+      setRecent((previous) => append ? [...previous, ...(result?.items || []).filter((item) => !previous.some((old) => old.id === item.id))] : result?.items || []);
+      setRecentTotal(Number(result?.total || 0));
       setRecentState("ready");
-    } catch (_) { if (operation.isCurrent()) setRecentState("error"); }
+    } catch (_) { if (operation.isCurrent() && requestId === recentRequestRef.current) setRecentState("error"); }
     finally { operation.finish(); }
   }
 
@@ -143,6 +153,11 @@ export default function useArchiveExport() {
 
   function selectReady(id) {
     if (!ownsSession()) return;
+    if (!id && !busy && !deleteBusy) {
+      selectionRef.current = ""; jobRef.current = null;
+      setJob(null); setStatus(""); setPhase("idle");
+      return;
+    }
     const selected = recent.find((item) => item.id === id);
     if (!selected || busy) return;
     selectionRef.current = "";
@@ -152,6 +167,29 @@ export default function useArchiveExport() {
     setStatus(selected.download_ready ? "Готовый клип выбран. Повторная подготовка не требуется." : "Сохранённая подготовка выбрана. Нажмите «Продолжить подготовку», чтобы проверить или завершить тот же клип.");
   }
 
-  return { job, status, phase, busy, transferBusy, recent, recentState, prepare, stopWaiting, loadRecent, download, selectReady,
+  async function remove(exportId) {
+    if (busy || deleteBusy || transferBusy) return false;
+    const operation = beginOperation();
+    if (!operation) return false;
+    setDeleteBusy(true);
+    try {
+      await apiFetch(`/archive/exports/${encodeURIComponent(exportId)}?confirm=true`, { method: "DELETE", signal: operation.signal });
+      if (!operation.isCurrent()) return false;
+      recentRequestRef.current += 1;
+      if (jobRef.current?.id === exportId) {
+        selectionRef.current = ""; jobRef.current = null;
+        setJob(null); setStatus(""); setPhase("idle");
+      }
+      setRecent((items) => items.filter((item) => item.id !== exportId));
+      setRecentTotal((value) => Math.max(0, value - 1));
+      await loadRecent();
+      return true;
+    } catch (error) {
+      if (operation.isCurrent()) { setStatus(normalizeArchiveExportError(error.message)); setPhase("error"); }
+      return false;
+    } finally { operation.finish(); if (operation.isCurrent()) setDeleteBusy(false); }
+  }
+
+  return { job, status, phase, busy, transferBusy, deleteBusy, recent, recentState, recentTotal, prepare, stopWaiting, loadRecent, download, selectReady, remove,
            resume: () => jobRef.current?.id ? prepare({}, { resumeId: jobRef.current.id }) : null };
 }
