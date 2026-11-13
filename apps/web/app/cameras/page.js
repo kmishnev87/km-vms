@@ -255,7 +255,13 @@ export default function CamerasPage() {
     setShowEditor(true);
   }
 
-  async function cameraSaved() {
+  async function cameraSaved(saved) {
+    // Commit the server-confirmed result before closing. A quick reopen must
+    // never edit the old list snapshot while the background refresh is pending.
+    camerasRequestRef.current += 1;
+    if (saved?.id) setCameras(previous => previous.some(camera => camera.id === saved.id)
+      ? previous.map(camera => camera.id === saved.id ? saved : camera)
+      : [...previous, saved].sort((left, right) => left.name.localeCompare(right.name)));
     invalidateCameraPtz();
     setShowEditor(false);
     setEditorCamera(null);

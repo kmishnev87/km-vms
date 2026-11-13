@@ -6,7 +6,7 @@ import { apiFetch, captureAuthSession } from "../lib/api";
 import { useAuthSession } from "../lib/useAuthSession";
 import { useI18n } from "../lib/i18n";
 import { formatProductDateTime } from "../lib/timezone";
-import { CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, eventErrorKey, eventHistoryQuery, minuteLabel, minuteValue } from "../lib/cameraEvents";
+import { CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, eventErrorKey, eventHistoryQuery, eventLabelKey, minuteLabel, minuteValue } from "../lib/cameraEvents";
 import { OperationDialog, OperationToast } from "./OperationFeedback";
 
 let cached = { session: "", cursor: null, unread: 0 };
@@ -14,6 +14,15 @@ const headers = { "Content-Type": "application/json" };
 
 function EventBell() {
   return <svg className="cameraEventsBell" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="camera-event-bell" x2="1" y2="1"><stop stopColor="#f7fcff"/><stop offset="1" stopColor="#bad0e2"/></linearGradient></defs><path d="M11 26c3-3 2-5 3-11 1-7 12-7 13 0 1 6 0 8 3 11l-2 3H13z" fill="url(#camera-event-bell)" stroke="#54718a" strokeWidth="1.6"/><path d="M17 32c1 3 5 3 7 0M20 6V4" fill="none" stroke="#54718a" strokeWidth="2" strokeLinecap="round"/></svg>;
+}
+
+function EventActionIcon({ action }) {
+  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    {action === "live" ? <><rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-3v10l-6-3z"/></>
+      : action === "archive" ? <><circle cx="12" cy="12" r="8.5"/><path d="M12 6.5V12l3.5 2M4 4v4H.5"/></>
+      : action === "refresh" ? <><path d="M19.5 10A8 8 0 1 0 19 17M20 3v7h-7"/></>
+      : <><path d="M2 11.5S5.5 6 11 6s9 5.5 9 5.5S16.5 17 11 17s-9-5.5-9-5.5Z"/><circle cx="11" cy="11.5" r="2.5"/><path d="m15.5 19 2 2 4-5"/></>}
+  </svg>;
 }
 
 export default function CameraEventsHub({ currentUser }) {
@@ -41,6 +50,7 @@ export default function CameraEventsHub({ currentUser }) {
   const [detectorCamera, setDetectorCamera] = useState("");
   const [detectors, setDetectors] = useState(null);
   const generation = useRef(0);
+  const selectPageRef = useRef(null);
   const openRef = useRef(open);
   openRef.current = open;
   const query = useMemo(() => eventHistoryQuery(filters, offset), [filters, offset]);
@@ -142,13 +152,29 @@ export default function CameraEventsHub({ currentUser }) {
     });
   }
 
+  async function readAll() {
+    const through = history?.read_cursor;
+    if (!through) return;
+    await act(async current => {
+      await apiFetch("/camera-events/read-all", { method: "POST", headers, body: JSON.stringify({ through }) });
+      if (current()) {
+        setSelection([]); setOffset(0); setRefresh(n => n + 1);
+        const value = await apiFetch("/camera-events/updates?wait=0");
+        if (current()) setUnread(value.unread_count);
+      }
+    });
+  }
+
   function changeFilter(key, value) { setFilters(previous => ({ ...previous, [key]: value })); setOffset(0); setSelection([]); }
   const rows = history?.items || [];
   const allSelected = rows.length > 0 && rows.every(row => selection.includes(row.id));
+  const bulkReadLabel = t(selection.length ? "cameraEvents.markSelectedRead" : "cameraEvents.markAllRead");
+  useEffect(() => {
+    if (selectPageRef.current) selectPageRef.current.indeterminate = selection.length > 0 && !allSelected;
+  }, [allSelected, selection.length, rows.length]);
   function rowActions(row) {
-    return <div className="cameraEventsRowActions"><button type="button" className="button secondary small" disabled={busy || !row.camera_id} onClick={() => openEvent(row, "live")}>{t("cameraEvents.watchNow")}</button>
-      {archive ? <button type="button" className="button secondary small" disabled={busy || !row.camera_id} onClick={() => openEvent(row, "archive")}>{t("cameraEvents.watchEvent")}</button> : null}
-      {!row.read ? <button type="button" className="cameraEventsReadButton" disabled={busy} onClick={() => readSelection([row.id])}>{t("cameraEvents.markRead")}</button> : null}</div>;
+    return <div className="cameraEventsRowActions"><button type="button" className="cameraEventsIconButton" title={t("cameraEvents.watchNow")} aria-label={`${t("cameraEvents.watchNow")}: ${row.camera_name}`} disabled={busy || !row.camera_id} onClick={() => openEvent(row, "live")}><EventActionIcon action="live"/></button>
+      {archive ? <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.watchEvent")} aria-label={`${t("cameraEvents.watchEvent")}: ${row.camera_name}`} disabled={busy || !row.camera_id} onClick={() => openEvent(row, "archive")}><EventActionIcon action="archive"/></button> : null}</div>;
   }
 
   const historyContent = <div className="cameraEventsWorkbench">
@@ -156,17 +182,21 @@ export default function CameraEventsHub({ currentUser }) {
       <label>{t("cameraEvents.camera")}<select value={filters.camera} onChange={e => changeFilter("camera", e.target.value)}><option value="">{t("cameraEvents.allCameras")}</option>{cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.name}</option>)}</select></label>
       <label>{t("cameraEvents.type")}<select value={filters.kind} onChange={e => changeFilter("kind", e.target.value)}><option value="">{t("cameraEvents.allTypes")}</option>{CAMERA_EVENT_KINDS.map(kind => <option key={kind} value={kind}>{t(`cameraEvents.kinds.${kind}`)}</option>)}</select></label>
       <label>{t("cameraEvents.period")}<select value={filters.days} onChange={e => changeFilter("days", Number(e.target.value))}>{[1, 7, 30].map(day => <option key={day} value={day}>{t(`cameraEvents.days${day}`)}</option>)}</select></label>
-      <label className="cameraEventsCheck"><input type="checkbox" checked={filters.unread} onChange={e => changeFilter("unread", e.target.checked)}/>{t("cameraEvents.unreadOnly")}</label>
-      <button className="button secondary small" type="button" onClick={() => setRefresh(n => n + 1)} disabled={loading}>{t("cameraEvents.refresh")}</button>
+      <div className="cameraEventsFilterActions"><label className="cameraEventsCheck"><input type="checkbox" checked={filters.unread} onChange={e => changeFilter("unread", e.target.checked)}/>{t("cameraEvents.unreadOnly")}</label>
+      <button className="cameraEventsIconButton" title={t("cameraEvents.refresh")} aria-label={t("cameraEvents.refresh")} type="button" onClick={() => setRefresh(n => n + 1)} disabled={loading}><EventActionIcon action="refresh"/></button>
+      </div>
     </div>
-    <div className="cameraEventsSelection"><label className="cameraEventsCheck"><input type="checkbox" checked={allSelected} disabled={!rows.length} onChange={e => setSelection(e.target.checked ? rows.map(row => row.id) : [])}/>{t("cameraEvents.selectPage")}</label><span>{t("cameraEvents.selected", { count: selection.length })}</span><button className="button secondary small" type="button" disabled={busy || !selection.length} onClick={() => readSelection(selection)}>{t("cameraEvents.markRead")}</button><span className="cameraEventsTotal">{t("cameraEvents.found", { count: history?.total || 0 })}</span></div>
+    <div className="cameraEventsHistory">
+    <div className="cameraEventsSelection"><input ref={selectPageRef} aria-label={t("cameraEvents.selectPage")} type="checkbox" checked={allSelected} disabled={!rows.length} onChange={e => setSelection(e.target.checked ? rows.map(row => row.id) : [])}/><div className="cameraEventsSelectionSummary"><span>{t("cameraEvents.selected", { count: selection.length })}</span><span className="cameraEventsTotal">{t("cameraEvents.found", { count: history?.total || 0 })}</span></div><button className="cameraEventsIconButton" type="button" title={bulkReadLabel} aria-label={bulkReadLabel} disabled={busy || (selection.length ? false : !unread || !history?.read_cursor)} onClick={() => selection.length ? readSelection(selection) : readAll()}><EventActionIcon action="read"/></button></div>
     <div className="cameraEventsList" aria-busy={loading}>
       {loading && !history ? <div className="cameraEventsEmpty">{t("cameraEvents.loading")}</div> : !rows.length ? <div className="cameraEventsEmpty">{t("cameraEvents.empty")}</div> : rows.map(row => <article className={`cameraEventsRow ${row.read ? "isRead" : "isUnread"}`} key={row.id}>
         <input aria-label={t("cameraEvents.selectEvent", { camera: row.camera_name })} type="checkbox" checked={selection.includes(row.id)} onChange={e => setSelection(previous => e.target.checked ? [...previous, row.id] : previous.filter(id => id !== row.id))}/>
-        <div className="cameraEventsDescription"><strong>{row.camera_name}</strong><span>{t(`cameraEvents.kinds.${row.kind}`)}{row.active === true ? ` · ${t("cameraEvents.active")}` : ""}</span>{row.state_unconfirmed ? <small>{t("cameraEvents.stateUnconfirmed")}</small> : null}{row.source_ambiguous ? <small>{t("cameraEvents.ambiguous")}</small> : null}{row.clock_uncertain ? <small>{t("cameraEvents.clockUncertain")}</small> : null}</div>
+        <span className="cameraEventsReadIndicator" role="img" aria-label={t(row.read ? "cameraEvents.viewed" : "cameraEvents.newEvent")} title={t(row.read ? "cameraEvents.viewed" : "cameraEvents.newEvent")}/>
+        <div className="cameraEventsDescription"><strong>{row.camera_name}</strong><span>{t(eventLabelKey(row))}{row.active === true ? ` · ${t("cameraEvents.active")}` : ""}</span>{row.state_unconfirmed ? <small>{t("cameraEvents.stateUnconfirmed")}</small> : null}{row.source_ambiguous ? <small>{t("cameraEvents.ambiguous")}</small> : null}{row.clock_uncertain ? <small>{t("cameraEvents.clockUncertain")}</small> : null}</div>
         <time dateTime={row.occurred_at}>{formatProductDateTime(row.occurred_at, history?.timezone, locale)}</time>
         {rowActions(row)}
       </article>)}
+    </div>
     </div>
     <div className="cameraEventsPager"><span>{t("cameraEvents.retention", { days: history?.retention_days || 30 })}</span><button className="button secondary small" type="button" disabled={loading || !offset} onClick={() => setOffset(n => Math.max(0, n - 25))}>{t("cameraEvents.previous")}</button><button className="button secondary small" type="button" disabled={loading || offset + rows.length >= (history?.total || 0)} onClick={() => setOffset(n => n + 25)}>{t("cameraEvents.next")}</button></div>
   </div>;
@@ -201,7 +231,7 @@ export default function CameraEventsHub({ currentUser }) {
     <button className={`topNavItem topNavButton cameraEventsNav ${open ? "active" : ""}`} type="button" title={t("cameraEvents.title")} aria-label={t("cameraEvents.title")} onClick={() => { setOpen(true); setEventToast(null); }}><EventBell/>{unread > 0 ? <span className="cameraEventsBadge">{unread > 99 ? "99+" : unread}</span> : null}</button>
     {typeof document !== "undefined" ? createPortal(<>
     <OperationToast toast={errorToast} onClose={() => setErrorToast(null)}/>
-    {eventToast ? <aside className="cameraEventArrival" role="status"><button className="cameraEventArrivalClose" type="button" aria-label={t("cameraEvents.close")} onClick={() => setEventToast(null)}>×</button><strong>{eventToast.camera_name}</strong><span>{t(`cameraEvents.kinds.${eventToast.kind}`)}</span><time dateTime={eventToast.occurred_at}>{formatProductDateTime(eventToast.occurred_at, eventToast.timezone, locale)}</time>{rowActions(eventToast)}</aside> : null}
+    {eventToast ? <aside className="cameraEventArrival" role="status"><button className="cameraEventArrivalClose" type="button" aria-label={t("cameraEvents.close")} onClick={() => setEventToast(null)}>×</button><strong>{eventToast.camera_name}</strong><span>{t(eventLabelKey(eventToast))}</span><time dateTime={eventToast.occurred_at}>{formatProductDateTime(eventToast.occurred_at, eventToast.timezone, locale)}</time>{rowActions(eventToast)}</aside> : null}
     <OperationDialog dialog={open ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
       content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications", ...(manage ? ["detection"] : [])].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : tab === "notifications" ? preferenceContent : detectorContent}</div>
     } : null} onClose={() => setOpen(false)}/>

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.12",
-  "tag": "v0.9.12",
-  "title": "Camera events and consistent page layout",
-  "summary": "Receive supported ONVIF camera events, review a bounded personal event history and open the relevant live view or archive. Read camera detection rules and change switches only when exposed by the device. Align System Health and Settings with the common page frame.",
+  "version": "0.9.13",
+  "tag": "v0.9.13",
+  "title": "Reliable camera events and compact history",
+  "summary": "Fix lost ONVIF event topics, add explicit per-camera event reception, and simplify history with compact controls and a real mark-all action. Open event live views with full-frame layout while preserving settings and archive footage.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.12",
+  "source_ref": "v0.9.13",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -17,58 +17,62 @@
   "requires_migration": false,
   "schema_update": {
     "mode": "managed",
-    "target_version": 10
+    "target_version": 11
   },
   "changelog": [
-    "Add managed ONVIF PullPoint reception with long waits, renewal, bounded retries and one leased receiver per physical connection.",
-    "Normalize camera events without inventing object classes, ignore initial subscription state, merge repeated episodes and distinguish unconfirmed state after a disconnection.",
-    "Add camera event history, camera/type/time/unread filters, personal read markers and bulk marking without deleting footage.",
-    "Provide live/archive actions, approximately five seconds of existing pre-event footage where available, and event markers with previous/next navigation in Chronology.",
-    "Use cancellable browser long-polls and existing persistent event/settings envelopes without changing the database schema or the published update path.",
-    "Separate personal KM VMS notifications from camera detection; read ONVIF Rules and allow only exposed boolean controls with revision checks and readback.",
-    "Keep events independent of the Recorder enable flag. Android background push, vendor-private detection APIs and event-only recording are not included.",
-    "Expand System Health to the shared page width, clip only the Settings decoration without stretching forms, and align the concise Update button with its header icons."
+    "Preserve ONVIF event topics through SOAP conversion without vendor-specific parsing or reduced XML protections.",
+    "Add default-off per-camera event reception. Existing cameras also start off; enable it in camera editing after ONVIF support is confirmed.",
+    "Keep reception independent from camera detection and recording; allow opt-out while offline and prevent late or wrong-lens event writes.",
+    "Report actual message processing, keep true vehicle flags authoritative, and immediately reopen saved camera settings from the confirmed server response.",
+    "Mark selected events or all retained history with one icon and one request. Newer events remain unviewed; other users and footage are unchanged.",
+    "Align checkboxes and use compact live/archive buttons, a fixed unread dot and responsive filters without shifting list rows.",
+    "Name standard zone, line-crossing and loitering events consistently, including old records, without guessing object classes.",
+    "Open event Live as one camera with Fit frames active, including same-page navigation, without overwriting the saved ordinary layout.",
+    "Apply managed schema migration 10 to 11, preserving accounts, settings and archive references. Validate old lineage against its own release."
   ],
   "title_i18n": {
-    "en": "Camera events and consistent page layout",
-    "ru": "События камер и единые границы страниц",
-    "zh-CN": "摄像机事件与统一页面布局"
+    "en": "Reliable camera events and compact history",
+    "ru": "Надёжный приём событий и компактная история",
+    "zh-CN": "可靠的摄像机事件接收与紧凑历史记录"
   },
   "summary_i18n": {
-    "en": "Receive supported ONVIF camera events, review a bounded personal event history and open the relevant live view or archive. Read camera detection rules and change switches only when exposed by the device. Align System Health and Settings with the common page frame.",
-    "ru": "Приём поддерживаемых ONVIF-событий, история с личными отметками и переходы к онлайну или записи. Чтение правил обнаружения и подтверждённое изменение доступных переключателей. Единые границы состояния системы и фона настроек.",
-    "zh-CN": "接收受支持的ONVIF摄像机事件，查看有界历史并进入对应实时画面或录像。读取检测规则，仅修改设备实际开放的开关。统一系统状态与设置页面边界。"
+    "en": "Fix lost ONVIF event topics, add explicit per-camera event reception, and simplify history with compact controls and a real mark-all action. Open event live views with full-frame layout while preserving settings and archive footage.",
+    "ru": "Исправлен приём ONVIF-сообщений, добавлено отдельное включение событий каждой камеры. Компактная история получила настоящую массовую отметку, а переход к онлайну открывает одну камеру по кадру. Настройки и видеоархив сохраняются.",
+    "zh-CN": "修复ONVIF事件主题丢失，为每台摄像机增加显式事件接收开关。紧凑历史记录支持真正的全部已读操作，进入实时画面时按完整画幅排列单台摄像机，并保留设置和录像档案。"
   },
   "changelog_i18n": {
     "en": [
-      "Add managed ONVIF PullPoint reception with long waits, renewal, bounded retries and one leased receiver per physical connection.",
-      "Normalize camera events without inventing object classes, ignore initial subscription state, merge repeated episodes and distinguish unconfirmed state after a disconnection.",
-      "Add camera event history, camera/type/time/unread filters, personal read markers and bulk marking without deleting footage.",
-      "Provide live/archive actions, approximately five seconds of existing pre-event footage where available, and event markers with previous/next navigation in Chronology.",
-      "Use cancellable browser long-polls and existing persistent event/settings envelopes without changing the database schema or the published update path.",
-      "Separate personal KM VMS notifications from camera detection; read ONVIF Rules and allow only exposed boolean controls with revision checks and readback.",
-      "Keep events independent of the Recorder enable flag. Android background push, vendor-private detection APIs and event-only recording are not included.",
-      "Expand System Health to the shared page width, clip only the Settings decoration without stretching forms, and align the concise Update button with its header icons."
+      "Preserve ONVIF event topics through SOAP conversion without vendor-specific parsing or reduced XML protections.",
+      "Add default-off per-camera event reception. Existing cameras also start off; enable it in camera editing after ONVIF support is confirmed.",
+      "Keep reception independent from camera detection and recording; allow opt-out while offline and prevent late or wrong-lens event writes.",
+      "Report actual message processing, keep true vehicle flags authoritative, and immediately reopen saved camera settings from the confirmed server response.",
+      "Mark selected events or all retained history with one icon and one request. Newer events remain unviewed; other users and footage are unchanged.",
+      "Align checkboxes and use compact live/archive buttons, a fixed unread dot and responsive filters without shifting list rows.",
+      "Name standard zone, line-crossing and loitering events consistently, including old records, without guessing object classes.",
+      "Open event Live as one camera with Fit frames active, including same-page navigation, without overwriting the saved ordinary layout.",
+      "Apply managed schema migration 10 to 11, preserving accounts, settings and archive references. Validate old lineage against its own release."
     ],
     "ru": [
-      "Добавлен управляемый приём ONVIF PullPoint: длинное ожидание, продление, ограниченные повторы и один приёмник с lease на физическое подключение.",
-      "События нормализуются без выдуманного распознавания; начальные состояния не тревожат, повторы объединяются, потеря связи не считается подтверждённым окончанием.",
-      "История событий получила фильтры камеры/типа/периода/прочтения, личные отметки и массовое прочтение без удаления видео.",
-      "Добавлены переходы к онлайну и существующей записи примерно за пять секунд до события, отметки и переходы между событиями на хронологии.",
-      "Браузер использует отменяемое длинное ожидание; существующие хранилища данных переиспользованы без изменения схемы БД и опубликованного пути обновления.",
-      "Личные оповещения отделены от обнаружения на камере; доступны чтение правил ONVIF и только предоставляемые камерой переключатели с проверкой версии и результата.",
-      "Приём событий не зависит от включения Recorder. Android push в фоне, фирменные API обнаружения и запись только по событию в выпуск не входят.",
-      "Состояние системы растянуто до общей ширины, фон настроек ограничен без растягивания форм; короткая кнопка «Обновить» выровнена по верхним значкам."
+      "Исправлена потеря тем ONVIF при SOAP-преобразовании. Ограничения разбора и защиты сохранены, привязки к производителю нет.",
+      "Для каждой камеры добавлен отдельный выбор получения событий: по умолчанию выключен и у существующих камер. Включение доступно после подтверждения поддержки ONVIF.",
+      "Получение не меняет детекцию и запись; выключается без связи с камерой. Поздние ответы старых настроек и события чужого объектива не принимаются.",
+      "Диагностика отражает реальный разбор сообщений. Истинный признак автомобиля не подавляется; повторное открытие редактора показывает сохранённые настройки.",
+      "Выбранное или вся история отмечаются одной кнопкой и запросом. Более новые события остаются непросмотренными, чужие личные отметки и видео не меняются.",
+      "Ровные чекбоксы, компактные значки просмотра, неподвижная точка нового события и адаптивные фильтры не сдвигают список при отметке.",
+      "Объект в зоне, пересечение линии и длительное пребывание получают одинаковые понятные подписи, включая старые события. Класс объекта не выдумывается.",
+      "Событие открывает одну онлайн-камеру с выравниванием по кадру, в том числе из онлайна, не перезаписывая сохранённую раскладку.",
+      "Штатная миграция схемы 10 → 11 сохраняет пользователей, настройки и ссылки на архив. Схема прежнего релиза проверяется по его собственному описанию."
     ],
     "zh-CN": [
-      "新增受控ONVIF PullPoint接收，支持长等待、续订、有界重试及每个物理连接的租约接收器。",
-      "规范化事件但不推测对象类别，忽略订阅初始状态，合并重复事件，断线不视为已确认结束。",
-      "增加事件历史、摄像机/类型/时段/未读筛选、个人已读状态及批量标记，不删除录像。",
-      "可进入实时画面或事件前约五秒的现有录像；时间轴显示事件标记并支持前后导航。",
-      "浏览器使用可取消的长轮询，复用现有持久存储，不改变数据库结构及已发布更新路径。",
-      "区分个人通知与摄像机检测，可读取ONVIF规则，仅对设备开放的布尔开关执行版本校验及读取确认。",
-      "事件接收不依赖Recorder开关；不包含Android后台推送、厂商私有检测API或仅事件录像。",
-      "系统状态扩展至统一宽度，仅裁剪设置装饰层而不拉伸表单，简短更新按钮与上方图标对齐。"
+      "在SOAP类型转换丢失混合文本前保留标准ONVIF事件主题，维持解析边界和订阅保护，不按厂商品牌分支处理。",
+      "在添加和编辑摄像机时提供独立事件接收选项。新摄像机和已有摄像机均默认关闭，确认设备支持后可显式启用。摄像机离线时也可关闭，不修改设备检测或录像设置。",
+      "区分订阅已打开与消息已成功解析，增加接收、解析、拒绝及排除来源计数。准确区分多镜头来源，配置变化后拒绝迟到的旧响应。",
+      "错误的人体否定标志不再掩盖有效的车辆事件。保存后立即重新编辑时使用服务器确认的设置，而非过期摄像机列表。",
+      "以列表外的紧凑批量图标替换会消失的逐行已读按钮。一次请求标记所选事件或全部保留历史，快照之后到达的事件保持未读，不修改其他用户的已读状态或录像。",
+      "对齐复选框，使用紧凑实时和录像图标、固定位置的新事件圆点及响应式筛选，标记已读不会移动列表。",
+      "区域目标、越线和徘徊规则在历史、通知和时间轴中使用一致的明确名称，也适用于保留事件，不推测人体或车辆类别。",
+      "进入事件实时画面时仅显示一台摄像机并启用按画幅排列，在实时页再次打开事件同样生效，不覆盖普通已保存布局。",
+      "通过已注册的受控数据库结构10至11迁移添加默认关闭的事件选项，保留账户、设置及录像引用，并按旧版本自身的结构描述校验更新来源。"
     ]
   }
 }

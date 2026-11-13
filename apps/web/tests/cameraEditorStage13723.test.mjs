@@ -114,20 +114,24 @@ assert.equal(m.cameraEditorError({ code: "wrong_credentials" }, { authError: "au
 
 // Exercise the actual owner hook with deterministic HTTP replies and lifecycle cleanup.
 function hookHarness(camera = null) {
-  const slots = [], cleanups = [], requests = [];
+  const slots = [], cleanups = [], requests = [], capabilityRequests = [];
   let index = 0, saved = null;
   const scope = {
-    ...context, ...m, Date, URL, Set,
+    ...context, ...m, Date, URL, Set, AbortController,
     useRef(initial) { const at = index++; return slots[at] ||= { current: initial }; },
     useState(initial) { const at = index++; if (!(at in slots)) slots[at] = initial; return [slots[at], (next) => { slots[at] = typeof next === "function" ? next(slots[at]) : next; }]; },
     useEffect(effect) { const at = index++; if (!(at in slots)) { slots[at] = true; cleanups.push(effect()); } },
-    async apiFetch(path, options) { const request = { path, method: options.method, body: JSON.parse(options.body) }; requests.push(request); return await scope.reply(request); },
+    async apiFetch(path, options) {
+      const request = { path, method: options.method, body: JSON.parse(options.body) };
+      if (path === "/cameras/onvif/events/capabilities") { capabilityRequests.push(request); return { supported: true, status: "supported", kinds: ["motion"] }; }
+      requests.push(request); return await scope.reply(request);
+    },
     reply: async () => { throw new Error("unexpected HTTP request"); },
   };
   const hook = read("components/cameras/useCameraEditor.js").replace(/^import[\s\S]*?from "[^"]+";\s*/gm, "").replace("export default function", "function");
   vm.runInNewContext(`${modelSource}\n${hook}\nthis.renderHook = useCameraEditor;`, scope);
   const copy = new Proxy({}, { get: (_, key) => key });
-  return { scope, requests, render: () => { index = 0; return scope.renderHook(camera, copy, (value) => { saved = value; }); }, getSaved: () => saved, unmount: () => cleanups.forEach((cleanup) => cleanup?.()) };
+  return { scope, requests, capabilityRequests, render: () => { index = 0; return scope.renderHook(camera, copy, (value) => { saved = value; }); }, getSaved: () => saved, unmount: () => cleanups.forEach((cleanup) => cleanup?.()) };
 }
 const offline = hookHarness(stored);
 let editor = offline.render();
@@ -138,6 +142,7 @@ assert.equal(offline.requests.length, 1);
 assert.equal(offline.requests[0].method, "PUT");
 assert.deepEqual(plain(offline.requests[0].body), { retention_days: 46 });
 assert.equal(offline.getSaved().id, stored.id);
+assert.equal(offline.capabilityRequests.length, 1, "event capability reading is separate from stream validation and camera writes");
 
 function fillNew(harness) {
   const owner = harness.render();

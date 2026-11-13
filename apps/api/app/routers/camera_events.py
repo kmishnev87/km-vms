@@ -43,6 +43,11 @@ class ReadSelection(BaseModel):
     ids: list[UUID] = Field(max_length=200)
 
 
+class ReadAll(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    through: str = Field(min_length=39, max_length=100)
+
+
 class DetectorChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: StrictBool
@@ -93,8 +98,9 @@ def history(camera_id: int | None = Query(None, ge=1), kind: EventKind | None = 
 @router.get("/cameras")
 def cameras(db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     states = receiver_states()
-    return {"items": [{"id": c.id, "name": c.name, "protocol": c.protocol, "enabled": c.enabled,
-                        "receiver": states.get(str(c.id), {"status": "pending" if c.protocol == "onvif" else "unsupported"})}
+    return {"items": [{"id": c.id, "name": c.name, "protocol": c.protocol, "enabled": c.enabled, "events_enabled": c.events_enabled,
+                        "receiver": {"status": "unsupported"} if c.protocol != "onvif" else
+                        {"status": "disabled"} if not c.events_enabled else states.get(str(c.id), {"status": "pending"})}
                        for c in db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.name).all()]}
 
 
@@ -114,6 +120,19 @@ def put_preferences(payload: Preferences, db: Session = Depends(get_db), user: U
 @router.post("/read")
 def mark_read(payload: ReadSelection, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     return {"marked": events.mark_read(db, user.id, [str(item) for item in payload.ids])}
+
+
+@router.post("/read-all")
+def mark_all_read(payload: ReadAll, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    try:
+        stamp, identifier = payload.through.split("|", 1)
+        parsed = datetime.fromisoformat(stamp)
+        if parsed.tzinfo is not None:
+            raise ValueError()
+        identifier = str(UUID(identifier))
+    except (ValueError, TypeError):
+        _failure("invalid_event_cursor", 422)
+    return {"marked": events.mark_all_read(db, user.id, parsed, identifier)}
 
 
 @router.get("/updates")
@@ -200,7 +219,7 @@ def markers(camera_ids: str = Query(..., max_length=1024), from_ts: str = Query(
         event = events.serialize(row)
         instant = datetime.fromisoformat(event["occurred_at"].replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
         if start <= instant <= end:
-            result.append({"id": row.id, "camera_id": event["camera_id"], "kind": event["kind"],
+            result.append({"id": row.id, "camera_id": event["camera_id"], "kind": event["kind"], "topic": event["topic"],
                            "timestamp_system": format_system_iso(instant, ctx)[:19]})
     return {"items": result, "truncated": len(rows) > 5000}
 

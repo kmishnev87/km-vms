@@ -2034,7 +2034,7 @@ def validate_current_target_schema(db: Session) -> dict[str, Any]:
         or state.status not in SAFE_STATUSES
     ):
         raise RuntimeError("current_target_schema_state_invalid")
-    return _stage1375_format_target_verify(db)
+    return _stage172_event_receiving_target_verify(db)
 
 
 STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
@@ -2119,6 +2119,51 @@ STAGE1375_FORMAT_CHANGE_MIGRATION = MigrationDefinition(
 )
 
 
+def _stage172_event_receiving_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.schema_version != 10 or state.baseline_id != CURRENT_BASELINE_ID or state.status not in SAFE_STATUSES:
+        raise RuntimeError("stage172_source_schema_state_invalid")
+    _stage1375_format_target_verify(db)
+    return {"status": "ready"}
+
+
+def _stage172_event_receiving_apply(db: Session) -> dict[str, Any]:
+    columns = {str(column["name"]) for column in inspect(db.connection()).get_columns("cameras")}
+    added = "events_enabled" not in columns
+    if added:
+        db.execute(text("ALTER TABLE cameras ADD COLUMN events_enabled BOOLEAN NOT NULL DEFAULT FALSE"))
+    return {"status": "applied", "column_added": added}
+
+
+def _stage172_event_receiving_target_verify(db: Session) -> dict[str, Any]:
+    result = _stage1375_format_target_verify(db)
+    column = next((column for column in inspect(db.connection()).get_columns("cameras") if column["name"] == "events_enabled"), None)
+    if column is None or column.get("nullable") is not False or "BOOL" not in str(column.get("type", "")).upper():
+        raise RuntimeError("stage172_event_receiving_column_invalid")
+    default = str(column.get("default") or "").strip("()'\"").lower()
+    if default not in {"false", "0"}:
+        raise RuntimeError("stage172_event_receiving_default_not_off")
+    return {**result, "schema_version": 11, "camera_event_receiving": "explicit_opt_in"}
+
+
+STAGE172_EVENT_RECEIVING_MIGRATION = MigrationDefinition(
+    migration_id="stage172_camera_event_receiving_schema_v11",
+    from_version=10,
+    to_version=11,
+    description="Add an explicit default-off ONVIF event reception choice per camera.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage172_event_receiving_preflight,
+    apply=_stage172_event_receiving_apply,
+    verify=_stage172_event_receiving_target_verify,
+    safe_failure_summary="Camera event reception choice migration failed safely.",
+    rollback_note="The additive default-off camera column preserves all existing rows and footage; no schema downgrade is required.",
+    runtime_compatibility_floor=10,
+    definition_material={"source_schema_version": 10, "target_schema_version": 11, "table": "cameras",
+                         "column": "events_enabled", "ddl": "BOOLEAN NOT NULL DEFAULT FALSE", "existing_rows_preserved": True},
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -2130,6 +2175,7 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
         STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION,
         STAGE1375_FORMAT_CHANGE_MIGRATION,
+        STAGE172_EVENT_RECEIVING_MIGRATION,
     ),
     published_variants=(
         STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,

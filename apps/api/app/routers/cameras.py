@@ -89,6 +89,8 @@ from app.services.storage_operation_conflicts import (
 from app.services.storage_operations_foundation import StorageOperationContractError, claim_operation, safe_reason_code
 from app.services.recording_storage import resolve_segment_file_path
 from app.services.camera_stream_dimensions import read_dimensions
+from app.services.camera_event_settings import validate_event_receiving
+from app.services.camera_events_worker import wake_camera_events
 from app.routers.camera_connection_helpers import persist_verified_stream_dimensions
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
@@ -312,6 +314,7 @@ def create_camera(
     rtsp_host, rtsp_port = final_connection_payload["rtsp_host"], final_connection_payload["rtsp_port"]
     rtsp_main_url, rtsp_sub_url = final_connection_payload["rtsp_main_url"], final_connection_payload["rtsp_sub_url"]
     manual_unverified = require_save_gate(final_connection_payload, connection_sensitive_change=True)
+    validate_event_receiving(payload.events_enabled, final_connection_payload)
     folder_name = build_unique_folder_name(db, payload.name)
     ensure_camera_folder(folder_name)
 
@@ -319,6 +322,7 @@ def create_camera(
         name=payload.name,
         storage_folder_name=folder_name,
         enabled=payload.enabled,
+        events_enabled=payload.events_enabled,
         protocol=payload.protocol,
         host=payload.host,
         port=payload.port,
@@ -346,6 +350,7 @@ def create_camera(
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    wake_camera_events()
     persist_verified_stream_dimensions(camera, final_connection_payload)
     attach_test_preview_to_camera(payload.preview_token, camera.id)
     create_event(
@@ -361,6 +366,7 @@ def create_camera(
         metadata={
             "protocol": camera.protocol,
             "enabled": bool(camera.enabled),
+            "events_enabled": bool(camera.events_enabled),
             "default_live_stream": camera.default_live_stream,
             "default_record_stream": camera.default_record_stream,
             "validation_state": "manual_unverified" if manual_unverified else "verified",
@@ -804,6 +810,7 @@ def update_camera(
     old_values = {
         "name": camera.name,
         "enabled": bool(camera.enabled),
+        "events_enabled": bool(camera.events_enabled),
         "protocol": camera.protocol,
         "host": camera.host,
         "port": camera.port,
@@ -843,6 +850,13 @@ def update_camera(
     }
     manual_unverified = require_save_gate(gate_payload, connection_sensitive_change=connection_sensitive_change)
 
+    if proposed_values["protocol"] != "onvif":
+        if data.get("events_enabled"):
+            validate_event_receiving(True, gate_payload)
+        data["events_enabled"] = False
+    elif proposed_values.get("events_enabled") and (not old_values["events_enabled"] or connection_sensitive_change):
+        validate_event_receiving(True, gate_payload)
+
     if data.get("enabled") is False:
         preserve_manual_camera_disable(db, camera.id)
     for key, value in data.items():
@@ -864,6 +878,7 @@ def update_camera(
         advance_retention_signal(db, commit=False)
     db.commit()
     db.refresh(camera)
+    wake_camera_events()
     persist_verified_stream_dimensions(camera, gate_payload)
     attach_test_preview_to_camera(preview_token, camera.id)
     changed = {}

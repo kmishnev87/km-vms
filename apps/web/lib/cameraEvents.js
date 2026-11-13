@@ -25,6 +25,23 @@ export function eventHistoryQuery(filters = {}, offset = 0) {
   return params.toString();
 }
 
+// A rule describes what happened, not which class of object caused it.
+// Keep the received person/vehicle classification when the camera supplied it;
+// standard rule topics also give older unclassified events a useful label.
+export function eventLabelKey(event) {
+  const kind = CAMERA_EVENT_KINDS.includes(event?.kind) ? event.kind : "other";
+  if (kind !== "other") return `cameraEvents.kinds.${kind}`;
+  const topic = String(event?.topic || "").replace(/(^|\/)[A-Za-z_][\w.-]*:/g, "$1");
+  for (const [suffix, label] of [
+    ["RuleEngine/FieldDetector/ObjectsInside", "objectInZone"],
+    ["RuleEngine/LineDetector/Crossed", "lineCrossing"],
+    ["RuleEngine/LoiteringDetector/ObjectIsLoitering", "loitering"],
+  ]) {
+    if (topic === suffix) return `cameraEvents.rules.${label}`;
+  }
+  return "cameraEvents.kinds.other";
+}
+
 export function minuteValue(value) {
   const match = /^(\d{2}):(\d{2})$/.exec(String(value || ""));
   return match ? Math.min(1439, Number(match[1]) * 60 + Number(match[2])) : 0;

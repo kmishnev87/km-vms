@@ -5,6 +5,7 @@ import { selectTimelineLabels } from "../lib/workspaceContinuity";
 import { productCalendarDate } from "../lib/timezone";
 import { useI18n } from "../lib/i18n";
 import useTimelineCameraEvents from "../lib/useTimelineCameraEvents";
+import { eventLabelKey } from "../lib/cameraEvents";
 
 const ZOOM_OPTIONS = [
   { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
@@ -376,7 +377,7 @@ export default function ChronologyTimeline({
                       })}
                       {eventMarkers.filter(event => String(event.camera_id) === cameraKey && event.ms >= startMs && event.ms <= endMs).map(event => (
                         <button key={event.id} type="button" className="cameraEventsTimelineMarker" style={{ left: `${((event.ms - startMs) / (endMs - startMs)) * 100}%` }}
-                          title={`${t(`cameraEvents.kinds.${event.kind}`)} · ${event.timestamp_system.replace("T", " ")}`} aria-label={`${t(`cameraEvents.kinds.${event.kind}`)} ${event.timestamp_system}`}
+                          title={`${t(eventLabelKey(event))} · ${event.timestamp_system.replace("T", " ")}`} aria-label={`${t(eventLabelKey(event))} ${event.timestamp_system}`}
                           onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSelectTime?.(new Date(event.ms)); }} />
                       ))}
                       {!rangesLoading && !rangesError && visibleRangesForCamera === 0 ? (

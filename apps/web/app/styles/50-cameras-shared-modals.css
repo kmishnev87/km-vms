@@ -94,6 +94,11 @@
 .cameraFlowDeviceFeedback { height: 46px; overflow: auto; margin: 12px 0; color: #64748b; font-size: 12px; line-height: 18px; }
 .cameraFlowDeviceFeedback.mismatch, .cameraFlowDeviceFeedback.unavailable { color: #991b1b; }
 .cameraFlowRecordSection { border-top: 1px solid #dbe4ef; margin-top: 22px; padding-top: 20px; }
+.cameraFlowEvents { border-top: 1px solid #dbe4ef; margin-top: 22px; padding-top: 20px; }
+.cameraFlowEventControl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-height: 34px; color: #475569; font-size: 13px; }
+.cameraFlowEventControl label { display: flex; align-items: center; gap: 9px; color: #0f172a; }
+.cameraFlowEventControl input { margin: 0; flex-shrink: 0; }
+.cameraFlowEvents .cameraFlowHint { min-height: 44px; margin-bottom: 0; }
 .cameraFlowFieldset > .cameraFlowRecordSection:first-child { border: 0; margin: 0; padding: 0; }
 .cameraFlowDevice { padding-top: 15px; border-top: 1px solid #dbe4ef; }
 .cameraFlowDevice > summary { font-weight: 600; }

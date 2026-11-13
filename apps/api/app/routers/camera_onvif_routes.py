@@ -22,6 +22,7 @@ from app.routers.camera_connection_helpers import (
 from app.routers.deps import require_permission
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.camera_stream_dimensions import remember_onvif_dimensions
+from app.services.camera_event_settings import read_event_capabilities
 from app.services.onvif_service import (
     OnvifConfigurationError,
     build_onvif_health_contract,
@@ -180,6 +181,15 @@ def onvif_discover(
 ):
     timeout = parse_bounded_int((payload or {}).get("timeout_seconds"), field="timeout_seconds", default=5, minimum=1, maximum=10)
     return discover_onvif_devices(timeout_seconds=timeout)
+
+
+@router.post("/onvif/events/capabilities")
+def onvif_event_capabilities(payload: dict, db: Session = Depends(get_db),
+                             current_user: User = Depends(require_permission("manage_cameras"))):
+    if payload.get("protocol", "onvif") != "onvif":
+        return {"supported": False, "status": "unsupported", "kinds": []}
+    creds = get_camera_credentials(db, payload)
+    return read_event_capabilities(**{key: creds.get(key) for key in ("host", "port", "username", "password", "onvif_path")})
 
 
 @router.post("/onvif/probe")

@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_serializer, field_validator
 from app.core.camera_limits import MAX_CAMERA_NAME_LENGTH, MAX_RETENTION_DAYS
 from app.core.sanitization import SENSITIVE_QUERY_KEYS, is_sensitive_query_key, redact_text
 
@@ -82,6 +82,7 @@ def restore_rtsp_management_value(
 class CameraBase(BaseModel):
     name: str = Field(min_length=1, max_length=MAX_CAMERA_NAME_LENGTH)
     enabled: bool = True
+    events_enabled: StrictBool = False
     protocol: str
     host: str
     port: int
@@ -122,6 +123,7 @@ class CameraCreate(CameraBase):
 class CameraUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=MAX_CAMERA_NAME_LENGTH)
     enabled: bool | None = None
+    events_enabled: StrictBool = False
     protocol: str | None = None
     host: str | None = None
     port: int | None = None
@@ -171,6 +173,7 @@ class CameraResponse(BaseModel):
     name: str
     storage_folder_name: str
     enabled: bool
+    events_enabled: bool = False
     protocol: str
     host: str
     port: int

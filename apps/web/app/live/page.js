@@ -571,8 +571,16 @@ export default function LivePage() {
       if (!camera) { showWorkspaceError(t("cameraEvents.errors.event_camera_not_available")); return; }
       const tile = { id: `event-${target.camera_id}-${Date.now()}`, cameraId: String(target.camera_id), stream: defaultStream(camera),
         xPct: .06, yPct: .06, wPct: .85, hPct: .85, z: nextZIndex(tiles) };
-      setTiles(previous => eventViewRef.current ? [tile] : previous.some(value => String(value.cameraId) === String(target.camera_id))
-        ? previous.map(value => String(value.cameraId) === String(target.camera_id) ? { ...value, z: nextZIndex(previous) } : value) : [...previous, tile]);
+      eventViewRef.current = true;
+      // Switching to an event from an already open Live page is temporary too.
+      // Cancel a pending ordinary-layout save before replacing its visible tiles.
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      pendingLayoutSaveRef.current = null;
+      layoutWriterRef.current?.invalidate();
+      setFullscreenTileId(null);
+      closePtz();
+      setFrameLayoutActive(true);
+      setTiles([tile]);
     },
   });
 

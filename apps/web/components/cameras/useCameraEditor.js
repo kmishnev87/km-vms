@@ -58,6 +58,27 @@ export default function useCameraEditor(camera, copy, onSaved) {
   const metadataScope = useRef(null);
   const metadataGeneration = useRef(0);
   const [metadataPreparing, setMetadataPreparing] = useState(false);
+  const [eventCapability, setEventCapability] = useState(null);
+  const [eventCapabilityRevision, setEventCapabilityRevision] = useState(0);
+  const eventManagementKey = cameraManagementKey(form);
+  const mayReadEventCapabilities = form.protocol === "onvif" && Boolean(
+    camera && eventManagementKey === cameraManagementKey(baseline.current)
+    || cameraCheckIsCurrent(checks.management, eventManagementKey));
+
+  useEffect(() => {
+    if (!mayReadEventCapabilities) return undefined;
+    const controller = new AbortController();
+    setEventCapability({ key: eventManagementKey, status: "loading", supported: null });
+    apiFetch("/cameras/onvif/events/capabilities", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cameraEditorPayload(formRef.current, camera?.id)), signal: controller.signal,
+    }).then(value => {
+      if (!controller.signal.aborted && alive.current) setEventCapability({ ...value, key: eventManagementKey });
+    }).catch(() => {
+      if (!controller.signal.aborted && alive.current) setEventCapability({ key: eventManagementKey, status: "unknown", supported: null });
+    });
+    return () => controller.abort();
+  }, [eventManagementKey, mayReadEventCapabilities, eventCapabilityRevision, camera?.id]);
 
   useEffect(() => {
     alive.current = true;
@@ -450,6 +471,8 @@ export default function useCameraEditor(camera, copy, onSaved) {
     form, patch, section, setSection, baseline: baseline.current,
     dirty: Object.keys(cameraEditorChanges(form, baseline.current)).length > 0 || settingsDirty,
     checks, device, discovery, preview, operation, searching, error, notice, streamErrors,
+    eventCapability: eventCapability?.key === eventManagementKey ? eventCapability : null,
+    refreshEventCapability: () => setEventCapabilityRevision(n => n + 1),
     setError, settingsDirty, setSettingsDirty, selectProfile, selectPurpose, selectSource, selectCandidate, discover, check, next, save,
     invalidateVideo, refreshProfile, requestProfileMetadata, prepareProfileMetadata, metadataPreparing, connectionChanged, verified: cameraChecksReady(form, checks),
     connectionReady: cameraStreamRoles(form).some((role) => cameraCheckIsCurrent(checks[role], cameraStreamKey(form, role)))

@@ -118,6 +118,10 @@ def serialize(row, read=False, ctx=None):
 
 
 def list_camera_events(db, user_id, *, limit=50, offset=0, **filters):
+    # Capture the boundary before loading the list. A bulk acknowledgement must
+    # never consume events which arrived after the browser's snapshot.
+    latest = event_query(db).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).first()
+    read_cursor = cursor_for(latest)
     query = filtered(event_query(db), user_id=user_id, **filters)
     total = query.count()
     rows = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).offset(offset).limit(min(MAX_PAGE, limit)).all()
@@ -126,12 +130,11 @@ def list_camera_events(db, user_id, *, limit=50, offset=0, **filters):
                 AuditEvent.actor_user_id == user_id, AuditEvent.target_id.in_(ids)).all()} if ids else set()
     return {"items": [serialize(row, row.id in read_ids) for row in rows], "total": total, "limit": limit, "offset": offset,
             "unread_count": event_query(db).filter(~read_expression(user_id)).count(),
-            "retention_days": RETENTION_DAYS, "max_events": MAX_EVENTS, "timezone": timezone_context(db).name}
+            "retention_days": RETENTION_DAYS, "max_events": MAX_EVENTS, "timezone": timezone_context(db).name,
+            "read_cursor": read_cursor}
 
 
-def mark_read(db, user_id, ids):
-    ids = list(dict.fromkeys(ids))[:200]
-    rows = event_query(db).filter(AuditEvent.id.in_(ids)).all()
+def _insert_read_markers(db, user_id, rows):
     values = [{"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"km-vms-camera-read:{user_id}:{row.id}")),
                "created_at": now_utc(), "actor_user_id": user_id, "category": READ_CATEGORY,
                "event_type": "camera_event.read", "severity": "info", "message_ru": "", "message_en": "",
@@ -142,9 +145,32 @@ def mark_read(db, user_id, ids):
         else:
             from sqlalchemy.dialects.sqlite import insert
         db.execute(insert(AuditEvent).values(values).on_conflict_do_nothing(index_elements=[AuditEvent.id]))
+
+
+def mark_read(db, user_id, ids):
+    ids = list(dict.fromkeys(ids))[:200]
+    rows = event_query(db).filter(AuditEvent.id.in_(ids)).all()
+    _insert_read_markers(db, user_id, rows)
     db.commit()
     notify_change()
     return len(rows)
+
+
+def mark_all_read(db, user_id, stamp, identifier):
+    query = event_query(db).filter(~read_expression(user_id), or_(AuditEvent.created_at < stamp,
+        (AuditEvent.created_at == stamp) & (AuditEvent.id <= identifier))).order_by(AuditEvent.created_at, AuditEvent.id)
+    marked = 0
+    # Bounded database batches inside one atomic user action, not a request per
+    # page or event. Deterministic markers make concurrent retries idempotent.
+    while marked < MAX_EVENTS:
+        rows = query.limit(min(1000, MAX_EVENTS - marked)).all()
+        if not rows:
+            break
+        _insert_read_markers(db, user_id, rows)
+        marked += len(rows)
+    db.commit()
+    notify_change()
+    return marked
 
 
 def record_signal(db, group, camera, signal):

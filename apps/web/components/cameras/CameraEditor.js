@@ -171,7 +171,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   }
 
   function renderRecording() {
-    return <section className="cameraFlowRecordSection">
+    return <><section className="cameraFlowRecordSection">
       <h3>{copy.editorRecordingRules}</h3><p className="cameraFlowHint">{copy.editorRecordingHelp}</p>
       <div className="cameraFlowFields">
         <Field label={copy.editorRecordingEnabled}>
@@ -188,6 +188,24 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
         {input("retention_days", copy.retentionDays, { type: "number", min: 1, max: MAX_RETENTION_DAYS, hint: copy.daysShort })}
         {input("storage_quota_gb", copy.archiveLimitGb, { type: "number", min: 1 })}
       </div>
+    </section>{renderEventReceiving()}</>;
+  }
+
+  function renderEventReceiving() {
+    if (form.protocol !== "onvif") return null;
+    const capability = editor.eventCapability;
+    const supported = capability?.supported === true;
+    const loading = capability?.status === "loading";
+    // An unavailable/offline capability read must never trap a saved opt-in on.
+    const canDisable = form.events_enabled;
+    return <section className="cameraFlowEvents" aria-labelledby="camera-event-reception-title">
+      <h3 id="camera-event-reception-title">{copy.editorCameraEvents}</h3>
+      <div className="cameraFlowEventControl">
+        {supported || canDisable ? <label><input type="checkbox" checked={form.events_enabled} disabled={busy || (!supported && !canDisable)} onChange={event => patch("events_enabled", event.target.checked)} />{copy.editorReceiveEvents}</label>
+          : <span role="status">{loading ? copy.editorEventsChecking : capability?.supported === false ? copy.editorEventsUnsupported : capability ? copy.editorEventsUnavailable : copy.editorEventsAfterConnection}</span>}
+        {capability?.status === "unknown" ? <button type="button" className="cameraFlowTextButton" disabled={busy} onClick={editor.refreshEventCapability}>{copy.editorEventsRetry}</button> : null}
+      </div>
+      <p className="cameraFlowHint">{copy.editorReceiveEventsHelp}</p>
     </section>;
   }
 
@@ -286,6 +304,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
           {row(copy.recordStream, `${roleLabel(form.default_record_stream)} — ${streamDescription(assigned(form.default_record_stream), currentResult(form.default_record_stream), copy)}`)}
           {row(copy.liveStream, `${roleLabel(form.default_live_stream)} — ${streamDescription(assigned(form.default_live_stream), currentResult(form.default_live_stream), copy)}`)}{row(copy.recording, form.enabled ? copy.editorRecordOn : copy.editorRecordOff)}
           {row(copy.segmentDuration, `${form.segment_minutes} ${copy.minutesShort}`)}{row(copy.retentionDays, `${form.retention_days} ${copy.daysShort}`)}{row(copy.limit, `${form.storage_quota_gb} ${copy.gbShort}`)}</dl>
+        {form.protocol === "onvif" ? <dl>{row(copy.editorReceiveEvents, form.events_enabled ? copy.editorEventsOn : copy.editorEventsOff)}</dl> : null}
       </div>
       <p className="cameraFlowReviewStatus">{editor.verified ? copy.editorVideoChecked : form.manual_confirm_unverified ? copy.editorUnverifiedNotice : copy.editorRecheck}</p>
     </section>;
@@ -307,7 +326,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
         <button type="button" className="cameraFlowClose" onClick={requestClose} disabled={operation === "saving" || deviceBusy} aria-label={copy.close}>×</button>
       </header>
       {camera ? <div className="cameraFlowTabs" role="tablist" aria-label={copy.editTitle}>
-        {[["connection", copy.editorConnection], ["video", copy.video], ["recording", copy.recording]].map(([id, label]) => <button type="button" key={id} role="tab" id={`camera-tab-${id}`} aria-controls="camera-flow-panel" aria-selected={section === id} disabled={busy} onClick={() => navigate(id)}>{label}</button>)}
+        {[["connection", copy.editorConnection], ["video", copy.video], ["recording", copy.editorRecordingAndEvents]].map(([id, label]) => <button type="button" key={id} role="tab" id={`camera-tab-${id}`} aria-controls="camera-flow-panel" aria-selected={section === id} disabled={busy} onClick={() => navigate(id)}>{label}</button>)}
       </div> : <nav className="cameraFlowSteps" aria-label={copy.editorSteps}>
         {choices.map((choice, index) => <button type="button" key={choice.id} aria-current={choice.id === section ? "step" : undefined} disabled={busy || index > currentIndex} onClick={() => navigate(choice.id)}>
           <span>{index + 1}</span>{choice.label}

@@ -90,7 +90,7 @@ SENSITIVE_RE = re.compile(
 )
 RELEASE_NOTE_LOCALES = {"en", "ru", "zh-CN"}
 MAX_PATCH_VERSION = 29
-CURRENT_PRODUCT_DB_SCHEMA_VERSION = 10
+CURRENT_PRODUCT_DB_SCHEMA_VERSION = 11
 VERSION_FILES = [
     Path("apps/api/app/core/version.py"),
     Path("apps/web/package.json"),
@@ -369,6 +369,11 @@ def register_current_release(
         # source. A managed schema-changing release must not inherit the old
         # family's version/fingerprints when the following release is prepared.
         try:
+            published_descriptor = json.loads(run_git("show", f"v{version}:release/km-vms-release.json"))
+            published_schema = published_descriptor.get("schema_update")
+            if (published_descriptor.get("version") != version or not isinstance(published_schema, dict)
+                    or set(published_schema) != {"mode", "target_version"} or published_schema.get("mode") != "managed"):
+                raise ValueError("immutable descriptor mismatch")
             source = run_git("show", f"v{version}:apps/api/app/services/schema_update_control.py")
             values = {}
             for node in ast.parse(source).body:
@@ -384,7 +389,7 @@ def register_current_release(
             schema_version = values["TARGET_SCHEMA_VERSION"]
             shape = values["TARGET_SHAPE_FINGERPRINT"]
             previous_alternates = sorted(values["TARGET_SHAPE_FINGERPRINT_ALTERNATES"])
-            if type(schema_version) is not int or schema_version != descriptor["schema_update"]["target_version"] or not re.fullmatch(r"[0-9a-f]{64}", shape) or len(previous_alternates) > 4 or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in previous_alternates):
+            if type(schema_version) is not int or schema_version != published_schema["target_version"] or not re.fullmatch(r"[0-9a-f]{64}", shape) or len(previous_alternates) > 4 or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in previous_alternates):
                 raise ValueError("target lineage mismatch")
         except (subprocess.CalledProcessError, SyntaxError, ValueError, KeyError, TypeError):
             fail("managed release lineage must match its immutable tagged schema target")

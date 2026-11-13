@@ -16,13 +16,14 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 from lxml import etree
-from zeep import Settings
+from zeep import Plugin, Settings
 from zeep.transports import Transport
 from zeep.wsa import WsAddressingPlugin
 
 from app.services import onvif_service as sdk
 
 EVENT_NS = "http://www.onvif.org/ver10/events/wsdl"
+NOTIFICATION_NS = "http://docs.oasis-open.org/wsn/b-2"
 ANALYTICS_NS = "http://www.onvif.org/ver20/analytics/wsdl"
 MAX_XML_BYTES = 512 * 1024
 MAX_MESSAGES = 64
@@ -72,7 +73,8 @@ def xml_elements(value, depth=0):
 
 
 def kind_for(topic, data=None):
-    labels = [str(k) for k, v in (data or {}).items() if boolean(v) is not None]
+    # A false IsHuman must not override a true IsVehicle on the same message.
+    labels = [str(k) for k, v in (data or {}).items() if boolean(v) is True]
     labels += [str(v) for k, v in (data or {}).items() if str(k).lower() in {"objecttype", "classtype", "classtypes", "objectclass"}]
     words = (str(topic) + " " + " ".join(labels)).lower()
     for kind, keys in (("person", ("human", "person", "people")), ("vehicle", ("vehicle", "car", "motor")),
@@ -81,6 +83,44 @@ def kind_for(topic, data=None):
         if any(key in words for key in keys):
             return kind
     return "other"
+
+
+def notification_topic(notification):
+    value = attr(notification, "Topic")
+    return re.sub(r"(^|/)[A-Za-z_][\w.-]*:", r"\1", text(attr(value, "_value_1", value), 512))
+
+
+def ignored_notification(notification):
+    topic = notification_topic(notification)
+    return bool(topic) and any(word in topic.lower() for word in ("heartbeat", "keepalive", "configurationchanged"))
+
+
+class PullMessagesEnvelope(Plugin):
+    """Preserve WSN mixed-text topics before Zeep's typed conversion loses them.
+
+    Zeep already applies the strict XML security settings and the bounded transport.
+    This is request-local, contains no vendor names and never persists raw XML.
+    """
+    def __init__(self):
+        self.notifications = None
+
+    def ingress(self, envelope, http_headers, operation):
+        if operation.name != "PullMessages":
+            return envelope, http_headers
+        response = next((node for node in envelope.iter()
+                         if isinstance(node.tag, str) and node.tag == f"{{{EVENT_NS}}}PullMessagesResponse"), None)
+        if response is not None:
+            self.notifications = []
+            for node in response:
+                if not isinstance(node.tag, str) or etree.QName(node).localname != "NotificationMessage" or etree.QName(node).namespace not in {EVENT_NS, NOTIFICATION_NS}:
+                    continue
+                topic = node.find(f"{{{NOTIFICATION_NS}}}Topic")
+                message = node.find(f"{{{NOTIFICATION_NS}}}Message")
+                self.notifications.append({"Topic": {"_value_1": topic.text if topic is not None else None},
+                                           "Message": list(message) if message is not None else None})
+                if len(self.notifications) >= MAX_MESSAGES:
+                    break
+        return envelope, http_headers
 
 
 @dataclass(frozen=True)
@@ -97,10 +137,8 @@ class Signal:
 
 def parse_notification(notification, received_at=None):
     received_at = received_at or datetime.now(timezone.utc).replace(tzinfo=None)
-    topic = attr(notification, "Topic")
-    topic = text(attr(topic, "_value_1", topic), 512)
-    topic = re.sub(r"(^|/)[A-Za-z_][\w.-]*:", r"\1", topic)
-    if not re.fullmatch(r"[A-Za-z_][\w.:-]*(?:/[A-Za-z_][\w.:-]*)*", topic) or any(word in topic.lower() for word in ("heartbeat", "keepalive", "configurationchanged")):
+    topic = notification_topic(notification)
+    if not re.fullmatch(r"[A-Za-z_][\w.:-]*(?:/[A-Za-z_][\w.:-]*)*", topic) or ignored_notification(notification):
         return None
     elements = list(xml_elements(attr(notification, "Message")))
     root = next((n for e in elements for n in e.iter() if isinstance(n.tag, str) and etree.QName(n).localname == "Message"), None)
@@ -123,8 +161,13 @@ def parse_notification(notification, received_at=None):
                 if isinstance(item.tag, str) and etree.QName(item).localname == "SimpleItem":
                     target[text(item.get("Name"), 80)] = text(item.get("Value"), 255)
     states = [boolean(v) for k, v in data.items() if k.lower() in {
-        "state", "ismotion", "motion", "ispeople", "ishuman", "isperson", "isvehicle", "iscar", "isanimal", "istamper", "issounddetected"}]
+        "state", "ismotion", "motion", "isinside", "istamper", "issounddetected"}]
     active = next((v for v in states if v is not None), None)
+    if active is None:
+        classes = [boolean(v) for k, v in data.items() if k.lower() in {
+            "ispeople", "ishuman", "isperson", "isvehicle", "iscar", "isanimal"}]
+        known = [v for v in classes if v is not None]
+        active = any(known) if known else None
     return Signal(topic, kind_for(topic, data), active, root.get("PropertyOperation") == "Initialized",
                   received_at if uncertain else camera_at, camera_at, uncertain, source)
 
@@ -206,10 +249,30 @@ class DeviceClient:
         for root in xml_elements(attr(result, "TopicSet")):
             for node in root.iter():
                 if any(etree.QName(key).localname == "topic" and boolean(value) is True for key, value in node.attrib.items()):
-                    path = "/".join(etree.QName(p).localname for p in [*list(node.iterancestors())[::-1], node])
+                    parts = [etree.QName(node).localname]
+                    for parent in node.iterancestors():
+                        if etree.QName(parent).localname == "TopicSet":
+                            break
+                        parts.insert(0, etree.QName(parent).localname)
+                    path = "/".join(parts)
                     topics.append(text(path, 512))
         self._topics = sorted(set(topics))[:128]
         return self._topics
+
+    def event_capabilities(self):
+        topics = self.topics()
+        supported = None
+        try:
+            capabilities = self.service("events").GetServiceCapabilities()
+            value = attr(capabilities, "Capabilities", capabilities)
+            supported = boolean(attr(value, "WSPullPointSupport"))
+        except Exception:
+            pass  # Older Events implementations expose this through Device instead.
+        if supported is None:
+            caps = self.cam.devicemgmt.GetCapabilities({"Category": "Events"})
+            supported = boolean(attr(attr(caps, "Events"), "WSPullPointSupport"))
+        return {"supported": supported, "status": "supported" if supported is True else "unsupported" if supported is False else "unknown",
+                "kinds": sorted({kind_for(topic) for topic in topics}) if supported is True else []}
 
     def subscribe(self):
         self.topics()
@@ -237,9 +300,11 @@ class DeviceClient:
                 TerminationTime="PT5M", _soapheaders=self.references)
             self.renew_at = time.monotonic() + self._lifetime(value) * .65
         proxy = self.service("pullpoint", address=self.subscription)
+        envelope = PullMessagesEnvelope()
+        proxy._client.plugins.append(envelope)
         with self.transport.settings(timeout=PULL_SECONDS + 10):
             value = proxy.PullMessages(Timeout=timedelta(seconds=PULL_SECONDS), MessageLimit=MAX_MESSAGES, _soapheaders=self.references)
-        return list(attr(value, "NotificationMessage", []) or [])[:MAX_MESSAGES]
+        return envelope.notifications if envelope.notifications is not None else list(attr(value, "NotificationMessage", []) or [])[:MAX_MESSAGES]
 
     def close(self):
         with self._close_lock:

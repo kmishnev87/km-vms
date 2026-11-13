@@ -240,7 +240,7 @@ def test_receiver_groups_lenses_and_ignores_recording_switch(monkeypatch):
     from app.services import camera_events_worker as worker
     from app.models.system_settings import SystemSettings
     cameras=[SimpleNamespace(id=n,host="camera",port=80,username="test",password_encrypted="cipher",
-             onvif_profile_token=f"profile-{n}",onvif_path="/onvif/device_service",name=f"Lens {n}",enabled=False) for n in (1,2)]
+             onvif_profile_token=f"profile-{n}",onvif_path="/onvif/device_service",name=f"Lens {n}",enabled=False,events_enabled=True) for n in (1,2)]
     class Query:
         def __init__(self,model): self.model=model
         def first(self): return SimpleNamespace(system_initialized=True)

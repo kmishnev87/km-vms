@@ -17,7 +17,7 @@ const PROOF_FIELDS = ["preview_token", "validation_token", "main_validation_toke
 
 export function cameraEditorDraft(camera = null) {
   const draft = {
-    name: "", enabled: true, protocol: "onvif", host: "", port: 80,
+    name: "", enabled: true, events_enabled: false, protocol: "onvif", host: "", port: 80,
     username: "", password: "", rtsp_main_url: "", rtsp_sub_url: "",
     rtsp_host: "", rtsp_port: 554, rtsp_transport: "tcp", onvif_path: "",
     onvif_profile_token: "", onvif_sub_profile_token: "", onvif_channel_id: "",
@@ -56,7 +56,7 @@ export function patchCameraEditor(draft, key, value) {
       ...next, port: value === "onvif" ? 80 : (draft.rtsp_port || 554),
       rtsp_host: value === "onvif" ? draft.host : "",
       rtsp_port: value === "onvif" ? (Number(draft.port) || 554) : 554,
-      onvif_path: "", onvif_profile_token: "", onvif_sub_profile_token: "", onvif_channel_id: "",
+      onvif_path: "", onvif_profile_token: "", onvif_sub_profile_token: "", onvif_channel_id: "", events_enabled: false,
     };
   }
   // Follow the address until the user has deliberately set a separate video endpoint.
@@ -244,6 +244,8 @@ export function cameraEditorError(error, copy) {
   if (code === "wrong_credentials") return copy.authError;
   if (["timeout", "wrong_ip_or_unreachable", "wrong_port_or_service_unavailable"].includes(code)) return copy.editorUnreachable;
   if (code === "camera_validation_required") return copy.editorRecheck;
+  if (code === "event_reception_support_unconfirmed") return copy.editorEventsUnavailable;
+  if (code === "event_reception_onvif_required") return copy.editorEventsUnsupported;
   if (error?.status === 422) return copy.editorRequired;
   if (String(error?.message).includes("таким именем")) return copy.editorDuplicate;
   if (error?.category === "network_unavailable") return error.message;

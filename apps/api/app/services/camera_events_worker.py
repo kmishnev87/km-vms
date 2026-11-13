@@ -14,7 +14,7 @@ from app.db.session import SessionLocal
 from app.models.camera import Camera
 from app.models.system_settings import SystemSettings
 from app.services.camera_events import cleanup_history, record_signal, source_disconnected
-from app.services.onvif_events import DeviceClient, EventDeviceError, kind_for, parse_notification, profile_identities, resolve_source
+from app.services.onvif_events import DeviceClient, EventDeviceError, ignored_notification, kind_for, parse_notification, profile_identities, resolve_source
 from app.services.storage_operations_foundation import acquire_worker_lease, release_worker_lease, renew_worker_lease
 
 MAX_CONNECTIONS = 64
@@ -25,6 +25,11 @@ _thread = None
 _jobs = {}
 _states = {}
 _owner = "camera-events:" + str(os.getpid()) + ":" + uuid.uuid4().hex
+
+
+def camera_receiving_revision(camera):
+    fields = ("protocol", "host", "port", "username", "password_encrypted", "onvif_path", "onvif_profile_token", "events_enabled")
+    return hashlib.sha256(json.dumps([getattr(camera, key, None) for key in fields]).encode()).hexdigest()
 
 
 def connection_groups():
@@ -41,7 +46,9 @@ def connection_groups():
             device_id = hashlib.sha256(json.dumps([camera.host.lower(), camera.port, camera.username, camera.onvif_path]).encode()).hexdigest()
             group = groups.setdefault(device_id, {"device_id": device_id, "host": camera.host, "port": camera.port,
                 "username": camera.username, "password": decrypt_text(camera.password_encrypted), "onvif_path": camera.onvif_path, "cameras": []})
-            group["cameras"].append({"id": camera.id, "name": camera.name, "profile_token": camera.onvif_profile_token})
+            group["cameras"].append({"id": camera.id, "name": camera.name, "profile_token": camera.onvif_profile_token,
+                                     "events_enabled": bool(camera.events_enabled), "revision": camera_receiving_revision(camera)})
+        groups = {key: group for key, group in groups.items() if any(c["events_enabled"] for c in group["cameras"])}
         for group in groups.values():
             group["fingerprint"] = hashlib.sha256(json.dumps(group, sort_keys=True).encode()).hexdigest()
         return groups
@@ -59,7 +66,26 @@ def receiver_states():
 def _state(group, status, **fields):
     with _guard:
         for camera in group["cameras"]:
-            _states[str(camera["id"])] = {"camera_id": camera["id"], "status": status, **fields}
+            if camera["events_enabled"]:
+                _states[str(camera["id"])] = {"camera_id": camera["id"], "status": status, **fields}
+
+
+def group_is_current(db, group):
+    # Lock until the current record/commit finishes. A completed opt-out cannot
+    # race a late PullMessages response into another history insert.
+    rows = db.query(Camera).filter(Camera.id.in_([c["id"] for c in group["cameras"]]),
+        Camera.deleted_at.is_(None), Camera.status != "deleting", Camera.protocol == "onvif").populate_existing().with_for_update().all()
+    current = {c.id: camera_receiving_revision(c) for c in rows}
+    return current == {c["id"]: c["revision"] for c in group["cameras"]}
+
+
+def signal_camera(group, identities, signal):
+    camera = resolve_source(group["cameras"], identities, signal.source)
+    if camera is not None:
+        return camera, camera["events_enabled"]
+    # Never turn an unknown/disabled source into a device-wide event when only
+    # a subset of the physical device's lenses has opted in.
+    return None, all(c["events_enabled"] for c in group["cameras"])
 
 
 @dataclass
@@ -90,7 +116,9 @@ class Receiver:
                 identities = profile_identities(self.client.profiles())
                 self.client.subscribe()
                 failures = 0
-                _state(group, "connected", kinds=sorted({kind_for(topic) for topic in topics}), dropped=0)
+                counts = {"messages_received": 0, "messages_parsed": 0, "messages_rejected": 0,
+                          "messages_ignored": 0, "events_saved": 0, "excluded_source": 0}
+                _state(group, "waiting", kinds=sorted({kind_for(topic) for topic in topics}), dropped=0, **counts)
                 minute, accepted, dropped = time.monotonic(), 0, 0
                 while not self.stop.is_set() and not _stop.is_set():
                     with SessionLocal() as db:
@@ -102,23 +130,33 @@ class Receiver:
                     with SessionLocal() as db:
                         # A late response cannot write after its lease was replaced.
                         renew_worker_lease(db, handle, lease_seconds=150)
-                        active = {c.id for c in db.query(Camera).filter(Camera.id.in_([c["id"] for c in group["cameras"]]),
-                                  Camera.deleted_at.is_(None), Camera.status != "deleting", Camera.protocol == "onvif").all()}
-                        if active != {c["id"] for c in group["cameras"]}:
+                        if not group_is_current(db, group):
                             _wake.set()
-                            break
+                            return
                         for message in messages:
+                            counts["messages_received"] += 1
                             if time.monotonic() - minute > 60:
                                 minute, accepted = time.monotonic(), 0
                             signal = parse_notification(message)
+                            if signal is None:
+                                counts["messages_ignored" if ignored_notification(message) else "messages_rejected"] += 1
+                                continue
+                            counts["messages_parsed"] += 1
                             if accepted >= 120 and (signal is None or signal.active is not False):
                                 dropped += 1
                                 continue
-                            if signal is not None:
-                                camera = resolve_source(group["cameras"], identities, signal.source)
-                                record_signal(db, group, camera, signal)
-                                accepted += 1
-                    _state(group, "connected", kinds=sorted({kind_for(topic) for topic in topics}), dropped=dropped)
+                            if not group_is_current(db, group):
+                                _wake.set()
+                                return
+                            camera, allowed = signal_camera(group, identities, signal)
+                            if allowed:
+                                saved = record_signal(db, group, camera, signal)
+                                counts["events_saved"] += int(saved is not None)
+                            else:
+                                counts["excluded_source"] += 1
+                            accepted += 1
+                    status = ("partial_messages" if counts["messages_rejected"] else "connected") if counts["messages_parsed"] else "invalid_messages" if counts["messages_rejected"] else "waiting"
+                    _state(group, status, kinds=sorted({kind_for(topic) for topic in topics}), dropped=dropped, **counts)
                     # Some devices ignore the requested timeout. Empty replies must
                     # not turn a long-poll into a hot retry loop.
                     if (not messages or accepted >= 120) and time.monotonic() - started < 1:
@@ -150,11 +188,11 @@ def _run():
         try:
             groups = connection_groups()
             for key, job in list(_jobs.items()):
-                if key not in groups or groups[key]["fingerprint"] != job.group["fingerprint"]:
+                if key not in groups or groups[key]["fingerprint"] != job.group["fingerprint"] or not job.thread.is_alive():
                     job.cancel()
                     job.thread.join(timeout=.1)
                     _jobs.pop(key, None)
-            active_ids = {str(c["id"]) for group in groups.values() for c in group["cameras"]}
+            active_ids = {str(c["id"]) for group in groups.values() for c in group["cameras"] if c["events_enabled"]}
             with _guard:
                 for key in list(_states):
                     if key not in active_ids:

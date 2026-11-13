@@ -1,7 +1,7 @@
 from datetime import datetime
 from urllib.parse import urlsplit
 
-from sqlalchemy import BigInteger, String, Integer, Boolean, DateTime, Text
+from sqlalchemy import BigInteger, String, Integer, Boolean, DateTime, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -17,6 +17,7 @@ class Camera(Base):
     storage_folder_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    events_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     protocol: Mapped[str] = mapped_column(String(20))  # rtsp | onvif
 
     host: Mapped[str] = mapped_column(String(255))

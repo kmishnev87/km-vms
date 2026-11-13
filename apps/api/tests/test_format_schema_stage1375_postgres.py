@@ -18,6 +18,7 @@ from app.services import schema_update_control as control
 from app.services.schema_migrations import (
     MigrationRegistry,
     STAGE1375_FORMAT_CHANGE_MIGRATION,
+    STAGE172_EVENT_RECEIVING_MIGRATION,
     SchemaMigrationBlocked,
     execute_migration_plan,
 )
@@ -50,6 +51,9 @@ def format_database(monkeypatch):
             db.execute(text("INSERT INTO system_settings (id,system_initialized,timezone,language,storage_path,recording_format,auto_free_space_cleanup_enabled,recording_suspended_by_low_disk,created_at,updated_at) VALUES (1,true,'UTC','ru','/not-mounted/archive','mkv',false,false,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
             db.add(RecordingSegment(camera_id=1, file_path="/not-mounted/archive/existing.mkv", relative_path="existing.mkv", started_at=datetime(2026,11,2,1,0), status="ready", container_format="mkv"))
             db.commit()
+            # Reproduce the historical v9 source, not today's v11 Camera model.
+            db.execute(text("ALTER TABLE cameras DROP COLUMN events_enabled"))
+            db.commit()
             yield engine, db
     finally:
         engine.dispose()
@@ -65,12 +69,13 @@ def business_snapshot(db):
         for row in rows:
             row.pop("recording_format_apply_mode", None)
             row.pop("recording_format_requested_at", None)
+            row.pop("events_enabled", None)
         result[table] = rows
     return hashlib.sha256(json.dumps(result, sort_keys=True, default=str).encode()).hexdigest()
 
 
 @pytest.mark.parametrize("retired_name", (False, True))
-def test_registered_9_to_10_preserves_business_rows_and_is_idempotent(format_database, retired_name):
+def test_registered_format_and_receiving_migrations_preserve_rows_and_are_idempotent(format_database, retired_name):
     engine, db = format_database
     if retired_name:
         db.execute(text("ALTER TABLE system_settings ADD COLUMN system_name VARCHAR(100) NULL"))
@@ -79,7 +84,7 @@ def test_registered_9_to_10_preserves_business_rows_and_is_idempotent(format_dat
     assert source in control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.8.22"]
     before = business_snapshot(db)
     first = execute_migration_plan(db)
-    assert first["executed_migrations"] == [STAGE1375_FORMAT_CHANGE_MIGRATION.migration_id]
+    assert first["executed_migrations"] == [STAGE1375_FORMAT_CHANGE_MIGRATION.migration_id, STAGE172_EVENT_RECEIVING_MIGRATION.migration_id]
     assert control.target_shape_is_exact(db)[0] is True
     assert business_snapshot(db) == before
     assert db.execute(text("SELECT recording_format_apply_mode, recording_format_requested_at FROM system_settings WHERE id=1")).one() == (None, None)
@@ -102,27 +107,27 @@ def test_failed_verification_rolls_back_columns_state_and_preserves_rows(format_
     assert "recording_format_apply_mode" not in {col["name"] for col in inspect(db.connection()).get_columns("system_settings")}
 
 
-def test_older_prepared_runtime_can_boot_read_write_and_keep_true_schema10(format_database, monkeypatch, tmp_path):
+def test_older_prepared_runtime_can_boot_read_write_and_keep_true_schema11(format_database, monkeypatch, tmp_path):
     from app.services import schema_runtime_compatibility as compat
     from app.services import schema_versioning, schema_migrations
     engine, db = format_database
     execute_migration_plan(db)
-    assert compat.publish_runtime_compatibility(db)["minimum_writer_version"] == 9
+    assert compat.publish_runtime_compatibility(db)["minimum_writer_version"] == 10
     db.commit()
-    monkeypatch.setattr(schema_versioning, "CURRENT_SCHEMA_VERSION", 9)
-    monkeypatch.setattr(schema_migrations, "CURRENT_SCHEMA_VERSION", 9)
-    monkeypatch.setattr(control, "TARGET_SCHEMA_VERSION", 9)
+    monkeypatch.setattr(schema_versioning, "CURRENT_SCHEMA_VERSION", 10)
+    monkeypatch.setattr(schema_migrations, "CURRENT_SCHEMA_VERSION", 10)
+    monkeypatch.setattr(control, "TARGET_SCHEMA_VERSION", 10)
     monkeypatch.setattr(control, "UPDATE_STATUS_PATH", tmp_path / "no-status.json")
     history_before = control.canonical_schema_history_fingerprint(db)
     shape_before = control.database_shape_fingerprint(db)
     assert schema_versioning.schema_version_status(db)["runtime_compatibility"] == "verified"
-    assert schema_migrations.build_migration_plan(db, target_version=9)["status"] == "current"
+    assert schema_migrations.build_migration_plan(db, target_version=10)["status"] == "current"
     schema_versioning.validate_schema_version_pre_bootstrap(engine, schema_versioning.inspect_schema_shape(engine))
     schema_migrations.validate_current_target_schema(db)
     assert control.resolve_schema_execution_mode(db) == "exact_target_noop"
     db.execute(text("UPDATE system_settings SET timezone='Europe/London' WHERE id=1"))
     db.commit()
-    assert schema_versioning.schema_version_status(db)["schema_version"] == 10
+    assert schema_versioning.schema_version_status(db)["schema_version"] == 11
     assert control.canonical_schema_history_fingerprint(db) == history_before
     assert control.database_shape_fingerprint(db) == shape_before
     db.execute(text("ALTER TABLE system_settings ADD COLUMN unregistered_change INTEGER NULL"))
@@ -136,17 +141,17 @@ def test_update_after_application_rollback_binds_real_schema_not_old_tag_number(
     execute_migration_plan(db)
     compat.publish_runtime_compatibility(db)
     db.commit()
-    monkeypatch.setattr(control, "expected_source_lineage", lambda **_kw: ("0.8.23", "a" * 40, 9, control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.8.23"]))
+    monkeypatch.setattr(control, "expected_source_lineage", lambda **_kw: ("0.9.11", "a" * 40, 10, frozenset({control.SOURCE_SHAPE_FINGERPRINTS["0.9.11"], *control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES.get("0.9.11", ())})))
     before = control.canonical_schema_history_fingerprint(db)
-    installed, commit, actual, shape = control.validate_source_lineage(db, request_id="update-" + "1" * 32, target_release="0.8.24", target_commit="b" * 40)
-    assert installed == "0.8.23" and commit == "a" * 40
-    assert actual == 10 and shape in control.TARGET_SHAPE_FINGERPRINTS
+    installed, commit, actual, shape = control.validate_source_lineage(db, request_id="update-" + "1" * 32, target_release="0.9.13", target_commit="b" * 40)
+    assert installed == "0.9.11" and commit == "a" * 40
+    assert actual == 11 and shape in control.TARGET_SHAPE_FINGERPRINTS
     assert control.canonical_schema_history_fingerprint(db) == before
     state = db.get(compat.SchemaVersionState, "current")
     state.drift_classification = {}
     db.commit()
     with pytest.raises(control.SchemaControlError, match="installed_source_compatibility_not_verified"):
-        control.validate_source_lineage(db, request_id="update-" + "1" * 32, target_release="0.8.24", target_commit="b" * 40)
+        control.validate_source_lineage(db, request_id="update-" + "1" * 32, target_release="0.9.13", target_commit="b" * 40)
 
 
 def test_pipeline_lock_keeps_one_backend_across_rollback_and_releases(format_database, monkeypatch):
