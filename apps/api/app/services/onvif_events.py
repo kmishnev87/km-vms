@@ -28,7 +28,19 @@ ANALYTICS_NS = "http://www.onvif.org/ver20/analytics/wsdl"
 MAX_XML_BYTES = 512 * 1024
 MAX_MESSAGES = 64
 PULL_SECONDS = 60
-KINDS = frozenset({"motion", "person", "vehicle", "animal", "tamper", "audio", "other"})
+EVENT_KINDS = ("motion", "person", "vehicle", "animal", "intrusion", "line_crossing",
+               "loitering", "tamper", "audio", "wrong_direction", "fire")
+# 'other' is only a legacy/diagnostic value, not a new history subscription kind.
+KINDS = frozenset((*EVENT_KINDS, "other"))
+SERVICE_HISTORY_TOPICS = ("Monitoring/OperatingTime/LastClockSynchronization",)
+# Exact standard topics also make already stored legacy 'other' rule events
+# searchable without rewriting or deleting that history.
+LEGACY_TOPIC_KINDS = {"RuleEngine/FieldDetector/ObjectsInside": "intrusion",
+    "RuleEngine/IntrusionDetector/Intrusion": "intrusion",
+    "RuleEngine/LineDetector/Crossed": "line_crossing", "RuleEngine/LineCrossDetector/LineCross": "line_crossing",
+    "RuleEngine/LoiteringDetector/ObjectIsLoitering": "loitering", "RuleEngine/FieldDetector/StayDetection": "loitering",
+    "RuleEngine/RetrogradeMotionDetector/ObjectIsRetrogradeMotioning": "wrong_direction",
+    "RuleEngine/VideoSource/FireAlarm": "fire", "RuleEngine/SmokeDetector/SmokeAlarm": "fire"}
 _detector_locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 
@@ -72,15 +84,74 @@ def xml_elements(value, depth=0):
         yield from xml_elements(value.__values__, depth + 1)
 
 
-def kind_for(topic, data=None):
-    # A false IsHuman must not override a true IsVehicle on the same message.
+def words_for(value):
+    # Match semantic words, not substrings such as 'car' in 'CarriedObject'.
+    value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", str(value))
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    return set(re.findall(r"[a-z0-9]+", value.lower()))
+
+
+def object_kinds_for(topic, data=None):
+    """Preserve every explicit class; a mixed scene need not contain just one."""
     labels = [str(k) for k, v in (data or {}).items() if boolean(v) is True]
     labels += [str(v) for k, v in (data or {}).items() if str(k).lower() in {"objecttype", "classtype", "classtypes", "objectclass"}]
-    words = (str(topic) + " " + " ".join(labels)).lower()
-    for kind, keys in (("person", ("human", "person", "people")), ("vehicle", ("vehicle", "car", "motor")),
-                       ("animal", ("animal", "pet")), ("tamper", ("tamper", "sabotage")),
-                       ("audio", ("audio", "sound")), ("motion", ("motion", "movement"))):
+    words = words_for(str(topic) + " " + " ".join(labels))
+    return tuple(kind for kind, keys in (("person", {"human", "person", "people", "humanbody", "isperson", "ispeople", "ishuman"}),
+        ("vehicle", {"vehicle", "car", "motor", "motorcycle", "bike", "bicycle", "isvehicle", "iscar"}),
+        ("animal", {"animal", "pet", "isanimal"})) if words.intersection(keys))
+
+
+def object_kind_for(topic, data=None):
+    return next(iter(object_kinds_for(topic, data)), None)
+
+
+def rule_kind_for(topic, data=None):
+    words = str(topic).lower()
+    fields = {str(k).lower(): boolean(v) for k, v in (data or {}).items() if boolean(v) is not None}
+    for kind, keys in (("wrong_direction", ("retrograde", "wrongdirection", "wrongway")),
+                       ("loitering", ("loiter", "staydetection", "staydetector")),
+                       ("line_crossing", ("linedetector/crossed", "linecross", "crossline")),
+                       ("intrusion", ("intrusion", "objectsinside", "objectinzone")),
+                       ("fire", ("firealarm", "firedetector", "smokealarm", "smokedetector"))):
         if any(key in words for key in keys):
+            return kind
+    for state in (True, False):
+        if state is False and any(fields.get(name) is True for name in (
+            "ispeople", "ishuman", "isperson", "isvehicle", "iscar", "isanimal",
+            "ismotion", "motion", "ismovement", "istamper", "issounddetected")):
+            continue  # A false flag for another feature cannot hide a real alarm.
+        for kind, names in (("wrong_direction", ("isretrograde", "iswrongdirection")),
+            ("loitering", ("isloitering", "isstaying")), ("line_crossing", ("iscrossed", "islinecrossed")),
+            ("intrusion", ("isinside", "isintrusion")),
+            ("fire", ("isfire", "isfiredetected", "issmoke", "issmokedetected"))):
+            if any(fields.get(name) is state for name in names):
+                return kind
+    if words_for(topic).intersection({"motion", "movement"}) or fields.keys() & {"ismotion", "motion", "ismovement"}:
+        return "motion"
+    return None
+
+
+def kind_for(topic, data=None):
+    rule = rule_kind_for(topic, data)
+    # A person crossing a line is still a line event; do not discard its rule.
+    if rule and rule != "motion":
+        return rule
+    kind = object_kind_for(topic, data)
+    if kind:
+        return kind
+    words = (str(topic) + " " + " ".join(str(k) for k, v in (data or {}).items() if boolean(v) is True)).lower()
+    for kind, keys in (("tamper", ("tamper", "sabotage")), ("audio", ("audio", "sound"))):
+        if any(key in words for key in keys):
+            return kind
+    if rule:
+        return rule
+    # Some smart-event topics carry their only semantic label in a boolean
+    # field. Its false/end message must remain recognizable too.
+    fields = {str(k).lower() for k, v in (data or {}).items() if boolean(v) is not None}
+    for kind, names in (("person", {"ispeople", "ishuman", "isperson"}),
+                        ("vehicle", {"isvehicle", "iscar"}), ("animal", {"isanimal"}),
+                        ("tamper", {"istamper"}), ("audio", {"issounddetected"})):
+        if fields.intersection(names):
             return kind
     return "other"
 
@@ -92,7 +163,14 @@ def notification_topic(notification):
 
 def ignored_notification(notification):
     topic = notification_topic(notification)
-    return bool(topic) and any(word in topic.lower() for word in ("heartbeat", "keepalive", "configurationchanged"))
+    lower = topic.lower()
+    excluded = {"abandonedobjectdetector", "abandonedobject", "objectleft", "leftobjectdetector",
+                "objectleftdetector", "removedobjectdetector", "objectremovaldetector", "missingobjectdetector",
+                "removedobject", "objectremoved"}
+    return bool(topic) and (topic in SERVICE_HISTORY_TOPICS
+        or lower in {"media/profilechanged", "media/configurationchanged"}
+        or any(word in lower for word in ("heartbeat", "keepalive", "configurationchanged"))
+        or bool(set(lower.split("/")) & excluded))
 
 
 class PullMessagesEnvelope(Plugin):
@@ -133,6 +211,10 @@ class Signal:
     camera_at: datetime | None
     clock_uncertain: bool
     source: dict = field(default_factory=dict)
+    rule_kind: str | None = None
+    object_kind: str | None = None
+    data_keys: tuple[str, ...] = ()
+    object_kinds: tuple[str, ...] = ()
 
 
 def parse_notification(notification, received_at=None):
@@ -160,16 +242,31 @@ def parse_notification(notification, received_at=None):
             for item in list(section)[:32]:
                 if isinstance(item.tag, str) and etree.QName(item).localname == "SimpleItem":
                     target[text(item.get("Name"), 80)] = text(item.get("Value"), 255)
-    states = [boolean(v) for k, v in data.items() if k.lower() in {
-        "state", "ismotion", "motion", "isinside", "istamper", "issounddetected"}]
-    active = next((v for v in states if v is not None), None)
+    rule = rule_kind_for(topic, data)
+    lowered = {k.lower(): v for k, v in data.items()}
+    # Explicit state wins over class flags, including an end with no class data.
+    active = boolean(lowered.get("state"))
+    state_names = {"intrusion": ("isinside", "isintrusion"),
+                   "line_crossing": ("iscrossed", "islinecrossed"),
+                   "loitering": ("isloitering", "isstaying"),
+                   "wrong_direction": ("isretrograde", "iswrongdirection"),
+                   "fire": ("isfire", "isfiredetected", "issmoke", "issmokedetected")}.get(rule, ())
+    states = [boolean(lowered[name]) for name in state_names if name in lowered]
+    if active is None:
+        known = [v for v in states if v is not None]
+        active = any(known) if known else None
+    if active is None:
+        states = [boolean(lowered[name]) for name in ("ismotion", "motion", "ismovement", "istamper", "issounddetected") if name in lowered]
+        known = [v for v in states if v is not None]
+        active = any(known) if known else None
     if active is None:
         classes = [boolean(v) for k, v in data.items() if k.lower() in {
             "ispeople", "ishuman", "isperson", "isvehicle", "iscar", "isanimal"}]
         known = [v for v in classes if v is not None]
         active = any(known) if known else None
     return Signal(topic, kind_for(topic, data), active, root.get("PropertyOperation") == "Initialized",
-                  received_at if uncertain else camera_at, camera_at, uncertain, source)
+                  received_at if uncertain else camera_at, camera_at, uncertain, source,
+                  rule, object_kind_for(topic, data), tuple(data)[:32], object_kinds_for(topic, data))
 
 
 def safe_endpoint(address, host, port, *, fallback="/onvif/event_service"):

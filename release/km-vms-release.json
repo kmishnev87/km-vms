@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.14",
-  "tag": "v0.9.14",
-  "title": "Reliable schema updates and event history cleanup",
-  "summary": "Fix sequential database updates, delete camera events safely, and remove unnecessary clip-dialog scrolling.",
+  "version": "0.9.15",
+  "tag": "v0.9.15",
+  "title": "Useful camera events and clear notification controls",
+  "summary": "Eleven useful ONVIF event types, preserved rule and object details, and aligned personal notification controls. Clock synchronization and known service chatter no longer fill camera history.",
   "title_i18n": {
-    "en": "Reliable schema updates and event history cleanup",
-    "ru": "Надёжные обновления БД и очистка истории событий",
-    "zh-CN": "可靠的数据库更新与事件历史清理"
+    "en": "Useful camera events and clear notification controls",
+    "ru": "Полезные события камер и удобные оповещения",
+    "zh-CN": "实用摄像机事件与清晰的通知设置"
   },
   "summary_i18n": {
-    "en": "Fix sequential database updates, delete camera events safely, and remove unnecessary clip-dialog scrolling.",
-    "ru": "Исправлены последовательные обновления БД, добавлено удаление событий без удаления видео и увеличена высота окна клипов.",
-    "zh-CN": "修复连续数据库升级，支持安全删除摄像机事件而不删除录像，并消除剪辑窗口不必要的滚动。"
+    "en": "Eleven useful ONVIF event types, preserved rule and object details, and aligned personal notification controls. Clock synchronization and known service chatter no longer fill camera history.",
+    "ru": "Одиннадцать полезных типов событий ONVIF, сохранение правил и классов объектов, ровные настройки личных оповещений. Синхронизация часов и известные служебные сообщения больше не засоряют историю камер.",
+    "zh-CN": "支持十一类实用ONVIF事件，保留规则与目标类别，重新整理个人通知设置。时间同步及已知服务消息不再进入摄像机事件历史。"
   },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.14",
+  "source_ref": "v0.9.15",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -30,37 +30,29 @@
     "target_version": 11
   },
   "changelog": [
-    "Validate historical schema receipts against their original target rather than the next release's schema.",
-    "Verify completed migration plans and source history before a new schema transition, preserving signatures and rollback checks.",
-    "Add a compact trash action beside bulk viewing acknowledgement for selected events or the full history snapshot.",
-    "Confirm shared-history deletion; keep recordings, camera settings, personal preferences and newly received events.",
-    "Delete read markers atomically and refresh history, unread counts and chronology markers after deletion.",
-    "Increase the clip dialog's desktop height slightly while retaining necessary scrolling on small screens."
+    "Recognize eleven useful ONVIF event types without manufacturer-specific camera control or detector changes.",
+    "Preserve rule and reported object classes together; recognize class-less event endings and retain useful legacy history.",
+    "Discard clock synchronization, known service chatter and excluded abandoned or removed object messages before history storage.",
+    "Align notification controls, support all eleven selections and keep personal preferences independent of camera receiving and recording."
   ],
   "changelog_i18n": {
     "en": [
-      "Validate historical schema receipts against their original target rather than the next release's schema.",
-      "Verify completed migration plans and source history before a new schema transition, preserving signatures and rollback checks.",
-      "Add a compact trash action beside bulk viewing acknowledgement for selected events or the full history snapshot.",
-      "Confirm shared-history deletion; keep recordings, camera settings, personal preferences and newly received events.",
-      "Delete read markers atomically and refresh history, unread counts and chronology markers after deletion.",
-      "Increase the clip dialog's desktop height slightly while retaining necessary scrolling on small screens."
+      "Recognize eleven useful ONVIF event types without manufacturer-specific camera control or detector changes.",
+      "Preserve rule and reported object classes together; recognize class-less event endings and retain useful legacy history.",
+      "Discard clock synchronization, known service chatter and excluded abandoned or removed object messages before history storage.",
+      "Align notification controls, support all eleven selections and keep personal preferences independent of camera receiving and recording."
     ],
     "ru": [
-      "Старые подтверждения миграции проверяются по своей исходной схеме, а не по схеме следующего выпуска.",
-      "Завершённый план и история БД проверяются перед новым переходом; подписи и защита отката сохранены.",
-      "Рядом с общей отметкой просмотра добавлена корзина для выбранных событий либо всего снимка истории.",
-      "Удаление общей истории подтверждается; видео, камеры, личные настройки и новые события сохраняются.",
-      "Отметки просмотра удаляются атомарно; история, счётчик новых событий и маркеры хронологии обновляются.",
-      "Окно клипов стало немного выше; на небольших экранах нужная прокрутка сохранена."
+      "Распознавание одиннадцати полезных типов ONVIF без привязки к производителю и перенастройки детекторов камеры.",
+      "Правило и сообщённые классы объектов сохраняются вместе; окончание без класса корректно завершает эпизод, полезная прежняя история сохраняется.",
+      "Синхронизация часов, известные служебные сообщения и исключённые события оставленного или исчезнувшего предмета отбрасываются до записи в историю.",
+      "Чекбоксы оповещений выровнены; поддержан выбор всех одиннадцати типов независимо от получения событий и записи."
     ],
     "zh-CN": [
-      "按原始目标架构验证历史迁移凭据，不再错误使用下一版本的架构。",
-      "新架构迁移前验证已完成的计划和数据库历史，保留签名验证与回滚保护。",
-      "批量已读按钮旁新增紧凑删除按钮，可删除所选事件或整个历史快照。",
-      "删除共享历史前需确认，保留录像、摄像机设置、个人偏好和新收到的事件。",
-      "原子删除已读标记，并更新历史、未读数量和时间轴事件标记。",
-      "略微增加桌面剪辑窗口高度，小屏幕仍保留必要的滚动。"
+      "识别十一类实用ONVIF事件，不依赖特定厂商，也不修改摄像机检测设置。",
+      "同时保留规则和报告的目标类别；正确处理不含类别的结束消息，并保留既有有效历史。",
+      "时间同步、已知服务消息及已排除的遗留物或物品消失事件在写入历史前被过滤。",
+      "对齐通知复选框，支持选择全部十一类事件，个人通知不影响事件接收或录像。"
     ]
   }
 }

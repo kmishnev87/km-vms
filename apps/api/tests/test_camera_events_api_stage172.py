@@ -85,6 +85,20 @@ def test_read_and_preferences_are_idempotent_and_separate(api):
     assert client.put("/camera-events/preferences",json={"notifications":False,"recording_mode":"off"}).status_code==422
 
 
+def test_all_eleven_preferences_pass_real_api_validation_without_resetting_camera_or_recording(api):
+    from app.services.onvif_events import EVENT_KINDS
+    client, factory, _, _ = api
+    with factory() as db:
+        before = (db.get(Camera, 1).enabled, db.get(Camera, 1).events_enabled)
+    for kinds in (list(EVENT_KINDS), list(EVENT_KINDS)[:-1], [], None):
+        response = client.put("/camera-events/preferences", json={"notifications": False, "kinds": kinds})
+        assert response.status_code == 200 and response.json()["kinds"] == kinds
+        assert client.get("/camera-events/preferences").json()["kinds"] == kinds
+    with factory() as db:
+        assert (db.get(Camera, 1).enabled, db.get(Camera, 1).events_enabled) == before
+    assert client.get("/camera-events").json()["total"] == 1
+
+
 def test_read_all_spans_database_batches_without_touching_newer_events_or_other_users(api):
     client, factory, _, _ = api
     now = datetime.now(timezone.utc).replace(tzinfo=None)

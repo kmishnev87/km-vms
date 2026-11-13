@@ -18,7 +18,7 @@ from sqlalchemy.orm import aliased
 
 from app.models.audit_event import AuditEvent
 from app.models.workspace_layout import UserWorkspaceLayout
-from app.services.onvif_events import KINDS
+from app.services.onvif_events import EVENT_KINDS, KINDS, LEGACY_TOPIC_KINDS, SERVICE_HISTORY_TOPICS
 from app.services.timezone_contract import format_storage_utc_iso, format_system_iso, timezone_context
 
 CATEGORY = "camera_event"
@@ -68,11 +68,14 @@ def preferences(db, user_id, *, lock=False):
     row = (query.with_for_update() if lock else query).first()
     value = dict(row.layout or {}) if row else {}
     return {"notifications": bool(value.get("notifications", True)), "camera_ids": value.get("camera_ids"),
-            "kinds": value.get("kinds"), "hours_enabled": bool(value.get("hours_enabled", False)),
+            "kinds": [kind for kind in value["kinds"] if kind in EVENT_KINDS] if isinstance(value.get("kinds"), list) else None,
+            "hours_enabled": bool(value.get("hours_enabled", False)),
             "start_minute": int(value.get("start_minute", 0)), "end_minute": int(value.get("end_minute", 0))}, row
 
 
 def save_preferences(db, user_id, value):
+    value = {**value, "kinds": [kind for kind in value["kinds"] if kind in EVENT_KINDS]
+             if isinstance(value.get("kinds"), list) else None}
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
     else:
@@ -94,7 +97,12 @@ def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread
     if camera_id is not None:
         query = query.filter(AuditEvent.target_type == "camera", AuditEvent.target_id == str(camera_id))
     if kind:
-        query = query.filter(AuditEvent.event_type == "camera." + kind)
+        query = query.filter(or_(AuditEvent.event_type == "camera." + kind,
+                                 AuditEvent.event_metadata["object_kind"].as_string() == kind,
+                                 *(AuditEvent.event_metadata["object_kinds"][index].as_string() == kind for index in range(3)),
+                                 AuditEvent.event_metadata["rule_kind"].as_string() == kind,
+                                 (AuditEvent.event_type == "camera.other") & AuditEvent.event_metadata["topic"].as_string().in_(
+                                     [topic for topic, label in LEGACY_TOPIC_KINDS.items() if label == kind])))
     if since:
         query = query.filter(AuditEvent.created_at >= since)
     if until:
@@ -107,6 +115,8 @@ def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread
 def serialize(row, read=False, ctx=None):
     data = row.event_metadata or {}
     kind = row.event_type.removeprefix("camera.")
+    if kind == "other":
+        kind = LEGACY_TOPIC_KINDS.get(data.get("topic"), kind)
     return {"id": row.id, "camera_id": int(row.target_id) if row.target_type == "camera" and str(row.target_id).isdigit() else None,
             "camera_name": row.target_name, "kind": kind if kind in KINDS else "other",
             "occurred_at": data.get("occurred_at") or format_storage_utc_iso(row.created_at),
@@ -114,7 +124,10 @@ def serialize(row, read=False, ctx=None):
             "ended_at": data.get("ended_at"), "active": data.get("active"), "clock_uncertain": bool(data.get("clock_uncertain")),
             "source_ambiguous": bool(data.get("source_ambiguous")), "occurrences": int(data.get("occurrences", 1)),
             "read": bool(read), "state_unconfirmed": bool(data.get("state_unconfirmed")),
-            "topic": str(data.get("topic") or "")[:512]}
+            "topic": str(data.get("topic") or "")[:512],
+            "object_kind": data.get("object_kind") if data.get("object_kind") in {"person", "vehicle", "animal"} else None,
+            "object_kinds": [kind for kind in ("person", "vehicle", "animal") if kind in (data.get("object_kinds") or [data.get("object_kind")])],
+            "rule_kind": data.get("rule_kind") if data.get("rule_kind") in EVENT_KINDS else None}
 
 
 def list_camera_events(db, user_id, *, limit=50, offset=0, **filters):
@@ -220,14 +233,16 @@ def delete_camera_events(db, *, ids=None, through=None, actor=None):
 
 
 def record_signal(db, group, camera, signal):
+    if signal.kind not in EVENT_KINDS:
+        return None  # Unknown signals belong to bounded receiver diagnostics.
     received = now_utc()
     target_type = "camera" if camera else "camera_device"
     target_id = str(camera["id"]) if camera else group["device_id"]
     name = camera["name"] if camera else " / ".join(c["name"] for c in group["cameras"])[:255]
     episode = hashlib.sha256(json.dumps([group["device_id"], signal.topic, signal.source], sort_keys=True).encode()).hexdigest()
     # SQL narrows by indexed category/type and age. JSON holds only domain data.
-    prior = event_query(db).filter(AuditEvent.event_type == "camera." + signal.kind,
-                AuditEvent.target_id == target_id, AuditEvent.created_at >= received - timedelta(days=1),
+    prior = event_query(db).filter(AuditEvent.target_type == target_type, AuditEvent.target_id == target_id,
+                AuditEvent.created_at >= received - timedelta(days=1),
                 AuditEvent.event_metadata["episode"].as_string() == episode).order_by(AuditEvent.created_at.desc()).with_for_update().first()
     if prior is not None and not (prior.event_metadata.get("active") is True or
                                   signal.active is None and (received - prior.created_at).total_seconds() < 10):
@@ -243,9 +258,18 @@ def record_signal(db, group, camera, signal):
     if signal.initialized:
         return None
     if prior is not None:
+        classes = set(prior.event_metadata.get("object_kinds") or [prior.event_metadata.get("object_kind")])
+        classes.update(getattr(signal, "object_kinds", ()) or [getattr(signal, "object_kind", None)])
+        classes = [kind for kind in ("person", "vehicle", "animal") if kind in classes]
+        changed = classes != (prior.event_metadata.get("object_kinds") or []) or (
+            not prior.event_metadata.get("rule_kind") and getattr(signal, "rule_kind", None))
         prior.event_metadata = {**prior.event_metadata, "last_seen_at": received.replace(tzinfo=timezone.utc).isoformat(),
-                                "occurrences": min(1000000, int(prior.event_metadata.get("occurrences", 1)) + 1)}
+                                "occurrences": min(1000000, int(prior.event_metadata.get("occurrences", 1)) + 1),
+                                "object_kinds": classes, "object_kind": next(iter(classes), None),
+                                "rule_kind": prior.event_metadata.get("rule_kind") or getattr(signal, "rule_kind", None)}
         db.commit()
+        if changed:
+            notify_change()
         return None
     row = AuditEvent(id=str(uuid.uuid4()), created_at=received, category=CATEGORY, event_type="camera." + signal.kind,
                      severity="info", message_ru="Событие камеры", message_en="Camera event", target_type=target_type,
@@ -254,6 +278,9 @@ def record_signal(db, group, camera, signal):
                          "camera_at": signal.camera_at.replace(tzinfo=timezone.utc).isoformat() if signal.camera_at else None,
                          "active": signal.active, "clock_uncertain": signal.clock_uncertain,
                          "source_ambiguous": camera is None, "occurrences": 1,
+                         "rule_kind": getattr(signal, "rule_kind", None),
+                         "object_kind": getattr(signal, "object_kind", None),
+                         "object_kinds": list(getattr(signal, "object_kinds", ()) or filter(None, [getattr(signal, "object_kind", None)])),
                      })
     db.add(row)
     db.commit()
@@ -299,7 +326,9 @@ def notifications_allowed(preference, event, ctx):
         return False
     if preference.get("camera_ids") is not None and event.get("camera_id") not in preference["camera_ids"]:
         return False
-    if preference.get("kinds") is not None and event.get("kind") not in preference["kinds"]:
+    event_kinds = {event.get("kind"), event.get("rule_kind"), event.get("object_kind")} - {None}
+    event_kinds.update(event.get("object_kinds") or [])
+    if preference.get("kinds") is not None and not event_kinds.intersection(preference["kinds"]):
         return False
     if preference.get("hours_enabled"):
         local = datetime.now(ctx.zone)
@@ -315,8 +344,10 @@ def _cleanup_batch(db):
     removed = 0
     old = [r.id for r in event_query(db).filter(AuditEvent.created_at < now_utc() - timedelta(days=RETENTION_DAYS)).limit(2000).all()]
     excess = [r.id for r in event_query(db).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).offset(MAX_EVENTS).limit(2000).all()]
-    ids = list(set(old + excess))
+    service = [r.id for r in event_query(db).filter(AuditEvent.event_metadata["topic"].as_string().in_(SERVICE_HISTORY_TOPICS)).limit(2000).all()]
+    ids = list(set(old + excess + service))
     if ids:
+        ids = [r.id for r in event_query(db).filter(AuditEvent.id.in_(ids)).order_by(AuditEvent.created_at, AuditEvent.id).with_for_update().all()]
         db.query(AuditEvent).filter(AuditEvent.category == READ_CATEGORY, AuditEvent.target_id.in_(ids)).delete(synchronize_session=False)
         removed = db.query(AuditEvent).filter(AuditEvent.category == CATEGORY, AuditEvent.id.in_(ids)).delete(synchronize_session=False)
     db.query(AuditEvent).filter(AuditEvent.category == READ_CATEGORY, AuditEvent.created_at < now_utc() - timedelta(days=RETENTION_DAYS)).delete(synchronize_session=False)

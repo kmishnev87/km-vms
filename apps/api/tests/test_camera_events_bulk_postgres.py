@@ -8,6 +8,28 @@ from app.services.schema_migrations import execute_migration_plan
 from test_format_schema_stage1375_postgres import format_database, business_snapshot, pytestmark
 
 
+def test_useful_rule_class_filters_and_clock_cleanup_on_real_postgres(format_database):
+    from app.services import onvif_events as ov
+    from test_camera_events_stage172 import notification, group
+    from test_camera_events_useful_types import data_items
+    _engine, db = format_database
+    execute_migration_plan(db)
+    before = business_snapshot(db)
+    signal = ov.parse_notification(data_items(notification(topic="RuleEngine/LineDetector/Crossed"), ClassTypes="Human Vehicle Animal"))
+    identifier = events.record_signal(db, group(), group()["cameras"][0], signal)
+    for kind in ("line_crossing", "person", "vehicle", "animal"):
+        assert [item["id"] for item in events.list_camera_events(db, 1, kind=kind)["items"]] == [identifier]
+    clock = str(uuid.uuid4())
+    db.add(AuditEvent(id=clock, created_at=events.now_utc(), category=events.CATEGORY, event_type="camera.other",
+        severity="info", message_ru="", message_en="", event_metadata={"topic": ov.SERVICE_HISTORY_TOPICS[0]}))
+    db.commit()
+    events.mark_read(db, 1, [clock])
+    assert events.cleanup_history(db) == 1
+    assert db.get(AuditEvent, identifier) is not None
+    assert db.query(AuditEvent).filter(AuditEvent.category == events.READ_CATEGORY).count() == 0
+    assert business_snapshot(db) == before
+
+
 def test_bulk_read_batches_are_atomic_per_user_and_preserve_a_new_same_timestamp_event(format_database):
     _engine, db = format_database
     execute_migration_plan(db)

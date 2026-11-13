@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.9.14](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.14)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.9.15](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.15)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.14/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.14
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.15/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.15
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.14 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.15 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.14 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.15 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -104,6 +104,8 @@ ONVIF Media1/Media2 configuration is available when the camera exposes the requi
 Use **Settings → Language** to choose **English**, **简体中文**, or **Русский**.
 
 ## Camera events
+
+History and personal notification selection support eleven useful types: motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame. Only reported camera semantics are used. A rule can retain several object classes, and the same event can match either its rule or class filter. Clock synchronization, known service messages, and excluded abandoned/removed-object messages do not enter history. Unfamiliar signals are bounded receiver diagnostics, not generic detection spam. The camera's NTP and detection settings are not changed by these filters.
 
 Use the bell in the top navigation to open camera events. In camera setup or editing, enable **Receive camera events** under **Recording and events** after ONVIF capability confirmation. Reception is off by default for new cameras and cameras present before an upgrade; it is independent of continuous recording. One managed subscription serves each opted-in physical device. Turning reception off works even when a camera is offline and preserves its history. **Notifications** changes only your KM VMS camera/type/time preferences; **Detection**, available to camera managers, reads the camera's own rules. A detection switch is shown only when the device exposes a supported ONVIF boolean control. Devices without such controls remain usable for video and for events they provide.
 

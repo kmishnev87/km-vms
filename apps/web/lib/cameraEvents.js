@@ -1,4 +1,4 @@
-export const CAMERA_EVENT_KINDS = ["motion", "person", "vehicle", "animal", "tamper", "audio", "other"];
+export const CAMERA_EVENT_KINDS = ["motion", "person", "vehicle", "animal", "intrusion", "line_crossing", "loitering", "tamper", "audio", "wrong_direction", "fire"];
 export const CAMERA_EVENT_REFRESH = "km-vms-camera-events-updated";
 export const CAMERA_EVENT_OPEN = "km-vms-open-camera-event";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -40,6 +40,12 @@ export function eventLabelKey(event) {
     if (topic === suffix) return `cameraEvents.rules.${label}`;
   }
   return "cameraEvents.kinds.other";
+}
+
+export function eventObjectLabelKeys(event) {
+  const classes = event?.object_kinds || [event?.object_kind];
+  return ["person", "vehicle", "animal"].filter(kind => kind !== event?.kind && classes.includes(kind))
+    .map(kind => `cameraEvents.kinds.${kind}`);
 }
 
 export function minuteValue(value) {

@@ -33,7 +33,7 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 | --- | --- |
 | IP cameras | Add and edit RTSP/ONVIF cameras, check connections, select video sources and main/sub streams, and configure recording. |
 | ONVIF video settings | Discover Media1/Media2 services, read supported encoder settings, and apply camera-provided options for codec, resolution, frame rate, and bitrate where the device exposes them. |
-| Camera events | Explicitly enable supported ONVIF PullPoint reception per camera; new and existing cameras start with reception off. Filter history, mark events viewed, delete selected events or a frozen history snapshot with confirmation, and open live video or an existing archive. Event deletion never removes footage. Personal notifications do not change recording or camera detection. |
+| Camera events | Opt-in ONVIF PullPoint reception, eleven useful event types, rule and object details, history filters and personal camera/type/time notifications. Mark events viewed, delete selected events or a confirmed history snapshot, and open live video or an existing archive. Clock/service chatter is excluded; event deletion never removes footage. |
 | Camera detection | Read ONVIF detection rules and change explicitly exposed boolean switches with conflict detection and confirmation. Not all devices expose these controls; KM VMS does not invent unavailable switches or overwrite detection zones. |
 | Live monitoring | Add or remove multiple cameras, align tiles or automatically fit their frame aspect ratios, and use main/sub stream and audio controls in individual fullscreen views. Recover viewing after temporary connection interruptions. |
 | PTZ control | Automatically detect supported PTZ capabilities for the selected camera/lens. Move, zoom, choose speed or saved positions, and use a movable fullscreen control panel. Point positioning and area zoom are available only through supported device capabilities/control paths. |
@@ -52,7 +52,7 @@ ONVIF capabilities are device-dependent: a camera must expose the relevant servi
 
 ## Quick start
 
-The example below installs the published **[0.9.14](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.14)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
+The example below installs the published **[0.9.15](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.15)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
 
 ### 1. Prepare your NAS or Linux server
 
@@ -70,8 +70,8 @@ The installer does **not** install Docker or host packages for you. Host Node.js
 Run these commands in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.14/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.14
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.15/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.15
 ```
 
 The interactive installer uses `$HOME/km-vms` as the default application directory and port `8088`. It asks for confirmation before creating a new application directory. To choose a persistent application directory on your NAS instead, add `--app-dir /path/to/km-vms` to the second command; replace that example path with your own.
@@ -150,6 +150,8 @@ Add the camera normally. If the selected lens exposes supported PTZ capabilities
 Open the bell in the top navigation to see camera event history, personal notification preferences, and, with camera-management permission, detection rules. Events can link to live video or available archive footage about five seconds before the event. Chronology shows event markers and previous/next controls. Repeated state reports are grouped, and an initial subscription state does not trigger a new alarm. History is automatically cleaned on a five-minute schedule with a target of 30 days and 100,000 events; a bounded recent backlog can exist between sweeps.
 
 Enable **Receive camera events** under a camera's **Recording and events** settings when its ONVIF capabilities are confirmed. This is off by default for both new cameras and cameras present before the upgrade. A temporary capability-check failure is not reported as permanent incompatibility, and reception can be turned off even when the camera is offline.
+
+KM VMS recognizes motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame events when the camera reports them. Rules and reported object classes are preserved together: a person crossing a line remains searchable as both. Notifications use the same eleven types in an aligned, responsive selection. This does not enable detectors on the camera or infer objects from video. Clock synchronization, known service chatter, and abandoned/removed-object messages are not saved as detections; unfamiliar signals remain available in bounded receiver diagnostics rather than being mislabeled as useful events.
 
 A dot identifies an unviewed event without changing the row layout. The eye/check icon above the list marks selected events, or all retained events when nothing is selected. Newly arriving events after that list snapshot stay unviewed; marking does not delete history or footage. Standard object-in-zone and line-crossing rules have useful names even when the camera does not supply an object class. Opening live video from an event fits its complete frame and does not overwrite the ordinary saved workspace.
 

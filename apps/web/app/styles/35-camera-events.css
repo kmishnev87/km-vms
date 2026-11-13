@@ -12,7 +12,7 @@
 .cameraEventsWorkbench { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px 18px 12px; gap: 10px; }
 .cameraEventsFilters { display: grid; grid-template-columns: minmax(120px, 1.3fr) minmax(100px, 1fr) minmax(100px, 1fr) auto; align-items: end; gap: 10px; flex-shrink: 0; }
 .cameraEventsFilterActions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; height: 36px; }
-.cameraEventsFilters label, .cameraEventsDetectorChooser > label, .cameraEventsSchedule > label:not(.cameraEventsCheck) { min-width: 0; display: grid; gap: 5px; color: #64748b; font-size: 12px; }
+.cameraEventsFilters label, .cameraEventsDetectorChooser > label { min-width: 0; display: grid; gap: 5px; color: #64748b; font-size: 12px; }
 .cameraEventsFilters select, .cameraEventsDetectorChooser select, .cameraEventsSchedule input[type="time"] { width: 100%; min-width: 0; height: 36px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 13px; background: #fff; color: #172238; }
 .cameraEventsCheck { display: inline-flex !important; align-items: center; gap: 8px; font-size: 13px; color: #334155; min-height: 34px; }
 .cameraEventsCheck input[type="checkbox"], .cameraEventsRow > input[type="checkbox"], .cameraEventsSelection > input[type="checkbox"] { display: block; margin: 0; padding: 0; width: 16px; height: 16px; min-width: 16px; min-height: 16px; flex: 0 0 16px; accent-color: #456f94; justify-self: center; }
@@ -40,14 +40,27 @@
 .cameraEventsPager { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .cameraEventsPager > span { margin-right: auto; color: #64748b; font-size: 11px; }
 .cameraEventsEmpty { display: grid; place-items: center; min-height: 160px; padding: 24px; color: #64748b; text-align: center; font-size: 13px; }
-.cameraEventsPreferences, .cameraEventsDetectors { min-height: 0; flex: 1; padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
-.cameraEventsPreferences > p, .cameraEventsDetectors > p { margin: 0; max-width: 78ch; color: #526377; font-size: 13px; line-height: 1.5; }
-.cameraEventsPreferences fieldset { margin: 0; padding: 12px; border: 1px solid #dce5ee; border-radius: 8px; min-width: 0; }
-.cameraEventsPreferences legend { padding: 0 6px; font-size: 13px; }
-.cameraEventsChoices { display: flex; flex-wrap: wrap; gap: 6px 20px; }
-.cameraEventsSchedule { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; }
-.cameraEventsPreferences > small { color: #64748b; font-size: 12px; }
-.cameraEventsPreferences > .button { align-self: flex-start; min-width: 140px; }
+.cameraEventsPreferences, .cameraEventsDetectors { min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: stretch; }
+.cameraEventsDetectors { padding: 18px 20px; overflow: auto; gap: 16px; }
+.cameraEventsPreferences { overflow: hidden; }
+.cameraEventsPreferenceScroll { min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.cameraEventsPreferenceScroll > p, .cameraEventsDetectors > p { margin: 0; max-width: 78ch; color: #526377; font-size: 13px; line-height: 1.5; }
+.cameraEventsPreferences fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.cameraEventsPreferences legend { padding: 0 0 6px; font-size: 13px; font-weight: 600; color: #172238; }
+.cameraEventsChoices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; }
+.cameraEventsPreferences .cameraEventsCheck { min-width: 0; margin: 0; padding: 4px 0; min-height: 32px; line-height: 20px; cursor: pointer; }
+.cameraEventsPreferences .cameraEventsCheck span { min-width: 0; overflow-wrap: anywhere; }
+.cameraEventsPreferences .cameraEventsCheck:has(input:focus-visible) { outline: 2px solid #456f94; outline-offset: 2px; border-radius: 3px; }
+.cameraEventsPreferences fieldset:disabled .cameraEventsCheck { cursor: default; }
+.cameraEventsPreferenceMaster { font-weight: 600; }
+.cameraEventsSchedule { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px 14px; padding-top: 10px; border-top: 1px solid #dce5ee; }
+.cameraEventsTimeRange { display: inline-flex; align-items: center; gap: 10px; }
+.cameraEventsTimeRange > label { display: inline-flex; align-items: center; gap: 6px; color: #64748b; font-size: 13px; }
+.cameraEventsTimeRange input[type="time"] { width: 82px; height: 32px; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+.cameraEventsTimeRange input[type="time"]::-webkit-calendar-picker-indicator { display: none; }
+.cameraEventsPreferenceScroll > small { color: #64748b; font-size: 12px; line-height: 1.5; }
+.cameraEventsPreferenceFooter { flex-shrink: 0; display: flex; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #dce5ee; background: #fff; }
+.cameraEventsPreferenceFooter > .button { min-width: 140px; }
 .cameraEventsDetectorChooser { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
 .cameraEventsDetectorChooser > label { flex: 1; max-width: 420px; }
 .cameraEventsDetectorChooser > button { min-width: 160px; min-height: 36px; }
@@ -70,6 +83,9 @@
 .cameraEventsTimelineNav button:disabled { opacity: .4; cursor: default; }
 .cameraEventsTimelineNav span { color: #64748b; font-size: 11px; }
 @media (max-width: 760px) {
+  .cameraEventsChoices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cameraEventsPreferenceScroll { padding: 14px; }
+  .cameraEventsPreferenceFooter { padding: 12px 14px; }
   .cameraEventsDialog .operationFeedbackHead { padding: 12px 14px; }
   .cameraEventsWorkbench { padding: 12px; }
   .cameraEventsFilters { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
@@ -92,4 +108,8 @@
   .cameraEventsReceiverList strong { min-width: 0; overflow-wrap: anywhere; }
   .cameraEventsReceiverList span { text-align: right; }
   .cameraEventsBell { width: 36px; height: 36px; }
+}
+@media (max-width: 480px) {
+  .cameraEventsChoices { grid-template-columns: minmax(0, 1fr); }
+  .cameraEventsSchedule > .cameraEventsCheck { flex-basis: 100%; justify-content: center; }
 }

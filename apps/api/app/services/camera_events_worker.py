@@ -14,7 +14,7 @@ from app.db.session import SessionLocal
 from app.models.camera import Camera
 from app.models.system_settings import SystemSettings
 from app.services.camera_events import cleanup_history, record_signal, source_disconnected
-from app.services.onvif_events import DeviceClient, EventDeviceError, ignored_notification, kind_for, parse_notification, profile_identities, resolve_source
+from app.services.onvif_events import EVENT_KINDS, DeviceClient, EventDeviceError, ignored_notification, kind_for, parse_notification, profile_identities, resolve_source
 from app.services.storage_operations_foundation import acquire_worker_lease, release_worker_lease, renew_worker_lease
 
 MAX_CONNECTIONS = 64
@@ -117,8 +117,10 @@ class Receiver:
                 self.client.subscribe()
                 failures = 0
                 counts = {"messages_received": 0, "messages_parsed": 0, "messages_rejected": 0,
-                          "messages_ignored": 0, "events_saved": 0, "excluded_source": 0}
-                _state(group, "waiting", kinds=sorted({kind_for(topic) for topic in topics}), dropped=0, **counts)
+                          "messages_ignored": 0, "messages_unsupported": 0, "events_saved": 0, "excluded_source": 0}
+                unclassified = {}
+                supported_kinds = sorted({kind_for(topic) for topic in topics} & set(EVENT_KINDS))
+                _state(group, "waiting", kinds=supported_kinds, dropped=0, unclassified=[], **counts)
                 minute, accepted, dropped = time.monotonic(), 0, 0
                 while not self.stop.is_set() and not _stop.is_set():
                     with SessionLocal() as db:
@@ -142,6 +144,14 @@ class Receiver:
                                 counts["messages_ignored" if ignored_notification(message) else "messages_rejected"] += 1
                                 continue
                             counts["messages_parsed"] += 1
+                            if signal.kind not in EVENT_KINDS:
+                                counts["messages_unsupported"] += 1
+                                # Bounded, in-memory diagnostic types/field names only;
+                                # never XML, field values, credentials or history spam.
+                                unclassified[signal.topic] = {"topic": signal.topic, "fields": list(signal.data_keys)}
+                                if len(unclassified) > 16:
+                                    unclassified.pop(next(iter(unclassified)))
+                                continue
                             if accepted >= 120 and (signal is None or signal.active is not False):
                                 dropped += 1
                                 continue
@@ -156,11 +166,17 @@ class Receiver:
                                 counts["excluded_source"] += 1
                             accepted += 1
                     status = ("partial_messages" if counts["messages_rejected"] else "connected") if counts["messages_parsed"] else "invalid_messages" if counts["messages_rejected"] else "waiting"
-                    _state(group, status, kinds=sorted({kind_for(topic) for topic in topics}), dropped=dropped, **counts)
+                    _state(group, status, kinds=supported_kinds,
+                           unclassified=list(unclassified.values()), dropped=dropped, **counts)
                     # Some devices ignore the requested timeout. Empty replies must
                     # not turn a long-poll into a hot retry loop.
-                    if (not messages or accepted >= 120) and time.monotonic() - started < 1:
+                    elapsed = time.monotonic() - started
+                    if (not messages or accepted >= 120) and elapsed < 1:
                         self.stop.wait(30)
+                    elif elapsed < 1:
+                        # Also bound service/unknown-only fast replies; unlike a
+                        # 30s empty-response backoff this keeps detections timely.
+                        self.stop.wait(1 - elapsed)
             except Exception as exc:
                 failures += 1
                 status = "unsupported" if isinstance(exc, EventDeviceError) and exc.code == "events_unsupported" else "reconnecting"

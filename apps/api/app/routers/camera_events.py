@@ -25,14 +25,15 @@ from app.services.onvif_events import DeviceClient, EventDeviceError, detector_l
 from app.services.timezone_contract import format_system_iso, parse_api_timestamp, timezone_context
 
 router = APIRouter(prefix="/camera-events", tags=["camera-events"])
-EventKind = Literal["motion", "person", "vehicle", "animal", "tamper", "audio", "other"]
+EventKind = Literal["motion", "person", "vehicle", "animal", "intrusion", "line_crossing",
+                    "loitering", "tamper", "audio", "wrong_direction", "fire", "other"]
 
 
 class Preferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
     notifications: StrictBool = True
     camera_ids: list[StrictInt] | None = Field(None, max_length=512)
-    kinds: list[EventKind] | None = Field(None, max_length=7)
+    kinds: list[EventKind] | None = Field(None, max_length=12)
     hours_enabled: StrictBool = False
     start_minute: int = Field(0, ge=0, le=1439)
     end_minute: int = Field(0, ge=0, le=1439)
