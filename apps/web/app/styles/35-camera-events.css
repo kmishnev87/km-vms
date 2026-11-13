@@ -22,7 +22,8 @@
 .cameraEventsIconButton:focus-visible { outline: 2px solid #456f94; outline-offset: 2px; }
 .cameraEventsIconButton:disabled { opacity: .42; cursor: default; }
 .cameraEventsHistory { --camera-events-row-padding: 14px; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dce5ee; border-radius: 8px; }
-.cameraEventsSelection { display: grid; grid-template-columns: 18px minmax(0, 1fr) 36px; align-items: center; gap: 12px; min-height: 54px; padding: 8px var(--camera-events-row-padding); border-bottom: 1px solid #dce5ee; font-size: 12px; color: #64748b; flex-shrink: 0; }
+.cameraEventsSelection { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 54px; padding: 8px var(--camera-events-row-padding); border-bottom: 1px solid #dce5ee; font-size: 12px; color: #64748b; flex-shrink: 0; }
+.cameraEventsBulkActions { display: flex; align-items: center; gap: 8px; }
 .cameraEventsSelectionSummary { min-width: 0; display: flex; align-items: center; gap: 16px; font-variant-numeric: tabular-nums; }
 .cameraEventsTotal { margin-left: auto; }
 .cameraEventsList { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }

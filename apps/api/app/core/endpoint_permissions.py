@@ -58,6 +58,8 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("camera-events", "PUT", "/camera-events/preferences", PERMISSION_VIEW_LIVE, "require_permission", "Only the current user's notification preferences."),
     EndpointPermission("camera-events", "POST", "/camera-events/read", PERMISSION_VIEW_LIVE, "require_permission", "Only the current user's read markers; never deletes video."),
     EndpointPermission("camera-events", "POST", "/camera-events/read-all", PERMISSION_VIEW_LIVE, "require_permission", "Current user's acknowledgement through a bounded event snapshot; newer events stay unread."),
+    EndpointPermission("camera-events", "POST", "/camera-events/delete", PERMISSION_MANAGE_CAMERAS, "require_permission", "Deletes selected shared camera events and their read markers, never footage or administrative audit."),
+    EndpointPermission("camera-events", "POST", "/camera-events/delete-all", PERMISSION_MANAGE_CAMERAS, "require_permission", "Deletes shared history through a frozen snapshot; newly received events survive."),
     EndpointPermission("camera-events", "GET", "/camera-events/updates", PERMISSION_VIEW_LIVE, "require_permission", "Bounded long wait releases database transaction."),
     EndpointPermission("camera-events", "GET", "/camera-events/markers", PERMISSION_VIEW_TIMELINE, "require_permission", "Bounded event markers; no video or camera I/O."),
     EndpointPermission("camera-events", "GET", "/camera-events/cameras/{camera_id}/detectors", PERMISSION_MANAGE_CAMERAS, "require_permission", "Read-only camera rule discovery."),

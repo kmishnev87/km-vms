@@ -243,8 +243,10 @@ def test_completed_rollover_rebinds_every_control_field_and_increments_generatio
     monkeypatch.setattr(
         control,
         "validate_exact_target_noop",
-        lambda value: validated.append(value),
+        lambda value, **kwargs: validated.append(value),
     )
+    source_checks = []
+    monkeypatch.setattr(control, "validate_initial_context_database", lambda value, **kwargs: source_checks.append(kwargs["context"]))
     monkeypatch.setattr(
         control,
         "write_auth_snapshot",
@@ -261,6 +263,7 @@ def test_completed_rollover_rebinds_every_control_field_and_increments_generatio
 
     assert generation == 8
     assert validated == [db]
+    assert source_checks == [context]
     assert db.commits == 1
     assert len(db.updates) == 1
     update = db.updates[0]
@@ -610,7 +613,7 @@ def _history_rows():
     return rows
 
 
-def _historical_attempts(*, registry_fingerprint: str | None = None):
+def _historical_attempts(*, registry_fingerprint: str | None = None, target_schema_version: int | None = None):
     source_shape = control.SOURCE_SHAPE_FINGERPRINTS["0.7.18"]
     target_commit = control.SOURCE_TAG_COMMITS["0.7.27"]
     registry_fingerprint = (
@@ -626,6 +629,7 @@ def _historical_attempts(*, registry_fingerprint: str | None = None):
         target_release="0.7.27",
         target_commit=target_commit,
         registry_fingerprint_value=registry_fingerprint,
+        target_schema_version=target_schema_version,
     )
     common = {
         "admission_attempt_id": OLD_ADMISSION_ID,
@@ -658,6 +662,8 @@ def _historical_attempts(*, registry_fingerprint: str | None = None):
         )
     ]
     for migration in PRODUCTION_MIGRATIONS.migrations:
+        if target_schema_version is not None and migration.to_version > target_schema_version:
+            continue
         suffix = hashlib.sha256(migration.migration_id.encode()).hexdigest()[:32]
         attempts.append(
             SimpleNamespace(
@@ -678,6 +684,8 @@ def _historical_attempts(*, registry_fingerprint: str | None = None):
 def test_completed_previous_generation_history_is_preserved_but_tampering_fails():
     current = SimpleNamespace(
         source_schema_version=8,
+        installed_version="0.7.27",
+        installed_commit=control.SOURCE_TAG_COMMITS["0.7.27"],
         fencing_generation=2,
         owner_attempt_id=NEW_ADMISSION_ID,
         request_id=NEW_REQUEST_ID,
@@ -690,7 +698,18 @@ def test_completed_previous_generation_history_is_preserved_but_tampering_fails(
     old_registry = hashlib.sha256(b"historical-registry").hexdigest()
     attempts = _historical_attempts(
         registry_fingerprint=old_registry,
+        target_schema_version=8,
     )
+    for migration in PRODUCTION_MIGRATIONS.path(8, control.TARGET_SCHEMA_VERSION):
+        attempts.append(SimpleNamespace(
+            attempt_id=control.transition_attempt_id(NEW_ADMISSION_ID, migration.migration_id),
+            admission_attempt_id=NEW_ADMISSION_ID, request_id=NEW_REQUEST_ID, fencing_generation=2,
+            installed_version=current.installed_version, installed_commit=current.installed_commit,
+            target_release=current.target_release, target_commit=current.target_commit,
+            registry_fingerprint=current.registry_fingerprint, plan_fingerprint=current.plan_fingerprint,
+            migration_id=migration.migration_id, definition_fingerprint=migration_definition_fingerprint(migration),
+            status="applied", completed_at=object(), after_shape_fingerprint="9"*64,
+            failure_class=None, failure_summary=None, resumable=False))
 
     control._validate_migrated_target_history(
         histories,
@@ -906,7 +925,8 @@ def test_postgres_same_schema_rollover_is_fenced_replay_safe_and_keeps_history(
         "_validate_persistent_bootstrap_evidence",
         lambda _db, _payload, **_kwargs: (context, "9" * 64),
     )
-    monkeypatch.setattr(control, "validate_exact_target_noop", lambda _db: None)
+    monkeypatch.setattr(control, "validate_exact_target_noop", lambda _db, **_kwargs: None)
+    monkeypatch.setattr(control, "validate_initial_context_database", lambda _db, **_kwargs: None)
     monkeypatch.setattr(control, "write_auth_snapshot", lambda **_kwargs: None)
 
     history_before = db.scalar(

@@ -35,7 +35,7 @@ class SchemaHistoryValidator:
             )
         row = histories[0]
         if (
-            row.migration_id != CURRENT_MIGRATION_ID
+            row.migration_id != f"{CURRENT_BASELINE_ID}_schema_v{self.TARGET_SCHEMA_VERSION}"
             or row.previous_version is not None
             or row.target_version != self.TARGET_SCHEMA_VERSION
             or row.schema_version != self.TARGET_SCHEMA_VERSION

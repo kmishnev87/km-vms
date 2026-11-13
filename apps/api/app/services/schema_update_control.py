@@ -1202,7 +1202,9 @@ def _validate_terminal_control(
     attempts: list[SchemaMigrationAttempt],
     *,
     expected_state: str = "completed",
+    expected_schema_version: int | None = None,
 ) -> SchemaMigrationControl:
+    target_schema = TARGET_SCHEMA_VERSION if expected_schema_version is None else expected_schema_version
     if expected_state not in {"completed", "failed"}:
         raise SchemaControlError(
             "no_active_terminal_control_expected_state_invalid"
@@ -1212,6 +1214,7 @@ def _validate_terminal_control(
             "no_active_terminal_control_count_invalid"
         )
     row = controls[0]
+    _validate_historical_target_binding(row.target_release, row.target_commit, target_schema)
     expected_schema = SOURCE_SCHEMA_VERSIONS.get(row.installed_version)
     expected_shapes = set(
         SOURCE_SHAPE_FINGERPRINT_ALTERNATES.get(
@@ -1232,10 +1235,11 @@ def _validate_terminal_control(
         target_release=row.target_release,
         target_commit=row.target_commit.lower(),
         registry_fingerprint_value=row.registry_fingerprint,
+        target_schema_version=target_schema,
     )
     if (
         row.state != expected_state
-        or row.target_schema_version != TARGET_SCHEMA_VERSION
+        or row.target_schema_version != target_schema
         or not re.fullmatch(
             r"[0-9a-f]{64}",
             str(row.registry_fingerprint or ""),
@@ -1267,7 +1271,10 @@ def _validate_migrated_target_history(
     histories: list[SchemaMigrationHistory],
     control: SchemaMigrationControl,
     attempts: list[SchemaMigrationAttempt],
+    *,
+    expected_schema_version: int | None = None,
 ) -> None:
+    target_schema = TARGET_SCHEMA_VERSION if expected_schema_version is None else expected_schema_version
     validate_released_source_history(
         None,
         source_schema_version=control.source_schema_version,
@@ -1298,7 +1305,7 @@ def _validate_migrated_target_history(
             if (
                 baseline_count != 1
                 or type(row.schema_version) is not int
-                or not 1 <= row.schema_version <= TARGET_SCHEMA_VERSION
+                or not 1 <= row.schema_version <= target_schema
                 or row.migration_id != f"{CURRENT_BASELINE_ID}_schema_v{row.schema_version}"
                 or row.previous_version is not None
                 or row.target_version != row.schema_version
@@ -1333,6 +1340,7 @@ def _validate_migrated_target_history(
         migration = known.get(row.migration_id)
         if (
             migration is None
+            or migration.to_version > target_schema
             or row.status != "applied"
             or row.previous_version != migration.from_version
             or row.target_version != migration.to_version
@@ -1365,7 +1373,7 @@ def _validate_migrated_target_history(
         )
     expected_path = PRODUCTION_MIGRATIONS.path(
         control.source_schema_version,
-        TARGET_SCHEMA_VERSION,
+        target_schema,
     )
     expected_ids = {
         migration.migration_id for migration in expected_path
@@ -1537,6 +1545,7 @@ def _validate_migrated_target_history(
                 target_release=target_release,
                 target_commit=target_commit,
                 registry_fingerprint_value=registry_fingerprint,
+                target_schema_version=SOURCE_SCHEMA_VERSIONS.get(target_release),
             )
             for attempt in source_attempts
         }
@@ -1564,7 +1573,11 @@ def validate_exact_target_noop(
     db: Session,
     *,
     expected_control_state: str = "completed",
+    expected_schema_version: int | None = None,
 ) -> None:
+    target_schema = TARGET_SCHEMA_VERSION if expected_schema_version is None else expected_schema_version
+    if type(target_schema) is not int or not 1 <= target_schema <= TARGET_SCHEMA_VERSION:
+        raise SchemaControlError("no_active_target_schema_invalid")
     inspector = inspect(db.connection())
     tables = set(inspector.get_table_names(schema="public"))
     required = {"schema_version_state", "schema_migration_history"}
@@ -1578,9 +1591,11 @@ def validate_exact_target_noop(
             "no_active_schema_current_row_invalid"
         )
     state = states[0]
-    if state.schema_version < TARGET_SCHEMA_VERSION:
+    if state.schema_version < target_schema:
         raise SchemaControlError("no_active_schema_below_target")
-    if state.schema_version > TARGET_SCHEMA_VERSION:
+    if state.schema_version > target_schema:
+        if target_schema != TARGET_SCHEMA_VERSION:
+            raise SchemaControlError("no_active_schema_historical_target_mismatch")
         from app.services.schema_runtime_compatibility import validate_runtime_compatibility
         try:
             validate_runtime_compatibility(db, state, TARGET_SCHEMA_VERSION)
@@ -1619,7 +1634,7 @@ def validate_exact_target_noop(
         .all()
     )
     if state.source == "fresh_create_all":
-        _validate_fresh_target_history(
+        SchemaHistoryValidator(target_schema, PRODUCTION_MIGRATIONS)._validate_fresh_target_history(
             histories,
             state,
             controls,
@@ -1630,12 +1645,33 @@ def validate_exact_target_noop(
             controls,
             attempts,
             expected_state=expected_control_state,
+            expected_schema_version=target_schema,
         )
         _validate_migrated_target_history(
             histories,
             control,
             attempts,
+            expected_schema_version=target_schema,
         )
+    if target_schema != TARGET_SCHEMA_VERSION:
+        # This proves a completed source before a *new* admission. It does not
+        # authorize the new migration or accept an arbitrary physical shape.
+        migration = PRODUCTION_MIGRATIONS.canonical_for_edge(target_schema - 1, target_schema)
+        if migration is None:
+            raise SchemaControlError("no_active_historical_schema_definition_missing")
+        try:
+            migration.verify(db)
+        except Exception as exc:
+            raise SchemaControlError("no_active_target_semantic_validation_failed") from exc
+        known_shapes = {
+            shape
+            for version, schema in SOURCE_SCHEMA_VERSIONS.items() if schema == target_schema
+            for shape in (SOURCE_SHAPE_FINGERPRINTS.get(version),
+                          *SOURCE_SHAPE_FINGERPRINT_ALTERNATES.get(version, ())) if shape
+        }
+        if database_shape_fingerprint(db) not in known_shapes:
+            raise SchemaControlError("no_active_target_shape_fingerprint_mismatch")
+        return
     try:
         validate_current_target_schema(db)
     except Exception as exc:
@@ -1869,7 +1905,22 @@ def _validate_persistent_bootstrap_evidence(
     allow_prepared: bool = False,
 ) -> tuple[UpdateContext, str]:
     receipt_context = _bootstrap_context_from_receipt(payload)
-    _validate_bootstrap_receipt(payload, context=receipt_context)
+    historical_target = payload.get("target_schema_version")
+    _validate_historical_target_binding(receipt_context.target_release, receipt_context.target_commit, historical_target)
+    _validate_bootstrap_receipt(payload, context=receipt_context, expected_schema_version=historical_target)
+    if historical_target != TARGET_SCHEMA_VERSION:
+        expected_plan = plan_fingerprint(
+            installed_version=receipt_context.installed_version,
+            installed_commit=receipt_context.installed_commit,
+            source_schema_version=receipt_context.source_schema_version,
+            source_shape_fingerprint=receipt_context.source_shape_fingerprint,
+            target_release=receipt_context.target_release,
+            target_commit=receipt_context.target_commit,
+            registry_fingerprint_value=receipt_context.registry_fingerprint,
+            target_schema_version=historical_target,
+        )
+        if receipt_context.plan_fingerprint != expected_plan:
+            raise SchemaControlError("schema_execution_terminal_bootstrap_plan_mismatch")
     receipt_generation = int(payload["fencing_generation"])
     if (
         payload.get("state")
@@ -2584,8 +2635,9 @@ def plan_fingerprint(
     target_release: str,
     target_commit: str,
     registry_fingerprint_value: str | None = None,
+    target_schema_version: int | None = None,
 ) -> str:
-    return _schema_transition_compatibility().plan_fingerprint(installed_version=installed_version, installed_commit=installed_commit, source_schema_version=source_schema_version, source_shape_fingerprint=source_shape_fingerprint, target_release=target_release, target_commit=target_commit, registry_fingerprint_value=registry_fingerprint_value)
+    return _schema_transition_compatibility().plan_fingerprint(installed_version=installed_version, installed_commit=installed_commit, source_schema_version=source_schema_version, source_shape_fingerprint=source_shape_fingerprint, target_release=target_release, target_commit=target_commit, registry_fingerprint_value=registry_fingerprint_value, target_schema_version=target_schema_version)
 
 
 def admission_attempt_id(request: dict[str, Any], request_id: str) -> str:
@@ -3265,6 +3317,7 @@ def _bootstrap_receipt_payload(
     generation: int,
     state: str,
     control_shape_fingerprint: str | None,
+    target_schema_version: int | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -3272,7 +3325,7 @@ def _bootstrap_receipt_payload(
         "admission_attempt_id": context.admission_attempt_id,
         "target_release": context.target_release,
         "target_commit": context.target_commit,
-        "target_schema_version": TARGET_SCHEMA_VERSION,
+        "target_schema_version": TARGET_SCHEMA_VERSION if target_schema_version is None else target_schema_version,
         "installed_version": context.installed_version,
         "installed_commit": context.installed_commit,
         "source_schema_version": context.source_schema_version,
@@ -3287,10 +3340,21 @@ def _bootstrap_receipt_payload(
     }
 
 
+def _validate_historical_target_binding(release: str, commit: str, schema: int) -> None:
+    if type(schema) is not int or not 1 <= schema <= TARGET_SCHEMA_VERSION:
+        raise SchemaControlError("historical_target_schema_invalid")
+    if schema != TARGET_SCHEMA_VERSION and (
+        SOURCE_SCHEMA_VERSIONS.get(release) != schema
+        or SOURCE_TAG_COMMITS.get(release) != str(commit).lower()
+    ):
+        raise SchemaControlError("historical_target_release_binding_invalid")
+
+
 def _validate_bootstrap_receipt(
     payload: dict[str, Any],
     *,
     context: UpdateContext,
+    expected_schema_version: int | None = None,
 ) -> None:
     expected = {
         "schema_version",
@@ -3358,7 +3422,7 @@ def _validate_bootstrap_receipt(
     bindings = {
         "target_release": context.target_release,
         "target_commit": context.target_commit,
-        "target_schema_version": TARGET_SCHEMA_VERSION,
+        "target_schema_version": TARGET_SCHEMA_VERSION if expected_schema_version is None else expected_schema_version,
         "installed_version": context.installed_version,
         "installed_commit": context.installed_commit,
         "source_schema_version": context.source_schema_version,
@@ -3577,6 +3641,7 @@ def bootstrap_or_resume_control(
                 generation=int(receipt["fencing_generation"]),
                 state="adopted",
                 control_shape_fingerprint=control_shape,
+                target_schema_version=int(receipt["target_schema_version"]),
             ),
         )
 
@@ -3589,7 +3654,11 @@ def bootstrap_or_resume_control(
     else:
         prior_state = str(row["state"])
         if prior_state == "completed":
-            validate_exact_target_noop(db)
+            if context.source_schema_version == TARGET_SCHEMA_VERSION:
+                validate_exact_target_noop(db)
+            else:
+                validate_initial_context_database(db, context=context)
+                validate_exact_target_noop(db, expected_schema_version=context.source_schema_version)
         elif prior_state == "failed":
             if (
                 context.request.get("retry_of_request_id")

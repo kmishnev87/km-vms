@@ -1,14 +1,24 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.13",
-  "tag": "v0.9.13",
-  "title": "Reliable camera events and compact history",
-  "summary": "Fix lost ONVIF event topics, add explicit per-camera event reception, and simplify history with compact controls and a real mark-all action. Open event live views with full-frame layout while preserving settings and archive footage.",
+  "version": "0.9.14",
+  "tag": "v0.9.14",
+  "title": "Reliable schema updates and event history cleanup",
+  "summary": "Fix sequential database updates, delete camera events safely, and remove unnecessary clip-dialog scrolling.",
+  "title_i18n": {
+    "en": "Reliable schema updates and event history cleanup",
+    "ru": "Надёжные обновления БД и очистка истории событий",
+    "zh-CN": "可靠的数据库更新与事件历史清理"
+  },
+  "summary_i18n": {
+    "en": "Fix sequential database updates, delete camera events safely, and remove unnecessary clip-dialog scrolling.",
+    "ru": "Исправлены последовательные обновления БД, добавлено удаление событий без удаления видео и увеличена высота окна клипов.",
+    "zh-CN": "修复连续数据库升级，支持安全删除摄像机事件而不删除录像，并消除剪辑窗口不必要的滚动。"
+  },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.13",
+  "source_ref": "v0.9.14",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,59 +30,37 @@
     "target_version": 11
   },
   "changelog": [
-    "Preserve ONVIF event topics through SOAP conversion without vendor-specific parsing or reduced XML protections.",
-    "Add default-off per-camera event reception. Existing cameras also start off; enable it in camera editing after ONVIF support is confirmed.",
-    "Keep reception independent from camera detection and recording; allow opt-out while offline and prevent late or wrong-lens event writes.",
-    "Report actual message processing, keep true vehicle flags authoritative, and immediately reopen saved camera settings from the confirmed server response.",
-    "Mark selected events or all retained history with one icon and one request. Newer events remain unviewed; other users and footage are unchanged.",
-    "Align checkboxes and use compact live/archive buttons, a fixed unread dot and responsive filters without shifting list rows.",
-    "Name standard zone, line-crossing and loitering events consistently, including old records, without guessing object classes.",
-    "Open event Live as one camera with Fit frames active, including same-page navigation, without overwriting the saved ordinary layout.",
-    "Apply managed schema migration 10 to 11, preserving accounts, settings and archive references. Validate old lineage against its own release."
+    "Validate historical schema receipts against their original target rather than the next release's schema.",
+    "Verify completed migration plans and source history before a new schema transition, preserving signatures and rollback checks.",
+    "Add a compact trash action beside bulk viewing acknowledgement for selected events or the full history snapshot.",
+    "Confirm shared-history deletion; keep recordings, camera settings, personal preferences and newly received events.",
+    "Delete read markers atomically and refresh history, unread counts and chronology markers after deletion.",
+    "Increase the clip dialog's desktop height slightly while retaining necessary scrolling on small screens."
   ],
-  "title_i18n": {
-    "en": "Reliable camera events and compact history",
-    "ru": "Надёжный приём событий и компактная история",
-    "zh-CN": "可靠的摄像机事件接收与紧凑历史记录"
-  },
-  "summary_i18n": {
-    "en": "Fix lost ONVIF event topics, add explicit per-camera event reception, and simplify history with compact controls and a real mark-all action. Open event live views with full-frame layout while preserving settings and archive footage.",
-    "ru": "Исправлен приём ONVIF-сообщений, добавлено отдельное включение событий каждой камеры. Компактная история получила настоящую массовую отметку, а переход к онлайну открывает одну камеру по кадру. Настройки и видеоархив сохраняются.",
-    "zh-CN": "修复ONVIF事件主题丢失，为每台摄像机增加显式事件接收开关。紧凑历史记录支持真正的全部已读操作，进入实时画面时按完整画幅排列单台摄像机，并保留设置和录像档案。"
-  },
   "changelog_i18n": {
     "en": [
-      "Preserve ONVIF event topics through SOAP conversion without vendor-specific parsing or reduced XML protections.",
-      "Add default-off per-camera event reception. Existing cameras also start off; enable it in camera editing after ONVIF support is confirmed.",
-      "Keep reception independent from camera detection and recording; allow opt-out while offline and prevent late or wrong-lens event writes.",
-      "Report actual message processing, keep true vehicle flags authoritative, and immediately reopen saved camera settings from the confirmed server response.",
-      "Mark selected events or all retained history with one icon and one request. Newer events remain unviewed; other users and footage are unchanged.",
-      "Align checkboxes and use compact live/archive buttons, a fixed unread dot and responsive filters without shifting list rows.",
-      "Name standard zone, line-crossing and loitering events consistently, including old records, without guessing object classes.",
-      "Open event Live as one camera with Fit frames active, including same-page navigation, without overwriting the saved ordinary layout.",
-      "Apply managed schema migration 10 to 11, preserving accounts, settings and archive references. Validate old lineage against its own release."
+      "Validate historical schema receipts against their original target rather than the next release's schema.",
+      "Verify completed migration plans and source history before a new schema transition, preserving signatures and rollback checks.",
+      "Add a compact trash action beside bulk viewing acknowledgement for selected events or the full history snapshot.",
+      "Confirm shared-history deletion; keep recordings, camera settings, personal preferences and newly received events.",
+      "Delete read markers atomically and refresh history, unread counts and chronology markers after deletion.",
+      "Increase the clip dialog's desktop height slightly while retaining necessary scrolling on small screens."
     ],
     "ru": [
-      "Исправлена потеря тем ONVIF при SOAP-преобразовании. Ограничения разбора и защиты сохранены, привязки к производителю нет.",
-      "Для каждой камеры добавлен отдельный выбор получения событий: по умолчанию выключен и у существующих камер. Включение доступно после подтверждения поддержки ONVIF.",
-      "Получение не меняет детекцию и запись; выключается без связи с камерой. Поздние ответы старых настроек и события чужого объектива не принимаются.",
-      "Диагностика отражает реальный разбор сообщений. Истинный признак автомобиля не подавляется; повторное открытие редактора показывает сохранённые настройки.",
-      "Выбранное или вся история отмечаются одной кнопкой и запросом. Более новые события остаются непросмотренными, чужие личные отметки и видео не меняются.",
-      "Ровные чекбоксы, компактные значки просмотра, неподвижная точка нового события и адаптивные фильтры не сдвигают список при отметке.",
-      "Объект в зоне, пересечение линии и длительное пребывание получают одинаковые понятные подписи, включая старые события. Класс объекта не выдумывается.",
-      "Событие открывает одну онлайн-камеру с выравниванием по кадру, в том числе из онлайна, не перезаписывая сохранённую раскладку.",
-      "Штатная миграция схемы 10 → 11 сохраняет пользователей, настройки и ссылки на архив. Схема прежнего релиза проверяется по его собственному описанию."
+      "Старые подтверждения миграции проверяются по своей исходной схеме, а не по схеме следующего выпуска.",
+      "Завершённый план и история БД проверяются перед новым переходом; подписи и защита отката сохранены.",
+      "Рядом с общей отметкой просмотра добавлена корзина для выбранных событий либо всего снимка истории.",
+      "Удаление общей истории подтверждается; видео, камеры, личные настройки и новые события сохраняются.",
+      "Отметки просмотра удаляются атомарно; история, счётчик новых событий и маркеры хронологии обновляются.",
+      "Окно клипов стало немного выше; на небольших экранах нужная прокрутка сохранена."
     ],
     "zh-CN": [
-      "在SOAP类型转换丢失混合文本前保留标准ONVIF事件主题，维持解析边界和订阅保护，不按厂商品牌分支处理。",
-      "在添加和编辑摄像机时提供独立事件接收选项。新摄像机和已有摄像机均默认关闭，确认设备支持后可显式启用。摄像机离线时也可关闭，不修改设备检测或录像设置。",
-      "区分订阅已打开与消息已成功解析，增加接收、解析、拒绝及排除来源计数。准确区分多镜头来源，配置变化后拒绝迟到的旧响应。",
-      "错误的人体否定标志不再掩盖有效的车辆事件。保存后立即重新编辑时使用服务器确认的设置，而非过期摄像机列表。",
-      "以列表外的紧凑批量图标替换会消失的逐行已读按钮。一次请求标记所选事件或全部保留历史，快照之后到达的事件保持未读，不修改其他用户的已读状态或录像。",
-      "对齐复选框，使用紧凑实时和录像图标、固定位置的新事件圆点及响应式筛选，标记已读不会移动列表。",
-      "区域目标、越线和徘徊规则在历史、通知和时间轴中使用一致的明确名称，也适用于保留事件，不推测人体或车辆类别。",
-      "进入事件实时画面时仅显示一台摄像机并启用按画幅排列，在实时页再次打开事件同样生效，不覆盖普通已保存布局。",
-      "通过已注册的受控数据库结构10至11迁移添加默认关闭的事件选项，保留账户、设置及录像引用，并按旧版本自身的结构描述校验更新来源。"
+      "按原始目标架构验证历史迁移凭据，不再错误使用下一版本的架构。",
+      "新架构迁移前验证已完成的计划和数据库历史，保留签名验证与回滚保护。",
+      "批量已读按钮旁新增紧凑删除按钮，可删除所选事件或整个历史快照。",
+      "删除共享历史前需确认，保留录像、摄像机设置、个人偏好和新收到的事件。",
+      "原子删除已读标记，并更新历史、未读数量和时间轴事件标记。",
+      "略微增加桌面剪辑窗口高度，小屏幕仍保留必要的滚动。"
     ]
   }
 }

@@ -122,6 +122,7 @@ def list_camera_events(db, user_id, *, limit=50, offset=0, **filters):
     # never consume events which arrived after the browser's snapshot.
     latest = event_query(db).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).first()
     read_cursor = cursor_for(latest)
+    history_count = event_query(db).filter(through_snapshot(latest.created_at, latest.id)).count() if latest else 0
     query = filtered(event_query(db), user_id=user_id, **filters)
     total = query.count()
     rows = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).offset(offset).limit(min(MAX_PAGE, limit)).all()
@@ -131,7 +132,7 @@ def list_camera_events(db, user_id, *, limit=50, offset=0, **filters):
     return {"items": [serialize(row, row.id in read_ids) for row in rows], "total": total, "limit": limit, "offset": offset,
             "unread_count": event_query(db).filter(~read_expression(user_id)).count(),
             "retention_days": RETENTION_DAYS, "max_events": MAX_EVENTS, "timezone": timezone_context(db).name,
-            "read_cursor": read_cursor}
+            "read_cursor": read_cursor, "history_count": history_count}
 
 
 def _insert_read_markers(db, user_id, rows):
@@ -149,16 +150,19 @@ def _insert_read_markers(db, user_id, rows):
 
 def mark_read(db, user_id, ids):
     ids = list(dict.fromkeys(ids))[:200]
-    rows = event_query(db).filter(AuditEvent.id.in_(ids)).all()
+    rows = event_query(db).filter(AuditEvent.id.in_(ids)).order_by(AuditEvent.created_at, AuditEvent.id).with_for_update().all()
     _insert_read_markers(db, user_id, rows)
     db.commit()
     notify_change()
     return len(rows)
 
 
+def through_snapshot(stamp, identifier):
+    return or_(AuditEvent.created_at < stamp, (AuditEvent.created_at == stamp) & (AuditEvent.id <= identifier))
+
+
 def mark_all_read(db, user_id, stamp, identifier):
-    query = event_query(db).filter(~read_expression(user_id), or_(AuditEvent.created_at < stamp,
-        (AuditEvent.created_at == stamp) & (AuditEvent.id <= identifier))).order_by(AuditEvent.created_at, AuditEvent.id)
+    query = event_query(db).filter(~read_expression(user_id), through_snapshot(stamp, identifier)).order_by(AuditEvent.created_at, AuditEvent.id).with_for_update()
     marked = 0
     # Bounded database batches inside one atomic user action, not a request per
     # page or event. Deterministic markers make concurrent retries idempotent.
@@ -173,6 +177,48 @@ def mark_all_read(db, user_id, stamp, identifier):
     return marked
 
 
+def delete_camera_events(db, *, ids=None, through=None, actor=None):
+    """Delete only explicitly selected episodes or a frozen history snapshot.
+
+    Read markers belong to every user, but neither this domain nor its cleanup
+    owns any recording, camera, preference or administrative journal row.
+    """
+    if (ids is None) == (through is None):
+        raise ValueError("camera_event_delete_scope_required")
+    query = event_query(db)
+    if ids is not None:
+        identifiers = list(dict.fromkeys(ids))
+        if not 1 <= len(identifiers) <= 200:
+            raise ValueError("camera_event_delete_selection_invalid")
+        query = query.filter(AuditEvent.id.in_(identifiers))
+    else:
+        query = query.filter(through_snapshot(*through))
+    deleted = 0
+    try:
+        # The retention cap is a cleanup policy, not permission to leave part
+        # of an explicitly deleted snapshot behind when cleanup is catching up.
+        while True:
+            rows = query.order_by(AuditEvent.created_at, AuditEvent.id).limit(1000).with_for_update().all()
+            if not rows:
+                break
+            batch = [row.id for row in rows]
+            db.query(AuditEvent).filter(AuditEvent.category == READ_CATEGORY, AuditEvent.target_id.in_(batch)).delete(synchronize_session=False)
+            deleted += event_query(db).filter(AuditEvent.id.in_(batch)).delete(synchronize_session=False)
+        if deleted and actor is not None:
+            from app.services.audit_log import create_event
+            log = create_event(db=db, actor=actor, category="cameras", event_type="cameras.events.deleted",
+                message_ru="Удалена история событий камер", message_en="Camera event history deleted",
+                metadata={"count": deleted, "scope": "selected" if ids is not None else "history"}, commit=False)
+            if log is None:
+                raise RuntimeError("camera_event_delete_audit_failed")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    notify_change()
+    return deleted
+
+
 def record_signal(db, group, camera, signal):
     received = now_utc()
     target_type = "camera" if camera else "camera_device"
@@ -182,7 +228,7 @@ def record_signal(db, group, camera, signal):
     # SQL narrows by indexed category/type and age. JSON holds only domain data.
     prior = event_query(db).filter(AuditEvent.event_type == "camera." + signal.kind,
                 AuditEvent.target_id == target_id, AuditEvent.created_at >= received - timedelta(days=1),
-                AuditEvent.event_metadata["episode"].as_string() == episode).order_by(AuditEvent.created_at.desc()).first()
+                AuditEvent.event_metadata["episode"].as_string() == episode).order_by(AuditEvent.created_at.desc()).with_for_update().first()
     if prior is not None and not (prior.event_metadata.get("active") is True or
                                   signal.active is None and (received - prior.created_at).total_seconds() < 10):
         prior = None
@@ -218,7 +264,7 @@ def record_signal(db, group, camera, signal):
 def source_disconnected(db, group):
     ids = [str(c["id"]) for c in group["cameras"]] + [group["device_id"]]
     rows = event_query(db).filter(AuditEvent.target_id.in_(ids), AuditEvent.created_at >= now_utc() - timedelta(days=1),
-                                  AuditEvent.event_metadata["active"].as_boolean().is_(True)).limit(256).all()
+                                  AuditEvent.event_metadata["active"].as_boolean().is_(True)).order_by(AuditEvent.created_at, AuditEvent.id).limit(256).with_for_update().all()
     for row in rows:
         # Lost observation is neither a confirmed end nor an ongoing alarm.
         row.event_metadata = {**row.event_metadata, "active": None, "state_unconfirmed": True}

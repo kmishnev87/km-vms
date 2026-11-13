@@ -361,7 +361,7 @@
 /* Shared clip dialog: fixed shell, quiet status and one aligned action row. */
 .archiveExportModal.archiveClipDialog {
   width: min(760px, calc(100vw - 32px));
-  height: min(480px, calc(100dvh - 32px));
+  height: min(520px, calc(100dvh - 32px));
   box-sizing: border-box;
   padding: 22px;
   border-radius: 18px;

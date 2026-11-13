@@ -21,6 +21,7 @@ function EventActionIcon({ action }) {
     {action === "live" ? <><rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-3v10l-6-3z"/></>
       : action === "archive" ? <><circle cx="12" cy="12" r="8.5"/><path d="M12 6.5V12l3.5 2M4 4v4H.5"/></>
       : action === "refresh" ? <><path d="M19.5 10A8 8 0 1 0 19 17M20 3v7h-7"/></>
+      : action === "delete" ? <><path d="M4.2 6.8h15.6M8.9 6.8V4.5h6.2v2.3M6.7 7.2 7.6 19c.1 1.05 1 1.9 2.05 1.9h4.7c1.05 0 1.95-.85 2.05-1.9l.9-11.8M10.1 10.7v6.6M13.9 10.7v6.6"/></>
       : <><path d="M2 11.5S5.5 6 11 6s9 5.5 9 5.5S16.5 17 11 17s-9-5.5-9-5.5Z"/><circle cx="11" cy="11.5" r="2.5"/><path d="m15.5 19 2 2 4-5"/></>}
   </svg>;
 }
@@ -45,6 +46,7 @@ export default function CameraEventsHub({ currentUser }) {
   const [selection, setSelection] = useState([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [errorToast, setErrorToast] = useState(null);
   const [eventToast, setEventToast] = useState(null);
   const [detectorCamera, setDetectorCamera] = useState("");
@@ -60,7 +62,7 @@ export default function CameraEventsHub({ currentUser }) {
   }
 
   useEffect(() => {
-    setOpen(false); setEventToast(null); setHistory(null); setPreference(null); setSelection([]);
+    setOpen(false); setEventToast(null); setHistory(null); setPreference(null); setSelection([]); setDeleteTarget(null); setBusy(false);
     const owner = ++generation.current;
     if (!enabled || !session) { setUnread(0); return undefined; }
     if (cached.session !== session) cached = { session, cursor: null, unread: 0 };
@@ -84,6 +86,7 @@ export default function CameraEventsHub({ currentUser }) {
             window.dispatchEvent(new CustomEvent(CAMERA_EVENT_REFRESH));
           } else if (value.changed) {
             setRefresh(n => n + 1);
+            window.dispatchEvent(new CustomEvent(CAMERA_EVENT_REFRESH));
           }
         } catch (error) {
           if (controller.signal.aborted || !current()) return;
@@ -117,7 +120,10 @@ export default function CameraEventsHub({ currentUser }) {
     const current = captureAuthSession();
     setLoading(true);
     apiFetch(`/camera-events?${query}`, { signal: controller.signal }).then(value => {
-      if (!controller.signal.aborted && current()) { setHistory(value); setUnread(value.unread_count); setSelection(previous => previous.filter(id => value.items.some(item => item.id === id))); }
+      if (!controller.signal.aborted && current()) {
+        setHistory(value); setUnread(value.unread_count); setSelection(previous => previous.filter(id => value.items.some(item => item.id === id)));
+        if (offset && offset >= value.total) setOffset(Math.max(0, Math.floor((value.total - 1) / 25) * 25));
+      }
     }).catch(error => { if (!controller.signal.aborted && current()) showError(error); })
       .finally(() => { if (!controller.signal.aborted && current()) setLoading(false); });
     return () => controller.abort();
@@ -165,10 +171,31 @@ export default function CameraEventsHub({ currentUser }) {
     });
   }
 
+  function requestDelete() {
+    if (busy || loading || !manage) return;
+    if (selection.length) setDeleteTarget({ ids: [...selection], count: selection.length });
+    else if (history?.read_cursor && history.history_count) setDeleteTarget({ through: history.read_cursor, count: history.history_count });
+  }
+
+  async function deleteEvents() {
+    const target = deleteTarget;
+    if (!target || busy) return;
+    await act(async current => {
+      const value = await apiFetch(target.ids ? "/camera-events/delete" : "/camera-events/delete-all", {
+        method: "POST", headers, body: JSON.stringify(target.ids ? { ids: target.ids } : { through: target.through }),
+      });
+      if (!current()) return;
+      setDeleteTarget(null); setSelection([]); setRefresh(n => n + 1);
+      window.dispatchEvent(new CustomEvent(CAMERA_EVENT_REFRESH));
+      setErrorToast({ id: `event-deleted-${Date.now()}`, title: t("cameraEvents.deleted", { count: value.deleted }), tone: "info" });
+    });
+  }
+
   function changeFilter(key, value) { setFilters(previous => ({ ...previous, [key]: value })); setOffset(0); setSelection([]); }
   const rows = history?.items || [];
   const allSelected = rows.length > 0 && rows.every(row => selection.includes(row.id));
   const bulkReadLabel = t(selection.length ? "cameraEvents.markSelectedRead" : "cameraEvents.markAllRead");
+  const bulkDeleteLabel = t(selection.length ? "cameraEvents.deleteSelected" : "cameraEvents.deleteAll");
   useEffect(() => {
     if (selectPageRef.current) selectPageRef.current.indeterminate = selection.length > 0 && !allSelected;
   }, [allSelected, selection.length, rows.length]);
@@ -187,7 +214,7 @@ export default function CameraEventsHub({ currentUser }) {
       </div>
     </div>
     <div className="cameraEventsHistory">
-    <div className="cameraEventsSelection"><input ref={selectPageRef} aria-label={t("cameraEvents.selectPage")} type="checkbox" checked={allSelected} disabled={!rows.length} onChange={e => setSelection(e.target.checked ? rows.map(row => row.id) : [])}/><div className="cameraEventsSelectionSummary"><span>{t("cameraEvents.selected", { count: selection.length })}</span><span className="cameraEventsTotal">{t("cameraEvents.found", { count: history?.total || 0 })}</span></div><button className="cameraEventsIconButton" type="button" title={bulkReadLabel} aria-label={bulkReadLabel} disabled={busy || (selection.length ? false : !unread || !history?.read_cursor)} onClick={() => selection.length ? readSelection(selection) : readAll()}><EventActionIcon action="read"/></button></div>
+    <div className="cameraEventsSelection"><input ref={selectPageRef} aria-label={t("cameraEvents.selectPage")} type="checkbox" checked={allSelected} disabled={!rows.length} onChange={e => setSelection(e.target.checked ? rows.map(row => row.id) : [])}/><div className="cameraEventsSelectionSummary"><span>{t("cameraEvents.selected", { count: selection.length })}</span><span className="cameraEventsTotal">{t("cameraEvents.found", { count: history?.total || 0 })}</span></div><div className="cameraEventsBulkActions"><button className="cameraEventsIconButton" type="button" title={bulkReadLabel} aria-label={bulkReadLabel} disabled={busy || (selection.length ? false : !unread || !history?.read_cursor)} onClick={() => selection.length ? readSelection(selection) : readAll()}><EventActionIcon action="read"/></button>{manage ? <button className="cameraEventsIconButton" type="button" title={bulkDeleteLabel} aria-label={bulkDeleteLabel} disabled={busy || loading || !(selection.length || history?.history_count)} onClick={requestDelete}><EventActionIcon action="delete"/></button> : null}</div></div>
     <div className="cameraEventsList" aria-busy={loading}>
       {loading && !history ? <div className="cameraEventsEmpty">{t("cameraEvents.loading")}</div> : !rows.length ? <div className="cameraEventsEmpty">{t("cameraEvents.empty")}</div> : rows.map(row => <article className={`cameraEventsRow ${row.read ? "isRead" : "isUnread"}`} key={row.id}>
         <input aria-label={t("cameraEvents.selectEvent", { camera: row.camera_name })} type="checkbox" checked={selection.includes(row.id)} onChange={e => setSelection(previous => e.target.checked ? [...previous, row.id] : previous.filter(id => id !== row.id))}/>
@@ -235,6 +262,12 @@ export default function CameraEventsHub({ currentUser }) {
     <OperationDialog dialog={open ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
       content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications", ...(manage ? ["detection"] : [])].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : tab === "notifications" ? preferenceContent : detectorContent}</div>
     } : null} onClose={() => setOpen(false)}/>
+    <OperationDialog dialog={deleteTarget ? {
+      id: "camera-events-delete", title: t("cameraEvents.deleteConfirmTitle"), tone: "warning", presentation: "compact-confirmation",
+      message: t(deleteTarget.ids ? "cameraEvents.deleteSelectedConfirm" : "cameraEvents.deleteAllConfirm", { count: deleteTarget.count }),
+      detail: t("cameraEvents.deleteScopeHelp"), busy, cancelLabel: t("cameraEvents.cancel"), closeLabel: t("cameraEvents.cancel"),
+      confirmLabel: t("cameraEvents.deleteConfirm"), confirmTone: "danger", onConfirm: deleteEvents,
+    } : null} onClose={() => setDeleteTarget(null)}/>
     </>, document.body) : null}
   </>;
 }

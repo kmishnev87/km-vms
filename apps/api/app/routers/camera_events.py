@@ -48,6 +48,11 @@ class ReadAll(BaseModel):
     through: str = Field(min_length=39, max_length=100)
 
 
+class DeleteSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[UUID] = Field(min_length=1, max_length=200)
+
+
 class DetectorChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: StrictBool
@@ -124,15 +129,30 @@ def mark_read(payload: ReadSelection, db: Session = Depends(get_db), user: User 
 
 @router.post("/read-all")
 def mark_all_read(payload: ReadAll, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    parsed, identifier = _snapshot_cursor(payload.through)
+    return {"marked": events.mark_all_read(db, user.id, parsed, identifier)}
+
+
+def _snapshot_cursor(through):
     try:
-        stamp, identifier = payload.through.split("|", 1)
+        stamp, identifier = through.split("|", 1)
         parsed = datetime.fromisoformat(stamp)
         if parsed.tzinfo is not None:
             raise ValueError()
         identifier = str(UUID(identifier))
     except (ValueError, TypeError):
         _failure("invalid_event_cursor", 422)
-    return {"marked": events.mark_all_read(db, user.id, parsed, identifier)}
+    return parsed, identifier
+
+
+@router.post("/delete")
+def delete_selected(payload: DeleteSelection, db: Session = Depends(get_db), user: User = Depends(require_permission("manage_cameras"))):
+    return {"deleted": events.delete_camera_events(db, ids=[str(item) for item in payload.ids], actor=user)}
+
+
+@router.post("/delete-all")
+def delete_history(payload: ReadAll, db: Session = Depends(get_db), user: User = Depends(require_permission("manage_cameras"))):
+    return {"deleted": events.delete_camera_events(db, through=_snapshot_cursor(payload.through), actor=user)}
 
 
 @router.get("/updates")

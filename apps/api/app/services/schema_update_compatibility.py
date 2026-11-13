@@ -74,7 +74,13 @@ class SchemaTransitionCompatibility:
         target_release: str,
         target_commit: str,
         registry_fingerprint_value: str | None = None,
+        target_schema_version: int | None = None,
     ) -> str:
+        # Historical plans were signed for their own immutable endpoint, not
+        # for every later migration appended to this registry.
+        target = self.TARGET_SCHEMA_VERSION if target_schema_version is None else target_schema_version
+        if type(target) is not int or not source_schema_version <= target <= self.TARGET_SCHEMA_VERSION:
+            raise SchemaControlError("plan_target_schema_version_invalid")
         registry_fingerprint_value = (
             self.REGISTRY_FINGERPRINT
             if registry_fingerprint_value is None
@@ -84,7 +90,7 @@ class SchemaTransitionCompatibility:
             raise SchemaControlError("plan_registry_fingerprint_invalid")
         transitions = self.PRODUCTION_MIGRATIONS.path(
             source_schema_version,
-            self.TARGET_SCHEMA_VERSION,
+            target,
         )
         payload = {
             "schema_version": 1,
@@ -94,7 +100,7 @@ class SchemaTransitionCompatibility:
             "source_shape_fingerprint": source_shape_fingerprint,
             "target_release": target_release,
             "target_commit": target_commit,
-            "target_schema_version": self.TARGET_SCHEMA_VERSION,
+            "target_schema_version": target,
             "registry_fingerprint": registry_fingerprint_value,
             "conditional_preparation": {
                 "preparation_id": (
