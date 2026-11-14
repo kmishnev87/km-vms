@@ -122,6 +122,9 @@ def serialize(row, read=False, ctx=None):
             "occurred_at": data.get("occurred_at") or format_storage_utc_iso(row.created_at),
             "received_at": row.created_at.replace(tzinfo=timezone.utc).isoformat(),
             "ended_at": data.get("ended_at"), "active": data.get("active"), "clock_uncertain": bool(data.get("clock_uncertain")),
+            # This is an observation, not a promise that an old alarm is live now.
+            "state_observed_at": data.get("last_seen_at") or format_storage_utc_iso(row.created_at),
+            "initial_state": bool(data.get("initial_state")),
             "source_ambiguous": bool(data.get("source_ambiguous")), "occurrences": int(data.get("occurrences", 1)),
             "read": bool(read), "state_unconfirmed": bool(data.get("state_unconfirmed")),
             "topic": str(data.get("topic") or "")[:512],
@@ -130,7 +133,7 @@ def serialize(row, read=False, ctx=None):
             "rule_kind": data.get("rule_kind") if data.get("rule_kind") in EVENT_KINDS else None}
 
 
-def list_camera_events(db, user_id, *, limit=50, offset=0, **filters):
+def list_camera_events(db, user_id, *, limit=50, offset=0, selection_id=None, **filters):
     # Capture the boundary before loading the list. A bulk acknowledgement must
     # never consume events which arrived after the browser's snapshot.
     latest = event_query(db).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).first()
@@ -142,10 +145,15 @@ def list_camera_events(db, user_id, *, limit=50, offset=0, **filters):
     ids = [r.id for r in rows]
     read_ids = {r[0] for r in db.query(AuditEvent.target_id).filter(AuditEvent.category == READ_CATEGORY,
                 AuditEvent.actor_user_id == user_id, AuditEvent.target_id.in_(ids)).all()} if ids else set()
+    selection = None
+    if selection_id is not None:
+        from app.services import camera_event_selections
+        selected_row, members = camera_event_selections.load(db, user_id, selection_id)
+        selection = camera_event_selections.describe(selected_row, members, ids)
     return {"items": [serialize(row, row.id in read_ids) for row in rows], "total": total, "limit": limit, "offset": offset,
             "unread_count": event_query(db).filter(~read_expression(user_id)).count(),
             "retention_days": RETENTION_DAYS, "max_events": MAX_EVENTS, "timezone": timezone_context(db).name,
-            "read_cursor": read_cursor, "history_count": history_count}
+            "read_cursor": read_cursor, "history_count": history_count, "selection": selection}
 
 
 def _insert_read_markers(db, user_id, rows):
@@ -232,43 +240,85 @@ def delete_camera_events(db, *, ids=None, through=None, actor=None):
     return deleted
 
 
-def record_signal(db, group, camera, signal):
-    if signal.kind not in EVENT_KINDS:
+def record_signal(db, group, camera, signal, *, diagnostics=None):
+    if signal.kind not in EVENT_KINDS and signal.active is not False:
         return None  # Unknown signals belong to bounded receiver diagnostics.
     received = now_utc()
     target_type = "camera" if camera else "camera_device"
     target_id = str(camera["id"]) if camera else group["device_id"]
     name = camera["name"] if camera else " / ".join(c["name"] for c in group["cameras"])[:255]
-    episode = hashlib.sha256(json.dumps([group["device_id"], signal.topic, signal.source], sort_keys=True).encode()).hexdigest()
-    # SQL narrows by indexed category/type and age. JSON holds only domain data.
-    prior = event_query(db).filter(AuditEvent.target_type == target_type, AuditEvent.target_id == target_id,
-                AuditEvent.created_at >= received - timedelta(days=1),
-                AuditEvent.event_metadata["episode"].as_string() == episode).order_by(AuditEvent.created_at.desc()).with_for_update().first()
+    identity = [group["device_id"], signal.topic, signal.source]
+    if signal.key:
+        identity.append(signal.key)
+    episode = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    # A property's Key identifies the individual object. Without it, one
+    # person's end could close another person's event in the same rule/zone.
+    # Do not invent keys for legacy rows: an unknowable old end stays unknown.
+    property_query = event_query(db).filter(AuditEvent.target_type == target_type, AuditEvent.target_id == target_id,
+                AuditEvent.event_metadata["episode"].as_string() == episode)
+    prior = property_query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).with_for_update().first()
     if prior is not None and not (prior.event_metadata.get("active") is True or
+                                  prior.event_metadata.get("state_unconfirmed") is True or
                                   signal.active is None and (received - prior.created_at).total_seconds() < 10):
         prior = None
-    if signal.initialized and signal.active is not False:
-        return None
     if signal.active is False:
-        if prior is not None:
-            prior.event_metadata = {**prior.event_metadata, "active": False, "ended_at": signal.occurred_at.replace(tzinfo=timezone.utc).isoformat()}
-            db.commit()
+        changed = False
+        # Distinct useful classifications can have independent alert rows for
+        # the SAME property/object. Its end closes them all, never other keys.
+        pending = property_query.filter(or_(AuditEvent.event_metadata["active"].as_boolean().is_(True),
+                                            AuditEvent.event_metadata["state_unconfirmed"].as_boolean().is_(True)))
+        while True:
+            rows = pending.order_by(AuditEvent.created_at, AuditEvent.id).with_for_update().limit(256).all()
+            if not rows:
+                break
+            for row in rows:
+                row.event_metadata = {**row.event_metadata, "active": False, "state_unconfirmed": False,
+                                      "last_seen_at": received.replace(tzinfo=timezone.utc).isoformat(),
+                                      "ended_at": signal.occurred_at.replace(tzinfo=timezone.utc).isoformat()}
+            db.flush()
+            changed = True
+        db.commit()
+        if changed:
             notify_change()
         return None
-    if signal.initialized:
+    if signal.initialized and signal.active is not True:
+        return None
+    from app.services import camera_event_repeats as repeats
+    repeat_key = repeats.signature(group, signal)
+    if prior is not None and prior.event_metadata.get("repeat_signature") not in {None, repeat_key}:
+        prior = property_query.filter(AuditEvent.event_metadata["repeat_signature"].as_string() == repeat_key,
+            or_(AuditEvent.event_metadata["active"].as_boolean().is_(True),
+                AuditEvent.event_metadata["state_unconfirmed"].as_boolean().is_(True))).order_by(
+                    AuditEvent.created_at.desc(), AuditEvent.id.desc()).with_for_update().first()
+    suppressed = repeats.check(db, target_type, target_id, repeat_key, received)
+    if suppressed and diagnostics is not None:
+        diagnostics["messages_suppressed"] = diagnostics.get("messages_suppressed", 0) + 1
+    if suppressed and prior is None:
+        db.commit()
         return None
     if prior is not None:
+        previous_state = (prior.event_metadata.get("active"), bool(prior.event_metadata.get("state_unconfirmed")))
+        observed_state = signal.active if signal.active is not None else previous_state[0]
+        unconfirmed = previous_state[1] if signal.active is None else False
         classes = set(prior.event_metadata.get("object_kinds") or [prior.event_metadata.get("object_kind")])
         classes.update(getattr(signal, "object_kinds", ()) or [getattr(signal, "object_kind", None)])
         classes = [kind for kind in ("person", "vehicle", "animal") if kind in classes]
         changed = classes != (prior.event_metadata.get("object_kinds") or []) or (
             not prior.event_metadata.get("rule_kind") and getattr(signal, "rule_kind", None))
         prior.event_metadata = {**prior.event_metadata, "last_seen_at": received.replace(tzinfo=timezone.utc).isoformat(),
-                                "occurrences": min(1000000, int(prior.event_metadata.get("occurrences", 1)) + 1),
+                                "active": observed_state, "state_unconfirmed": unconfirmed,
+                                "occurrences": min(1000000, int(prior.event_metadata.get("occurrences", 1)) + int(not signal.initialized and not suppressed)),
                                 "object_kinds": classes, "object_kind": next(iter(classes), None),
-                                "rule_kind": prior.event_metadata.get("rule_kind") or getattr(signal, "rule_kind", None)}
-        db.commit()
+                                "rule_kind": prior.event_metadata.get("rule_kind") or getattr(signal, "rule_kind", None),
+                                **repeats.attributes(repeat_key, received)}
         if changed:
+            # A later object classification must still qualify a phone's filters
+            # after the initial unclassified start was already consumed.
+            prior.event_metadata = {**prior.event_metadata, "mobile_notification_at": received.strftime("%Y-%m-%d %H:%M:%S.%f")}
+            from app.services.mobile_push import signal_change
+            signal_change(db)
+        db.commit()
+        if changed or previous_state != (observed_state, unconfirmed):
             notify_change()
         return None
     row = AuditEvent(id=str(uuid.uuid4()), created_at=received, category=CATEGORY, event_type="camera." + signal.kind,
@@ -276,27 +326,37 @@ def record_signal(db, group, camera, signal):
                      target_id=target_id, target_name=name, event_metadata={
                          "episode": episode, "topic": signal.topic, "occurred_at": signal.occurred_at.replace(tzinfo=timezone.utc).isoformat(),
                          "camera_at": signal.camera_at.replace(tzinfo=timezone.utc).isoformat() if signal.camera_at else None,
-                         "active": signal.active, "clock_uncertain": signal.clock_uncertain,
+                         "active": signal.active, "initial_state": signal.initialized, "clock_uncertain": signal.clock_uncertain,
                          "source_ambiguous": camera is None, "occurrences": 1,
                          "rule_kind": getattr(signal, "rule_kind", None),
                          "object_kind": getattr(signal, "object_kind", None),
                          "object_kinds": list(getattr(signal, "object_kinds", ()) or filter(None, [getattr(signal, "object_kind", None)])),
+                         **repeats.attributes(repeat_key, received),
                      })
     db.add(row)
+    from app.services.mobile_push import signal_change, wake_local
+    signal_change(db)
     db.commit()
     notify_change()
+    wake_local()
     return row.id
 
 
 def source_disconnected(db, group):
     ids = [str(c["id"]) for c in group["cameras"]] + [group["device_id"]]
-    rows = event_query(db).filter(AuditEvent.target_id.in_(ids), AuditEvent.created_at >= now_utc() - timedelta(days=1),
-                                  AuditEvent.event_metadata["active"].as_boolean().is_(True)).order_by(AuditEvent.created_at, AuditEvent.id).limit(256).with_for_update().all()
-    for row in rows:
-        # Lost observation is neither a confirmed end nor an ongoing alarm.
-        row.event_metadata = {**row.event_metadata, "active": None, "state_unconfirmed": True}
+    query = event_query(db).filter(AuditEvent.target_id.in_(ids), AuditEvent.event_metadata["active"].as_boolean().is_(True))
+    changed = False
+    while True:
+        rows = query.order_by(AuditEvent.created_at, AuditEvent.id).limit(256).with_for_update().all()
+        if not rows:
+            break
+        for row in rows:
+            # Lost observation is neither a confirmed end nor an ongoing alarm.
+            row.event_metadata = {**row.event_metadata, "active": None, "state_unconfirmed": True}
+        db.flush()
+        changed = True
     db.commit()
-    if rows:
+    if changed:
         notify_change()
 
 

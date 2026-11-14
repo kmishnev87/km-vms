@@ -35,7 +35,8 @@ assert.equal(livePage.includes("onAudioPlaybackBlocked"), true, "browser autopla
 assert.equal(livePage.includes("live-audio-blocked-"), true);
 assert.equal(livePage.includes("setError(TEXT.audioBlocked)"), false);
 assert.equal(livePage.includes("addAllCameras"), true);
-assert.equal(livePage.includes("layoutTiles([...active, ...additions]"), true, "Add All behavior remains present");
+assert.equal(livePage.includes("return [...active, ...additions]"), true, "Add All keeps existing streams/audio and adds only missing camera views");
+assert.match(livePage, /function addAllCameras\(\) \{\s*setFrameLayoutActive\(true\)/);
 assert.equal(livePage.includes("setActiveAudioTileId(\"\")"), true, "active audio can be turned off");
 assert.equal(livePage.includes("onChange={(event) => updateTile(tile.id, { stream: event.target.value })}"), true);
 

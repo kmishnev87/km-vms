@@ -7,45 +7,9 @@ import { useI18n } from "../lib/i18n";
 import useTimelineCameraEvents from "../lib/useTimelineCameraEvents";
 import { eventLabelKey } from "../lib/cameraEvents";
 
-const ZOOM_OPTIONS = [
-  { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
-  { key: "3d", label: "3д", hours: 72, majorEveryMinutes: 360, minorEveryMinutes: 180 },
-  { key: "7d", label: "7д", hours: 168, majorEveryMinutes: 720, minorEveryMinutes: 360 },
-];
+import { TIMELINE_ZOOM_KEYS, timelineScale, timelineAxis, recordingRangeTarget } from "../lib/chronologyTimelineScale";
 
 const DRAG_THRESHOLD_PX = 4;
-
-function pad(value) {
-  return String(value).padStart(2, "0");
-}
-
-function buildTickLabel(dt, zoomKey) {
-  const dateLabel = `${pad(dt.getUTCDate())}.${pad(dt.getUTCMonth() + 1)}`;
-  const timeLabel = `${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}`;
-  const isMidnight = dt.getUTCHours() === 0 && dt.getUTCMinutes() === 0;
-
-  if (zoomKey === "24h") {
-    return {
-      primary: timeLabel,
-      secondary: "",
-      multiline: false,
-    };
-  }
-
-  if (isMidnight) {
-    return {
-      primary: dateLabel,
-      secondary: "",
-      multiline: false,
-    };
-  }
-
-  return {
-    primary: dateLabel,
-    secondary: timeLabel,
-    multiline: true,
-  };
-}
 
 function parseNaiveDateTime(value) {
   if (!value) return Number.NaN;
@@ -67,10 +31,6 @@ function parseNaiveDateTime(value) {
     Number(minutes),
     Number(seconds)
   );
-}
-
-function alignMs(ms, stepMs) {
-  return Math.floor(ms / stepMs) * stepMs;
 }
 
 export default function ChronologyTimeline({
@@ -110,7 +70,7 @@ export default function ChronologyTimeline({
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
   }, []);
 
-  const zoom = ZOOM_OPTIONS.find((item) => item.key === zoomKey) || ZOOM_OPTIONS[0];
+  const zoom = timelineScale(zoomKey);
   const { events: cameraEvents, truncated: eventMarkersLimited } = useTimelineCameraEvents(selectedCameraIds, currentTs?.getTime(), zoom.hours);
   const eventMarkers = useMemo(() => cameraEvents.map(event => ({ ...event, ms: parseNaiveDateTime(event.timestamp_system) })).filter(event => Number.isFinite(event.ms)).sort((a, b) => a.ms - b.ms), [cameraEvents]);
   const previousEvent = [...eventMarkers].reverse().find(event => event.ms < (currentTs?.getTime() || 0) - 500);
@@ -119,33 +79,7 @@ export default function ChronologyTimeline({
 
   const { startMs, endMs, axisMarks } = useMemo(() => {
     const centerMs = currentTs ? currentTs.getTime() : Date.now();
-    const halfSpanMs = (zoom.hours * 3600 * 1000) / 2;
-    const nextStartMs = centerMs - halfSpanMs;
-    const nextEndMs = centerMs + halfSpanMs;
-
-    const majorStepMs = zoom.majorEveryMinutes * 60 * 1000;
-    const minorStepMs = zoom.minorEveryMinutes * 60 * 1000;
-    const marks = [];
-
-    for (let ms = alignMs(nextStartMs, minorStepMs); ms <= nextEndMs; ms += minorStepMs) {
-      if (ms < nextStartMs) continue;
-
-      const isMajor = ms % majorStepMs === 0;
-      const tickLabel = isMajor ? buildTickLabel(new Date(ms), zoom.key) : null;
-
-      marks.push({
-        ms,
-        isMajor,
-        tickLabel,
-        leftPct: ((ms - nextStartMs) / (nextEndMs - nextStartMs)) * 100,
-      });
-    }
-
-    return {
-      startMs: nextStartMs,
-      endMs: nextEndMs,
-      axisMarks: marks,
-    };
+    return timelineAxis(centerMs, zoom);
   }, [currentTs, zoom]);
   const labeledMarks = useMemo(() => selectTimelineLabels(axisMarks, axisWidth), [axisMarks, axisWidth]);
 
@@ -182,7 +116,7 @@ export default function ChronologyTimeline({
     const rect = axisRef.current?.getBoundingClientRect();
     if (!rect || event.clientX < rect.left || event.clientX > rect.right) return;
 
-    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    rootRef.current?.setPointerCapture?.(event.pointerId);
     dragStateRef.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
@@ -203,7 +137,7 @@ export default function ChronologyTimeline({
     const deltaX = event.clientX - state.startClientX;
     if (!state.active && event.pointerType === "touch" && Math.abs(event.clientY - state.startClientY) > Math.max(DRAG_THRESHOLD_PX, Math.abs(deltaX))) {
       dragStateRef.current = null;
-      event.currentTarget?.releasePointerCapture?.(event.pointerId);
+      rootRef.current?.releasePointerCapture?.(event.pointerId);
       return;
     }
     if (!state.active && Math.abs(deltaX) < DRAG_THRESHOLD_PX) {
@@ -229,7 +163,7 @@ export default function ChronologyTimeline({
     if (!state || state.pointerId !== event.pointerId) return;
 
     dragStateRef.current = null;
-    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    rootRef.current?.releasePointerCapture?.(event.pointerId);
 
     if (cancelled) {
       setDragging(false);
@@ -250,7 +184,7 @@ export default function ChronologyTimeline({
     const clickX = Math.max(0, Math.min(state.rect.width, event.clientX - state.rect.left));
     const ratio = clickX / state.rect.width;
     const targetMs = state.startMs + (state.endMs - state.startMs) * ratio;
-    onSelectTime?.(new Date(targetMs));
+    onSelectTime?.(new Date(state.rangeTargetMs ?? targetMs));
   }
 
   return (
@@ -261,6 +195,7 @@ export default function ChronologyTimeline({
             <button
               className="chronologyTimelineZoomButton"
               onClick={onZoomOut}
+              disabled={zoom.key === TIMELINE_ZOOM_KEYS[0]}
               title="Уменьшить диапазон"
             >
               -
@@ -271,6 +206,7 @@ export default function ChronologyTimeline({
             <button
               className="chronologyTimelineZoomButton"
               onClick={onZoomIn}
+              disabled={zoom.key === TIMELINE_ZOOM_KEYS[TIMELINE_ZOOM_KEYS.length - 1]}
               title="Увеличить диапазон"
             >
               +
@@ -372,6 +308,14 @@ export default function ChronologyTimeline({
                               width: `${Math.max(widthPct, 0.35)}%`,
                             }}
                             title={`${range.start} — ${range.end}`}
+                            onPointerDown={event => {
+                              handlePointerDown(event);
+                              if (dragStateRef.current) {
+                                const rect = event.currentTarget.getBoundingClientRect();
+                                dragStateRef.current.rangeTargetMs = recordingRangeTarget(clippedStart, clippedEnd, rect.width ? (event.clientX - rect.left) / rect.width : 0);
+                              }
+                              event.stopPropagation();
+                            }}
                           />
                         );
                       })}

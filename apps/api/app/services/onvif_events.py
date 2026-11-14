@@ -215,6 +215,8 @@ class Signal:
     object_kind: str | None = None
     data_keys: tuple[str, ...] = ()
     object_kinds: tuple[str, ...] = ()
+    key: dict = field(default_factory=dict)
+    operation: str | None = None
 
 
 def parse_notification(notification, received_at=None):
@@ -233,19 +235,23 @@ def parse_notification(notification, received_at=None):
     except (ValueError, OverflowError):
         pass
     uncertain = camera_at is None or abs((camera_at - received_at).total_seconds()) > 300
-    source, data = {}, {}
+    source, data, key = {}, {}, {}
     for section in root:
         if not isinstance(section.tag, str):
             continue
-        target = source if etree.QName(section).localname == "Source" else data if etree.QName(section).localname == "Data" else None
+        target = {"Source": source, "Key": key, "Data": data}.get(etree.QName(section).localname)
         if target is not None:
             for item in list(section)[:32]:
                 if isinstance(item.tag, str) and etree.QName(item).localname == "SimpleItem":
                     target[text(item.get("Name"), 80)] = text(item.get("Value"), 255)
     rule = rule_kind_for(topic, data)
     lowered = {k.lower(): v for k, v in data.items()}
+    operation = root.get("PropertyOperation")
+    operation = operation if operation in {"Initialized", "Changed", "Deleted"} else None
     # Explicit state wins over class flags, including an end with no class data.
-    active = boolean(lowered.get("state"))
+    # ONVIF Core 9.4.2.1: a Deleted property has ceased to exist. Its Data
+    # section may be absent; treating it as an untyped pulse leaves alarms open.
+    active = False if operation == "Deleted" else boolean(lowered.get("state"))
     state_names = {"intrusion": ("isinside", "isintrusion"),
                    "line_crossing": ("iscrossed", "islinecrossed"),
                    "loitering": ("isloitering", "isstaying"),
@@ -264,9 +270,9 @@ def parse_notification(notification, received_at=None):
             "ispeople", "ishuman", "isperson", "isvehicle", "iscar", "isanimal"}]
         known = [v for v in classes if v is not None]
         active = any(known) if known else None
-    return Signal(topic, kind_for(topic, data), active, root.get("PropertyOperation") == "Initialized",
+    return Signal(topic, kind_for(topic, data), active, operation == "Initialized",
                   received_at if uncertain else camera_at, camera_at, uncertain, source,
-                  rule, object_kind_for(topic, data), tuple(data)[:32], object_kinds_for(topic, data))
+                  rule, object_kind_for(topic, data), tuple(data)[:32], object_kinds_for(topic, data), key, operation)
 
 
 def safe_endpoint(address, host, port, *, fallback="/onvif/event_service"):

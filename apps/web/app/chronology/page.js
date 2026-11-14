@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { orderedChronologyCameras, sameChronologyCameraGroup } from "../../lib/chronologyCameraCatalog";
 import { fitCameraFrames, sameFrameLayout, savedFrameRatio } from "../../lib/liveAspectLayout";
 import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
 import { useAuthSession } from "../../lib/useAuthSession";
@@ -16,6 +17,7 @@ import ChronologyTimeline from "../../components/ChronologyTimeline";
 import ArchiveExportDialog from "../../components/ArchiveExportDialog";
 import useArchiveExport from "../../lib/useArchiveExport";
 import { reconcilePlaybackMembership, timelineRangeWindow, timelineRangeWindowCovers, timelineRangesNeedReload } from "../../lib/workspaceContinuity";
+import { TIMELINE_ZOOM_KEYS, TIMELINE_ZOOM_HOURS } from "../../lib/chronologyTimelineScale";
 import { OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import { apiFetch, getAuthToken } from "../../lib/api";
 import {
@@ -45,12 +47,8 @@ import {
 const POINTER_DRAG_THRESHOLD_PX = 8;
 const DOUBLE_TAP_MS = 360;
 const DOUBLE_TAP_DISTANCE_PX = 22;
-const ZOOM_KEYS = ["24h", "3d", "7d"];
-const ZOOM_HOURS = {
-  "24h": 24,
-  "3d": 72,
-  "7d": 168,
-};
+const ZOOM_KEYS = TIMELINE_ZOOM_KEYS;
+const ZOOM_HOURS = TIMELINE_ZOOM_HOURS;
 const HYDRATION_INITIAL_TS = new Date(Date.UTC(2000, 0, 1, 0, 0, 0));
 
 const SPEED_OPTIONS = [
@@ -297,7 +295,7 @@ export default function ChronologyPage() {
   async function loadCameras(ownerSession = workspaceSession, generation = workspaceGenerationRef.current) {
     if (!isWorkspaceCurrent(ownerSession, generation)) return;
     try {
-      const data = await apiFetch("/viewer/cameras");
+      const data = await apiFetch("/chronology/cameras");
       if (!isWorkspaceCurrent(ownerSession, generation)) return;
       cameraLoadErrorRef.current = "";
       const loaded = Array.isArray(data) ? data : [];
@@ -515,7 +513,7 @@ export default function ChronologyPage() {
   }, [frameLayoutActive, frameLayoutKey, frameLayoutBounds.width, frameLayoutBounds.height, frameLayoutBounds.dimensions]);
 
   const orderedCameras = useMemo(
-    () => mergeSidebarCameraOrder(cameras, sidebarCameraOrder),
+    () => orderedChronologyCameras(cameras, sidebarCameraOrder, mergeSidebarCameraOrder),
     [cameras, sidebarCameraOrder]
   );
 
@@ -782,12 +780,12 @@ export default function ChronologyPage() {
   }
 
   function addAllCameras() {
-    setFrameLayoutActive(false);
+    setFrameLayoutActive(true);
     setTiles((prev) => {
       const active = activeLayoutTiles(prev);
       const existing = workspaceCameraIds(active);
       const additions = cameras
-        .filter((camera) => !existing.has(String(camera.id)))
+        .filter((camera) => !camera.deleted && !existing.has(String(camera.id)))
         .map((camera, idx) =>
           normalizeTile({
             id: `${camera.id}-${Date.now()}-${idx}`,
@@ -800,7 +798,7 @@ export default function ChronologyPage() {
           })
         );
       if (!additions.length) return prev;
-      return layoutTiles([...active, ...additions], workspaceBounds());
+      return [...active, ...additions];
     });
   }
 
@@ -836,6 +834,7 @@ export default function ChronologyPage() {
     const sourceId = String(sourceCameraId || "");
     const targetId = String(targetCameraId || "");
     if (!sourceId || !targetId || sourceId === targetId) return;
+    if (!sameChronologyCameraGroup(cameras, sourceId, targetId)) return;
     const current = orderedCameras.map((camera) => String(camera.id));
     const from = current.indexOf(sourceId);
     const to = current.indexOf(targetId);
@@ -1765,10 +1764,12 @@ export default function ChronologyPage() {
               </button>
             </div>
           <div className="chronologyCameraList">
-            {orderedCameras.map((camera) => {
+            {orderedCameras.map((camera, index) => {
               const dropParts = sidebarDropParts(sidebarDropTargetCameraId);
               const isDropTarget = dropParts.cameraId === String(camera.id);
               return (
+              <Fragment key={camera.id}>
+              {camera.deleted && !orderedCameras[index - 1]?.deleted ? <div className="chronologyArchivedDivider" role="separator" aria-label={t("chronologyArchive.retainedCameras")}><span>{t("chronologyArchive.retainedCameras")}</span></div> : null}
               <div
                 key={camera.id}
                 className={`chronologyCameraItem ${draggedSidebarCameraId === String(camera.id) ? "isReorderDragging" : ""} ${isDropTarget ? "isReorderDropTarget" : ""} ${isDropTarget && dropParts.position === "after" ? "isReorderDropAfter" : ""} ${isDropTarget && dropParts.position === "before" ? "isReorderDropBefore" : ""}`}
@@ -1817,7 +1818,7 @@ export default function ChronologyPage() {
                   reorderSidebarCamera(camera.id, sidebarDropPosition(event), reorderId);
                 }}
               >
-                <div className="chronologyCameraName">{camera.name}</div>
+                <div className="chronologyCameraName">{camera.name}{camera.deleted ? <span className="chronologyDeletedLabel"> ({t("chronologyArchive.deleted")})</span> : null}</div>
                 <button type="button" className="workspaceSidebarDragHandle" data-sidebar-drag-handle="true" title="Перетащить камеру" aria-label={`Перетащить камеру: ${camera.name}`} onKeyDown={(event) => {
                   if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
                   event.preventDefault();
@@ -1825,8 +1826,9 @@ export default function ChronologyPage() {
                   const target = orderedCameras[index + (event.key === "ArrowUp" ? -1 : 1)];
                   if (target) reorderSidebarCamera(target.id, event.key === "ArrowUp" ? "before" : "after", camera.id);
                 }}>⠿</button>
-                <div className="chronologyCameraMeta">{camera.host}:{camera.port}</div>
+                <div className="chronologyCameraMeta">{camera.deleted ? t("chronologyArchive.archiveOnly") : `${camera.host}:${camera.port}`}</div>
               </div>
+              </Fragment>
               );
             })}
           </div>

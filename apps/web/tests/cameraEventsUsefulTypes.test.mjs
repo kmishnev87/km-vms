@@ -52,7 +52,8 @@ test("compact time controls stay editable while scheduling is off and selecting 
   assert.doesNotMatch(hub, /disabled=\{busy \|\| !preference\.hours_enabled\}/);
   assert.match(css, /\.cameraEventsTimeRange > label\s*\{[^}]*display: inline-flex;[^}]*align-items: center;/);
   assert.match(css, /\.cameraEventsTimeRange input\[type="time"\]\s*\{\s*width: 82px; height: 32px;/);
-  assert.match(css, /::-webkit-calendar-picker-indicator\s*\{\s*display: none;/);
+  assert.match(css, /::-webkit-calendar-picker-indicator\s*\{\s*display: block; opacity: 1; visibility: visible;/);
+  assert.match(css, /\.cameraEventsSchedule\s*\{[^}]*justify-content: flex-start;/);
   let preference = { hours_enabled: false, start_minute: 0, end_minute: 0 };
   const source = hub.slice(hub.indexOf("  function changeNotificationTime("), hub.indexOf("  const preferenceContent"));
   const scope = { minuteValue: value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3)),

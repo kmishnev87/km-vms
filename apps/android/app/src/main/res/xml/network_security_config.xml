@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- NAS installations may use HTTP or HTTPS, as explicitly approved by the
+         owner. HTTPS retains Android's normal certificate and hostname checks;
+         this setting only permits an explicitly selected HTTP installation. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

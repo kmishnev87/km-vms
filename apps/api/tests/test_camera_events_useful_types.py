@@ -86,11 +86,12 @@ def test_mixed_objects_and_late_classification_preserve_all_useful_information(d
     message = data_items(notification(), ClassTypes="Human Vehicle Animal")
     signal = ov.parse_notification(message)
     assert signal.object_kinds == ("person", "vehicle", "animal")
-    assert events.record_signal(db, group(), group()["cameras"][0], signal) is None
-    item = events.serialize(db.get(AuditEvent, identifier))
+    classified = events.record_signal(db, group(), group()["cameras"][0], signal)
+    assert classified and classified != identifier  # A new useful class is not spam.
+    item = events.serialize(db.get(AuditEvent, classified))
     assert item["object_kinds"] == ["person", "vehicle", "animal"]
     for kind in ("motion", "person", "vehicle", "animal"):
-        assert events.list_camera_events(db, 1, kind=kind)["total"] == 1
+        assert events.list_camera_events(db, 1, kind=kind)["total"] == (2 if kind == "motion" else 1)
         assert events.notifications_allowed({"kinds": [kind]}, item, SimpleNamespace())
 
 

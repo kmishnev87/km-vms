@@ -1,5 +1,8 @@
 /* Chronology shell, system fullscreen, workspace, tiles and responsive overrides. */
 
+.chronologyArchivedDivider { margin: 14px 2px 7px; padding-top: 10px; border-top: 1px solid var(--border, #dbe3ef); color: #64748b; font-size: 11px; line-height: 1.4; }
+.chronologyDeletedLabel { color: #64748b; font-weight: 400; font-size: .86em; }
+
 .chronologyShell {
   height: calc(100vh - 78px);
   min-height: 620px;

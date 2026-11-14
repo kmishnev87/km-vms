@@ -19,6 +19,7 @@ from app.models.audit_event import AuditEvent
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.services import camera_events as events
+from app.services import camera_event_selections as selections
 from app.services.audit_log import create_event
 from app.services.camera_events_worker import receiver_states
 from app.services.onvif_events import DeviceClient, EventDeviceError, detector_lock, detector_state, set_detector
@@ -52,6 +53,20 @@ class ReadAll(BaseModel):
 class DeleteSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ids: list[UUID] = Field(min_length=1, max_length=200)
+
+
+class FilterSelection(ReadAll):
+    camera_id: int | None = Field(None, ge=1)
+    kind: EventKind | None = None
+    since: str | None = Field(None, max_length=40)
+    until: str | None = Field(None, max_length=40)
+    unread: StrictBool = False
+    visible_ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+
+class SelectionAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    excluded_ids: list[UUID] = Field(default_factory=list, max_length=events.MAX_EVENTS)
 
 
 class DetectorChange(BaseModel):
@@ -93,12 +108,44 @@ def _since(value, db):
 def history(camera_id: int | None = Query(None, ge=1), kind: EventKind | None = None,
             since: str | None = Query(None, max_length=40), until: str | None = Query(None, max_length=40), unread: bool = False,
             limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100000),
+            selection_id: UUID | None = None,
             db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     start, end = _since(since, db), _since(until, db)
     if start and end and start > end:
         _failure("invalid_event_date", 422)
-    return events.list_camera_events(db, user.id, camera_id=camera_id, kind=kind, since=start, until=end,
-                                    unread=unread, limit=limit, offset=offset)
+    try:
+        return events.list_camera_events(db, user.id, camera_id=camera_id, kind=kind, since=start, until=end,
+                                        unread=unread, limit=limit, offset=offset, selection_id=selection_id)
+    except selections.SelectionError as exc:
+        _failure(exc.code)
+
+
+@router.post("/selections")
+def select_filtered(payload: FilterSelection, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    start, end = _since(payload.since, db), _since(payload.until, db)
+    if start and end and start > end:
+        _failure("invalid_event_date", 422)
+    try:
+        return selections.create(db, user.id, _snapshot_cursor(payload.through),
+            {"camera_id": payload.camera_id, "kind": payload.kind, "since": start, "until": end, "unread": payload.unread}, payload.visible_ids)
+    except selections.SelectionError as exc:
+        _failure(exc.code)
+
+
+@router.post("/selections/{selection_id}/read")
+def read_filtered(selection_id: UUID, payload: SelectionAction, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    try:
+        return {"marked": selections.apply(db, user.id, selection_id, excluded_ids=payload.excluded_ids)}
+    except selections.SelectionError as exc:
+        _failure(exc.code)
+
+
+@router.post("/selections/{selection_id}/delete")
+def delete_filtered(selection_id: UUID, payload: SelectionAction, db: Session = Depends(get_db), user: User = Depends(require_permission("manage_cameras"))):
+    try:
+        return {"deleted": selections.apply(db, user.id, selection_id, excluded_ids=payload.excluded_ids, delete=True, actor=user)}
+    except selections.SelectionError as exc:
+        _failure(exc.code)
 
 
 @router.get("/cameras")

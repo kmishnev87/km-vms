@@ -187,6 +187,7 @@ class BulkDeleteRequest(BaseModel):
 class RecordingDeletionPlanRequest(BaseModel):
     scope: Literal["camera", "all"]
     camera: str | None = None
+    camera_id: int | None = Field(default=None, gt=0)
 
 
 class RecordingDeletionExecuteRequest(BaseModel):
@@ -385,7 +386,11 @@ def safe_recording_camera_label(value: str | None, fallback: str = "Удалён
     return text
 
 
-def apply_camera_filter(query, db: Session, camera_name: str | None):
+def apply_camera_filter(query, db: Session, camera_name: str | None, camera_id: int | None = None):
+    if camera_id is not None:
+        if not isinstance(camera_id, int) or isinstance(camera_id, bool) or camera_id < 1:
+            raise HTTPException(status_code=400, detail="Invalid archive camera selection")
+        return query.filter(RecordingSegment.camera_id == camera_id)
     if not camera_name or camera_name == "__all__":
         return query
     if is_technical_deleted_camera_label(camera_name):
@@ -406,10 +411,14 @@ def apply_camera_filter(query, db: Session, camera_name: str | None):
     return query.filter(or_(*filters))
 
 
-def _deletion_scope_query(db: Session, *, scope: str, camera: str | None = None):
+def _deletion_scope_query(db: Session, *, scope: str, camera: str | None = None, camera_id: int | None = None):
     query = finalized_segments_query(db)
     if scope == "all":
+        if camera_id is not None:
+            raise HTTPException(status_code=400, detail="Camera selection conflicts with all-recordings scope")
         return query
+    if camera_id is not None:
+        return apply_camera_filter(query, db, None, camera_id)
     camera_label = str(camera or "").strip()
     if not camera_label or camera_label == "__all__" or is_technical_deleted_camera_label(camera_label):
         raise HTTPException(status_code=400, detail={"error": "recording_deletion_camera_required"})
@@ -660,9 +669,10 @@ def collect_recording_files(
     sort_by: str = "created_at",
     sort_dir: str = "desc",
     verify_files: bool = False,
+    camera_id: int | None = None,
 ) -> list[dict]:
     ctx = timezone_context(db)
-    query = apply_camera_filter(finalized_segments_query(db), db, camera_name)
+    query = apply_camera_filter(finalized_segments_query(db), db, camera_name, camera_id)
     query = apply_time_filter(query, db, date_value=date_value, from_value=from_value, to_value=to_value)
     query = order_recordings_query(query, sort_by=sort_by, sort_dir=sort_dir)
     if limit is not None:
@@ -802,8 +812,9 @@ def recordings_query_for_filters(
     date_value: str | None = None,
     from_value: str | None = None,
     to_value: str | None = None,
+    camera_id: int | None = None,
 ):
-    query = apply_camera_filter(finalized_segments_query(db), db, camera_name)
+    query = apply_camera_filter(finalized_segments_query(db), db, camera_name, camera_id)
     return apply_time_filter(query, db, date_value=date_value, from_value=from_value, to_value=to_value)
 
 
@@ -816,6 +827,15 @@ def stream_video(request: Request, file_path: Path, media_type_override: str | N
     return stream_video_response(request, file_path, media_type=media_type)
 
 
+def collect_browser_camera_options(db: Session, retained_options: list[dict]) -> list[dict]:
+    active = db.query(Camera).filter(Camera.deleted_at.is_(None)).all()
+    options = [{"id": str(camera.id), "name": safe_recording_camera_label(camera.name),
+                "deleted": False, "value": f"camera:{camera.id}"} for camera in active]
+    options.extend({**item, "value": f"camera:{item['id']}"}
+                   for item in retained_options if item["deleted"])
+    return sorted(options, key=lambda item: (item["deleted"], item["name"].casefold(), item["id"]))
+
+
 @router.get("/cameras")
 def list_recording_cameras(
     db: Session = Depends(get_db),
@@ -825,9 +845,11 @@ def list_recording_cameras(
     # Keep a real camera relation; removal is not permission to export deleted
     # or unusable source files.
     export_query = finalized_segments_query(db).join(Camera, Camera.id == RecordingSegment.camera_id).filter(RecordingSegment.deleted_at.is_(None))
+    retained_options = collect_recording_camera_options(db, export_query)
     return {
         "items": collect_camera_names(db),
-        "export_items": collect_recording_camera_options(db, export_query),
+        "export_items": retained_options,
+        "camera_items": collect_browser_camera_options(db, retained_options),
     }
 
 
@@ -879,7 +901,10 @@ def list_recordings(
     sort_dir: str = Query(default="desc"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_recordings")),
+    camera_id: int | None = Query(default=None, ge=1),
 ):
+    if not isinstance(camera_id, int):
+        camera_id = None
     if not isinstance(camera, str):
         camera = None
     if not isinstance(date, str):
@@ -900,6 +925,7 @@ def list_recordings(
     try:
         base_query = recordings_query_for_filters(
             db,
+            camera_id=camera_id,
             camera_name=camera if camera and camera != "__all__" else None,
             date_value=date,
             from_value=from_ts,
@@ -907,6 +933,7 @@ def list_recordings(
         )
         items = collect_recording_files(
             db,
+            camera_id=camera_id,
             camera_name=camera if camera and camera != "__all__" else None,
             date_value=date,
             from_value=from_ts,
@@ -1040,7 +1067,7 @@ def create_recording_deletion_plan(
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
     current_user = _current_deletion_actor(db, current_user)
-    query = _deletion_scope_query(db, scope=payload.scope, camera=payload.camera)
+    query = _deletion_scope_query(db, scope=payload.scope, camera=payload.camera, camera_id=payload.camera_id)
     try:
         record = create_deletion_plan(
             actor=current_user,

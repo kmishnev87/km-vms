@@ -686,7 +686,7 @@ export default function LivePage() {
   }
 
   function addAllCameras() {
-    setFrameLayoutActive(false);
+    setFrameLayoutActive(true);
     setTiles((prev) => {
       const active = activeLayoutTiles(prev);
       const existing = workspaceCameraIds(active);
@@ -705,7 +705,7 @@ export default function LivePage() {
           })
         );
       if (!additions.length) return prev;
-      return layoutTiles([...active, ...additions], workspaceBounds());
+      return [...active, ...additions];
     });
   }
 

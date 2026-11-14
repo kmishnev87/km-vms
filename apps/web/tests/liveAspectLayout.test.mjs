@@ -86,12 +86,13 @@ test("narrow five-camera view leaves toolbar width without cropping or covering 
   assert.ok(sameFrameLayout(padded,fitCameraFrames(padded,cameras,bounds,{minimumWidth:220})));
 });
 
-test("the new button is separate, old Align/All remain grid based and manual editing releases the mode", () => {
+test("Add all activates frames; one-shot Align and manual editing remain separate", () => {
   const live=fs.readFileSync(new URL("../app/live/page.js",import.meta.url),"utf8");
   assert.match(live,/data-workspace-align-button="frames"/);
   assert.match(live,/data-workspace-align-button="grid-2x2"/);
   assert.match(live,/function autoLayoutTiles\(\) \{\s*setFrameLayoutActive\(false\)/);
-  assert.match(live,/return layoutTiles\(\[\.\.\.active, \.\.\.additions\]/);
+  assert.match(live,/function addAllCameras\(\) \{\s*setFrameLayoutActive\(true\)/);
+  assert.match(live,/return \[\.\.\.active, \.\.\.additions\]/);
   assert.match(live,/const frameLayoutKey = .*savedFrameRatio/);
   assert.match(live,/new ResizeObserver\(measure\)/);
   assert.match(live,/setFrameLayoutActive\(false\);\s*updateTile\(dragState/);

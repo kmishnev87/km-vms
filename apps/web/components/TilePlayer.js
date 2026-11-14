@@ -88,6 +88,7 @@ export default function TilePlayer({
   const [naturalResolution, setNaturalResolution] = useState({ width: 0, height: 0, source: "missing" });
   const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
   const [readyState, setReadyState] = useState(0);
+  const [watchPlaying, setWatchPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [zoomActive, setZoomActive] = useState(false);
   const [canvasFrame, setCanvasFrame] = useState({
@@ -277,6 +278,8 @@ export default function TilePlayer({
     const video = videoRef.current;
     if (!video) return;
     const updateMetadata = () => sampleVideoDimensions("video-event");
+    const playing = () => { setWatchPlaying(true); updateMetadata(); };
+    const notPlaying = () => setWatchPlaying(false);
     const resetReadiness = () => {
       setReadyState(Number(video.readyState || 0));
       setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "video-state", error: "" }));
@@ -284,20 +287,24 @@ export default function TilePlayer({
     video.addEventListener("loadedmetadata", updateMetadata);
     video.addEventListener("loadeddata", updateMetadata);
     video.addEventListener("canplay", updateMetadata);
-    video.addEventListener("playing", updateMetadata);
+    video.addEventListener("playing", playing);
     video.addEventListener("resize", updateMetadata);
     video.addEventListener("emptied", resetReadiness);
     video.addEventListener("waiting", resetReadiness);
     video.addEventListener("stalled", resetReadiness);
+    const stopEvents = ["waiting", "stalled", "emptied", "pause", "error", "ended"];
+    stopEvents.forEach(name => video.addEventListener(name, notPlaying));
     return () => {
       video.removeEventListener("loadedmetadata", updateMetadata);
       video.removeEventListener("loadeddata", updateMetadata);
       video.removeEventListener("canplay", updateMetadata);
-      video.removeEventListener("playing", updateMetadata);
+      video.removeEventListener("playing", playing);
       video.removeEventListener("resize", updateMetadata);
       video.removeEventListener("emptied", resetReadiness);
       video.removeEventListener("waiting", resetReadiness);
       video.removeEventListener("stalled", resetReadiness);
+      stopEvents.forEach(name => video.removeEventListener(name, notPlaying));
+      setWatchPlaying(false);
     };
   }, [cameraId, stream]);
 
@@ -785,6 +792,8 @@ export default function TilePlayer({
       className={`liveVideoWrap ${compactCanvasRequested ? "compactVideoCanvasRequested" : ""} ${nativeVideoSuppressed ? "compactVideoCanvasActive" : ""}`}
       title={text(TEXT.doubleClick)}
       data-render-context="live"
+      data-live-camera-id={cameraId}
+      data-watch-playing={watchPlaying ? "true" : "false"}
       data-live-transport={transport}
       data-playback-status={status}
       data-renderer={nativeVideoSuppressed ? "canvas" : "native"}

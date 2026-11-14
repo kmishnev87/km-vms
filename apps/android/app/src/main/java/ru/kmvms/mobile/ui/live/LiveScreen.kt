@@ -1,0 +1,126 @@
+package ru.kmvms.mobile.ui.live
+
+import android.app.Activity
+import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.util.UnstableApi
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.combine
+import ru.kmvms.mobile.push.localLiveAttention
+import ru.kmvms.mobile.media.VideoStatus
+import ru.kmvms.mobile.R
+import ru.kmvms.mobile.core.Stream
+import ru.kmvms.mobile.core.VisibleTile
+import ru.kmvms.mobile.core.visibleCameraIds
+import ru.kmvms.mobile.data.Camera
+import ru.kmvms.mobile.data.NasApi
+import ru.kmvms.mobile.events.MobileVideoRequest
+import ru.kmvms.mobile.media.LiveController
+import ru.kmvms.mobile.ui.Muted
+import ru.kmvms.mobile.ui.PageBackground
+import ru.kmvms.mobile.ptz.PtzCapabilities
+
+@UnstableApi
+@Composable fun LiveScreen(api: NasApi, cameras: List<Camera>, capabilities: Map<Long, PtzCapabilities>,
+                           onMessage: (String) -> Unit, onImmersive: (Boolean) -> Unit, initial: MobileVideoRequest? = null,
+                           profileId: String) {
+    val context = LocalContext.current
+    val controller = remember(api) { LiveController(context.applicationContext, api) }
+    val sessions by controller.sessions.collectAsStateWithLifecycle()
+    val selections by controller.playback.collectAsStateWithLifecycle()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val attentionOwner = remember(controller) { Any() }
+    LaunchedEffect(sessions, lifecycle, profileId) {
+        localLiveAttention.clear(attentionOwner)
+        val entries = sessions.entries.toList()
+        if (entries.isEmpty()) return@LaunchedEffect
+        try {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                try {
+                    combine(entries.map { it.value.state }) { values ->
+                        entries.indices.filter { index -> values[index].status == VideoStatus.PLAYING &&
+                            entries[index].value.player.isPlaying }.map { entries[it].key }.toSet()
+                    }.distinctUntilChanged().collect { localLiveAttention.update(attentionOwner, profileId, it) }
+                } finally { localLiveAttention.clear(attentionOwner) }
+            }
+        } finally { localLiveAttention.clear(attentionOwner) }
+    }
+    DisposableEffect(attentionOwner) { onDispose { localLiveAttention.clear(attentionOwner) } }
+    val list = rememberLazyListState()
+    var selectedId by rememberSaveable { mutableStateOf(initial?.cameraId) }
+    LaunchedEffect(initial?.key) { initial?.let { selectedId = it.cameraId } }
+    var requestedFullscreen by rememberSaveable { mutableStateOf(false) }
+    val selected = cameras.find { it.id == selectedId }
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val immersive = selected != null && (landscape || requestedFullscreen)
+    SideEffect { controller.cameras(cameras) }
+    LaunchedEffect(selectedId) { controller.focus(selectedId) }
+    LaunchedEffect(controller, list, cameras) {
+        snapshotFlow { list.layoutInfo.let { layout ->
+            visibleCameraIds(layout.visibleItemsInfo.mapNotNull { item ->
+                (item.key as? Long)?.let { VisibleTile(it, item.offset, item.size) }
+            }, layout.viewportStartOffset, layout.viewportEndOffset, true)
+        } }.distinctUntilChanged().collect(controller::visible)
+    }
+    DisposableEffect(controller, lifecycle) {
+        controller.foreground(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        val observer = LifecycleEventObserver { _, _ -> controller.foreground(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); controller.close() }
+    }
+    LaunchedEffect(immersive) { onImmersive(immersive) }
+    DisposableEffect(Unit) { onDispose { onImmersive(false) } }
+    val activity = context as? Activity
+    DisposableEffect(immersive, activity) {
+        val bars = activity?.window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        if (immersive) {
+            bars?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars?.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { bars?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+    BackHandler(selected != null) { selectedId = null; requestedFullscreen = false }
+    if (selected == null) {
+        if (cameras.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(stringResource(R.string.no_cameras), color = Muted)
+        } else LazyColumn(state = list, modifier = Modifier.fillMaxSize().background(PageBackground),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(cameras, key = { it.id }) { camera ->
+                CameraVideo(sessions[camera.id], Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).testTag("live-tile-${camera.id}"),
+                    crop = true, onTap = { selectedId = camera.id })
+            }
+        }
+    } else {
+        key(selected.id) { LiveCameraDetail(selected, capabilities[selected.id], controller, immersive,
+            { requestedFullscreen = true }, { selectedId = null; requestedFullscreen = false }, onMessage) }
+    }
+}

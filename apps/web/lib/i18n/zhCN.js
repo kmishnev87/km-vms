@@ -1,6 +1,10 @@
 export const zhCNDictionary = {
+  archiveCameraGroups: { retained: "保留录像的已删除摄像机", deleted: "已删除" },
+  androidDownload: { checking: "正在检查官方版本…", available: "Android APK", failed: "无法检查版本，请重试。", unpublished: "官方 APK 尚未发布。", subtitle: "Android 版 KM VMS", instructions: "将 APK 下载到手机，打开文件并在 Android 中确认安装。然后添加 NAS 地址并登录 KM VMS 账户。支持 HTTP 和 HTTPS。", version: "版本", download: "下载 APK", check: "检查版本", languages: "支持 Android 8 及以上版本，提供英文、中文和俄文。可在 Android 应用中获取更新。" },
+  chronologyArchive: { retainedCameras: "仍有录像的已删除摄像机", deleted: "已删除", archiveOnly: "仅保留的录像" },
   cameraEvents: {
     "title": "摄像机事件",
+    "dashboardText": "移动、人员和车辆。查看事件历史并直接打开视频。",
     "history": "历史",
     "notifications": "通知",
     "detection": "检测",
@@ -16,6 +20,9 @@ export const zhCNDictionary = {
     "refresh": "刷新",
     "selectPage": "选择本页",
     "selected": "已选择：{count}",
+    "selectFiltered": "选择全部（{count}）",
+    "clearSelection": "取消选择",
+    "selectionFrozen": "仅选择当时符合筛选条件的事件，不包含之后收到的新事件。",
     "found": "共{count}项",
     "selectEvent": "选择事件：{camera}",
     "markRead": "标为已读",
@@ -36,7 +43,7 @@ export const zhCNDictionary = {
     "watchNow": "查看实时画面",
     "watchEvent": "查看事件录像",
     "active": "进行中",
-    "stateUnconfirmed": "连接已断开，事件是否结束尚未确认。",
+    "stateUnconfirmed": "摄像机尚未确认此事件已结束。",
     "ambiguous": "设备事件：摄像机未指明镜头。",
     "clockUncertain": "摄像机时间未确认，使用接收时间。",
     "retention": "最多保留{days}天和100,000个事件。",
@@ -93,6 +100,8 @@ export const zhCNDictionary = {
       "capacity_limit": "已达到连接上限"
     },
     "errors": {
+      "event_selection_expired": "此选择已不可用，请重新选择事件。",
+      "event_selection_too_large": "所选事件过多，请缩小摄像机或时间范围。",
       "request_failed": "操作未完成，请检查连接后重试。",
       "event_camera_not_available": "摄像机已删除或无法实时查看。",
       "event_source_ambiguous": "摄像机未指明事件来自哪个镜头。",

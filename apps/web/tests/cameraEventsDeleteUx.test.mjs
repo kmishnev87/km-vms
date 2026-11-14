@@ -19,7 +19,7 @@ test("one trash beside bulk acknowledgement, never a delete control in each row"
 
 test("confirmation freezes selection and uses the full snapshot, not the visible filtered count", () => {
   const selection = ["first", "second"];
-  const state = { busy: false, loading: false, manage: true, selection, history: { total: 1, history_count: 40, read_cursor: "snapshot" } };
+  const state = { busy: false, loading: false, manage: true, selection, selectionSnapshot: null, selectedCount: 2, history: { total: 1, history_count: 40, read_cursor: "snapshot" } };
   let target;
   const context = vm.createContext({ ...state, setDeleteTarget: value => { target = value; } });
   vm.runInContext(requestBody+"requestDelete();", context);
@@ -45,7 +45,7 @@ function runDelete({ target, current = true, fail = false }) {
   const context = vm.createContext({ deleteTarget: target, busy: false, headers: { "Content-Type": "application/json" },
     captureAuthSession: () => () => current, act: action => action(() => current),
     apiFetch: async (path, options) => { requests.push({ path, body: JSON.parse(options.body) }); if (fail) throw Error("failed"); return { deleted: 2 }; },
-    setDeleteTarget: value => changes.push(["target", value]), setSelection: value => changes.push(["selection", value]),
+    setDeleteTarget: value => changes.push(["target", value]), clearSelection: () => changes.push(["selection", []]),
     setRefresh: () => changes.push(["refresh"]), setErrorToast: value => changes.push(["toast", value]),
     t: key => key, Date, CAMERA_EVENT_REFRESH: "refresh", CustomEvent: class { },
     window: { dispatchEvent: () => changes.push(["markers"]) } });
@@ -60,6 +60,9 @@ test("deletion clears selection and refreshes markers only after confirmed serve
   const all = runDelete({ target: { through: "snapshot", count: 40 } });
   await all.result;
   assert.deepEqual(all.requests, [{ path: "/camera-events/delete-all", body: { through: "snapshot" } }]);
+  const snapshot = runDelete({ target: { snapshot: { id: "chosen", excluded_ids: ["kept"] }, count: 75 } });
+  await snapshot.result;
+  assert.deepEqual(snapshot.requests, [{ path: "/camera-events/selections/chosen/delete", body: { excluded_ids: ["kept"] } }]);
 });
 
 test("failed response and an obsolete login never pretend that events were deleted", async () => {

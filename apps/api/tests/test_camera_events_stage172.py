@@ -138,18 +138,22 @@ def group():
     return {"device_id":"device","cameras":[{"id":1,"name":"Front","profile_token":"p"}]}
 
 
-def test_episode_start_repeat_end_and_initialization(db):
+def test_episode_start_repeat_end_and_initialization(db, monkeypatch):
+    current = [datetime(2026, 11, 14, 12)]
+    monkeypatch.setattr(domain, "now_utc", lambda: current[0])
     camera=group()["cameras"][0]
     initial=ov.parse_notification(notification(initialized=True))
-    assert domain.record_signal(db,group(),camera,initial) is None
-    assert domain.event_query(db).count()==0
-    first=domain.record_signal(db,group(),camera,ov.parse_notification(notification()))
+    # Initialized can announce a newly created active property, not just an
+    # idle startup snapshot. Preserve that real positive observation once.
+    first=domain.record_signal(db,group(),camera,initial)
     assert first
+    assert domain.event_query(db).first().event_metadata["initial_state"] is True
     assert domain.record_signal(db,group(),camera,ov.parse_notification(notification())) is None
     assert domain.event_query(db).count()==1
-    assert domain.event_query(db).first().event_metadata["occurrences"]==2
+    assert domain.event_query(db).first().event_metadata["occurrences"]==1
     domain.record_signal(db,group(),camera,ov.parse_notification(notification(active="false")))
     assert domain.event_query(db).first().event_metadata["active"] is False
+    current[0] += timedelta(seconds=45)
     second=domain.record_signal(db,group(),camera,ov.parse_notification(notification()))
     assert second and second!=first and domain.event_query(db).count()==2
     assert list_events(db)==[]  # Camera history never spams the administrative journal.

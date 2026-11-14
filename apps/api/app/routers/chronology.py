@@ -17,6 +17,8 @@ from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
+from app.services.camera_stream_dimensions import read_dimensions
+from app.schemas.camera import DELETED_CAMERA_MARKER_RE
 from app.services.recording_storage import (
     archive_root_for_segment,
     archive_root_runtime_access_state,
@@ -100,7 +102,8 @@ def _segment_media_metadata(segment: RecordingSegment, file_path: Path) -> dict[
 
 
 def _safe_download_filename(camera: Camera, segment: RecordingSegment, file_path: Path) -> str:
-    raw_camera = str(camera.name or f"camera_{camera.id}")
+    name = (segment.camera_name_snapshot or DELETED_CAMERA_MARKER_RE.sub("", str(camera.name or ""))) if camera.deleted_at else camera.name
+    raw_camera = str(name or f"camera_{camera.id}")
     camera_label = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_camera).strip("_")[:40]
     camera_label = camera_label or f"camera_{camera.id}"
     stamp = (segment.started_at or datetime.utcnow()).strftime("%Y%m%dT%H%M%S")
@@ -130,6 +133,36 @@ def _finalized_segments_query(db: Session):
             ~RecordingSegment.integrity_status.in_(PROBLEM_INTEGRITY_STATUSES),
         ),
     )
+
+
+@router.get("/cameras")
+def chronology_cameras(db: Session = Depends(get_db),
+                       current_user: User = Depends(require_permission("view_timeline"))):
+    """Archive-only catalog; retained cameras must never reappear in Live."""
+    retained = _finalized_segments_query(db).with_entities(RecordingSegment.camera_id).distinct()
+    cameras = db.query(Camera).filter(or_(Camera.deleted_at.is_(None), Camera.id.in_(retained)),
+                                     Camera.status != "deleting").all()
+    deleted_ids = [camera.id for camera in cameras if camera.deleted_at is not None]
+    names = {}
+    if deleted_ids:
+        candidates = _finalized_segments_query(db).filter(RecordingSegment.camera_id.in_(deleted_ids),
+            RecordingSegment.camera_name_snapshot.isnot(None), func.length(RecordingSegment.camera_name_snapshot) > 0).with_entities(
+                RecordingSegment.camera_id.label("camera_id"), RecordingSegment.camera_name_snapshot.label("name"),
+                func.row_number().over(partition_by=RecordingSegment.camera_id,
+                    order_by=(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())).label("rank")).subquery()
+        names = {row.camera_id: row.name for row in db.query(candidates).filter(candidates.c.rank == 1).all()}
+    result = []
+    for camera in cameras:
+        deleted = camera.deleted_at is not None
+        name = (names.get(camera.id) if deleted else camera.name) or camera.name
+        if deleted:
+            name = DELETED_CAMERA_MARKER_RE.sub("", str(name or "")) or f"Camera {camera.id}"
+        result.append({"id": camera.id, "name": name, "deleted": deleted,
+                       "enabled": bool(camera.enabled) and not deleted,
+                       "host": "" if deleted else camera.host, "port": None if deleted else camera.port,
+                       "status": "deleted" if deleted else camera.status,
+                       "stream_dimensions": read_dimensions(camera), "default_record_stream": camera.default_record_stream})
+    return sorted(result, key=lambda camera: (camera["deleted"], camera["name"].casefold(), camera["id"]))
 
 
 def _segment_uses_local_naive_display(segment: RecordingSegment) -> bool:
@@ -581,7 +614,7 @@ def chronology_download_current_recording(
     segment_id: int | None = None,
     archive_root_id: str | None = None,
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
 
@@ -631,7 +664,7 @@ def issue_chronology_download_token(
     segment_id: int | None = None,
     archive_root_id: str | None = None,
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
     ctx = timezone_context(db)

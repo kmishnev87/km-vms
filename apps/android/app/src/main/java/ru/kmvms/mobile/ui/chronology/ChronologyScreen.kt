@@ -1,0 +1,281 @@
+package ru.kmvms.mobile.ui.chronology
+
+import android.app.Activity
+import android.app.DatePickerDialog
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.util.UnstableApi
+import ru.kmvms.mobile.R
+import ru.kmvms.mobile.chronology.*
+import ru.kmvms.mobile.core.TimelinePhase
+import ru.kmvms.mobile.data.Camera
+import ru.kmvms.mobile.data.NasApi
+import ru.kmvms.mobile.events.MobileVideoRequest
+import ru.kmvms.mobile.media.VideoState
+import ru.kmvms.mobile.media.VideoStatus
+import ru.kmvms.mobile.ui.Accent
+import ru.kmvms.mobile.ui.Muted
+import ru.kmvms.mobile.ui.Outline
+import ru.kmvms.mobile.ui.SoftAccent
+import ru.kmvms.mobile.ui.archive.ClipTimeDialog
+import ru.kmvms.mobile.archive.zoneLabel
+import ru.kmvms.mobile.ui.live.SpeakerIcon
+import ru.kmvms.mobile.ui.live.VideoSurface
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+@UnstableApi
+@Composable fun ChronologyScreen(api: NasApi, cameras: List<Camera>, immersive: (Boolean) -> Unit, message: (String) -> Unit,
+                                initial: MobileVideoRequest? = null) {
+    val context = LocalContext.current
+    var savedPosition by rememberSaveable { mutableLongStateOf(System.currentTimeMillis() - 5 * 60_000) }
+    var savedZone by rememberSaveable { mutableStateOf("UTC") }
+    var savedDay by rememberSaveable { mutableStateOf(Instant.ofEpochMilli(savedPosition).atZone(ZoneId.of(savedZone)).toLocalDate().toString()) }
+    val controller = remember(api) { ChronologyController(context, ChronologyApi(api), savedPosition, ZoneId.of(savedZone), LocalDate.parse(savedDay)) }
+    val state by controller.state.collectAsStateWithLifecycle()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var chosen by rememberSaveable { mutableStateOf(listOf<Long>()) }
+    var chooseCameras by remember { mutableStateOf(false) }
+    var chooseTime by remember { mutableStateOf(false) }
+    var fullscreen by rememberSaveable { mutableStateOf<Long?>(null) }
+    val moment = Instant.ofEpochMilli(state.position).atZone(state.zone)
+    val configuration = LocalConfiguration.current
+    val compact = configuration.screenHeightDp < 500 && configuration.screenWidthDp > configuration.screenHeightDp
+    val failure = stringResource(R.string.server_error)
+    var archiveCameras by remember(api) { mutableStateOf(cameras) }
+    LaunchedEffect(api, cameras) {
+        try { archiveCameras = ChronologyApi(api).cameras() }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { message(failure) }
+    }
+    SideEffect { savedPosition = state.position; savedZone = state.zone.id; savedDay = state.day.toString() }
+    LaunchedEffect(controller, chosen) { controller.select(chosen) }
+    LaunchedEffect(initial?.key) {
+        initial?.archiveTime?.let { position ->
+            chosen = listOf(initial.cameraId)
+            controller.seek(position)
+            fullscreen = initial.cameraId
+            controller.play(true)
+        }
+    }
+    LaunchedEffect(state.failures) { if (state.failures > 0) message(failure) }
+    DisposableEffect(controller, lifecycle) {
+        controller.foreground(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        val observer = LifecycleEventObserver { _, _ -> controller.foreground(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); controller.close() }
+    }
+    LaunchedEffect(fullscreen) { immersive(fullscreen != null) }
+    DisposableEffect(Unit) { onDispose { immersive(false) } }
+    BackHandler(fullscreen != null) { fullscreen = null }
+
+    val expanded = fullscreen
+    if (expanded != null && expanded in state.selected) {
+        TimelineFullscreen(controller, state, expanded) { fullscreen = null }
+    } else Column(Modifier.fillMaxSize()) {
+        Surface(color = Color.White) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (!compact) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.chronology), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { chooseCameras = true }, modifier = Modifier.testTag("timeline-cameras")) { Text(stringResource(R.string.cameras)) }
+                    IconButton(onClick = controller::refreshRanges, enabled = !state.loadingRanges) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = {
+                        val day = state.day
+                        DatePickerDialog(context, { _, year, month, date -> controller.day(LocalDate.of(year, month + 1, date)) }, day.year, day.monthValue - 1, day.dayOfMonth).show()
+                    }, modifier = (if (compact) Modifier.width(120.dp) else Modifier.weight(1f)).testTag("timeline-date")) { Text(state.day.format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))) }
+                    OutlinedButton(onClick = { chooseTime = true }, modifier = (if (compact) Modifier.width(120.dp) else Modifier.weight(1f)).testTag("timeline-time")) {
+                        Text(moment.format(DateTimeFormatter.ofPattern("HH:mm:ss")), maxLines = 1)
+                    }
+                    if (compact) {
+                        TimelineControls(controller, state, Modifier.weight(1f))
+                        TextButton(onClick = { chooseCameras = true }, modifier = Modifier.testTag("timeline-cameras")) { Text(stringResource(R.string.cameras)) }
+                        IconButton(onClick = controller::refreshRanges, enabled = !state.loadingRanges) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
+                    }
+                }
+                if (!compact) TimelineControls(controller, state)
+                TimelineStrip(state, controller::seek)
+            }
+        }
+        LazyColumn(Modifier.fillMaxSize().testTag("timeline-videos"), contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (chosen.isEmpty()) item { TextButton(onClick = { chooseCameras = true }, modifier = Modifier.fillMaxWidth().height(120.dp)) { Text(stringResource(R.string.timeline_add_cameras)) } }
+            items(state.selected.chunked(if (compact) 2 else 1), key = { it.joinToString(",") }) { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { id -> key(id) { Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 4.dp)) {
+                        Text(archiveCameras.find { it.id == id }?.let { it.name + if(it.deleted) " (${stringResource(R.string.deleted_camera)})" else "" } ?: initial?.takeIf { it.cameraId == id }?.cameraName.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { chosen = chosen - id }, modifier = Modifier.size(36.dp).testTag("timeline-close-$id")) { Icon(Icons.Default.Close, stringResource(R.string.close), modifier = Modifier.size(18.dp)) }
+                    }
+                    TimelineVideo(controller, state, id, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))) { fullscreen = id }
+                } } }
+                if (compact && row.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+    if (chooseCameras) TimelineCameraPicker(archiveCameras, chosen, { chooseCameras = false }) { selected -> chosen = selected; chooseCameras = false }
+    if (chooseTime) ClipTimeDialog("timeline", moment.toLocalTime(), { chooseTime = false }) { time ->
+        controller.seek(state.day.atTime(time).atZone(state.zone).toInstant().toEpochMilli()); chooseTime = false
+    }
+}
+
+@UnstableApi
+@Composable private fun TimelineControls(controller: ChronologyController, state: ChronologyState, modifier: Modifier = Modifier) {
+    val label = stringResource(if (state.wantsPlay) R.string.pause else R.string.play)
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalIconButton(onClick = controller::toggle, enabled = state.selected.isNotEmpty(),
+            modifier = Modifier.testTag("timeline-play").semantics { contentDescription = label },
+            colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = if (state.wantsPlay) SoftAccent else Color.Transparent)) {
+            if (state.wantsPlay) Text("Ⅱ", style = MaterialTheme.typography.titleLarge, color = Accent)
+            else Icon(Icons.Default.PlayArrow, label)
+        }
+        var speedMenu by remember { mutableStateOf(false) }
+        Box {
+            TextButton(onClick = { speedMenu = true }, modifier = Modifier.testTag("timeline-speed")) { Text("${state.speed.toString().removeSuffix(".0")}×") }
+            DropdownMenu(speedMenu, { speedMenu = false }) {
+                listOf(.25f, .5f, 1f, 2f, 4f).forEach { speed -> DropdownMenuItem(text = { Text("${speed.toString().removeSuffix(".0")}×") },
+                    onClick = { controller.speed(speed); speedMenu = false }) }
+            }
+        }
+        Box(Modifier.weight(1f).heightIn(min = 40.dp), contentAlignment = Alignment.CenterStart) {
+            val status = when {
+                state.wantsPlay && state.waiting.isNotEmpty() -> stringResource(R.string.timeline_waiting, state.waiting.size)
+                state.running -> stringResource(R.string.timeline_playing)
+                else -> stringResource(R.string.timeline_paused)
+            }
+            Text(status, color = Muted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.testTag("timeline-state"))
+        }
+        TextButton(onClick = controller::firstRecording, enabled = state.ranges.values.any { it.isNotEmpty() }, modifier = Modifier.testTag("timeline-first")) { Text(stringResource(R.string.timeline_find)) }
+    }
+}
+
+@Composable private fun TimelineStrip(state: ChronologyState, seek: (Long) -> Unit) {
+    val start = state.day.atStartOfDay(state.zone).toInstant().toEpochMilli()
+    val end = state.day.plusDays(1).atStartOfDay(state.zone).toInstant().toEpochMilli()
+    val duration = (end - start).toFloat()
+    val description = stringResource(R.string.timeline_archive_map)
+    Column {
+        Canvas(Modifier.fillMaxWidth().height((state.selected.size.coerceIn(1, 8) * 8 + 12).dp)
+            .testTag("timeline-ranges").semantics { contentDescription = description }
+            .pointerInput(start, end) { detectTapGestures { point -> seek(start + (point.x / size.width).coerceIn(0f, 1f).times(duration).toLong()) } }) {
+            val rowHeight = size.height / state.selected.size.coerceAtLeast(1)
+            state.selected.forEachIndexed { index, id ->
+                val y = index * rowHeight + 2.dp.toPx()
+                drawRect(Outline, Offset(0f, y), Size(size.width, (rowHeight - 3.dp.toPx()).coerceAtLeast(1f)))
+                state.ranges[id].orEmpty().forEach { range ->
+                    val left = ((range.start - start) / duration).coerceIn(0f, 1f) * size.width
+                    val right = ((range.end - start) / duration).coerceIn(0f, 1f) * size.width
+                    if (right > left) drawRect(Accent.copy(alpha = .65f), Offset(left, y), Size((right - left).coerceAtLeast(2f), (rowHeight - 3.dp.toPx()).coerceAtLeast(1f)))
+                }
+            }
+            val x = ((state.position - start) / duration).coerceIn(0f, 1f) * size.width
+            drawLine(Accent, Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("00:00", style = MaterialTheme.typography.labelSmall, color = Muted)
+            Text(zoneLabel(state.zone), style = MaterialTheme.typography.labelSmall, color = Muted)
+            Text("24:00", style = MaterialTheme.typography.labelSmall, color = Muted)
+        }
+    }
+}
+
+@UnstableApi
+@Composable private fun TimelineVideo(controller: ChronologyController, state: ChronologyState, id: Long, modifier: Modifier, expand: () -> Unit) {
+    val track = controller.track(id)
+    val phase = state.phases[id] ?: TimelinePhase.RESOLVING
+    if (phase == TimelinePhase.EMPTY) Box(modifier.background(Color.Black).testTag("timeline-empty-$id"), contentAlignment = Alignment.Center) {
+        Text(stringResource(R.string.timeline_no_recording), color = Color.White, style = MaterialTheme.typography.bodySmall)
+    } else VideoSurface(track?.player,
+        VideoState(when (phase) { TimelinePhase.READY -> VideoStatus.PLAYING; TimelinePhase.FAILED -> VideoStatus.FAILED; else -> VideoStatus.BUFFERING }, unsupportedCodec = track?.unsupportedCodec() == true),
+        controller::retry, modifier.testTag("timeline-video-$id"), zoomable = true, onTap = expand)
+}
+
+@UnstableApi
+@Composable private fun TimelineFullscreen(controller: ChronologyController, state: ChronologyState, id: Long, close: () -> Unit) {
+    val context = LocalContext.current
+    var sound by remember(id) { mutableStateOf(false) }
+    val track = controller.track(id)
+    SideEffect { track?.player?.volume = if (sound) 1f else 0f }
+    DisposableEffect(context, track) {
+        val bars = (context as? Activity)?.window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        bars?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        bars?.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose { bars?.show(WindowInsetsCompat.Type.systemBars()); track?.player?.volume = 0f }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        TimelineVideo(controller, state, id, Modifier.fillMaxSize()) { }
+        Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            IconButton(onClick = close, modifier = Modifier.background(Color(0xAA233044), RoundedCornerShape(12.dp))) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back), tint = Color.White) }
+            IconButton(onClick = { sound = !sound }, modifier = Modifier.background(Color(0xAA233044), RoundedCornerShape(12.dp))) { SpeakerIcon(sound, Color.White) }
+        }
+        Surface(color = Color.White.copy(alpha = .9f), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()) {
+            Column(Modifier.padding(horizontal = 12.dp)) {
+                Text(Instant.ofEpochMilli(state.position).atZone(state.zone).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")), modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
+                TimelineControls(controller, state)
+            }
+        }
+    }
+}
+
+@Composable private fun TimelineCameraPicker(cameras: List<Camera>, current: List<Long>, dismiss: () -> Unit, choose: (List<Long>) -> Unit) {
+    var selected by remember { mutableStateOf(current.toSet()) }
+    val ordered = remember(cameras) { cameras.sortedBy { it.deleted } }
+    AlertDialog(onDismissRequest = dismiss, modifier = Modifier.semantics { testTagsAsResourceId = true }, title = { Text(stringResource(R.string.cameras)) },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                ordered.forEachIndexed { index, camera ->
+                    if(camera.deleted && ordered.getOrNull(index-1)?.deleted != true) {
+                        HorizontalDivider(Modifier.padding(vertical=10.dp))
+                        Text(stringResource(R.string.retained_archive_cameras),style=MaterialTheme.typography.labelMedium,color=Muted,modifier=Modifier.padding(start=12.dp,bottom=6.dp).testTag("timeline-retained-divider"))
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(camera.id in selected, { value -> selected = if (value) selected + camera.id else selected - camera.id }, modifier = Modifier.testTag("timeline-select-${camera.id}"))
+                    Text(camera.name + if(camera.deleted) " (${stringResource(R.string.deleted_camera)})" else "", modifier = Modifier.weight(1f), maxLines = 2)
+                } }
+            }
+        }, confirmButton = { TextButton(onClick = { choose(cameras.map { it.id }.filter { it in selected }) }, modifier = Modifier.testTag("timeline-camera-confirm")) { Text(stringResource(R.string.apply)) } },
+        dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
+}

@@ -81,8 +81,9 @@ const dashboardOrder = [
   'href: "/chronology"',
   'href: "/storage"',
   'href: "/system-status"',
-  'href: "/apk"',
+  'href: "/?camera_events=1"',
   'href: "/settings"',
+  'href: "/apk"',
 ].map((needle) => home.indexOf(needle));
 assert.equal(dashboardOrder.every((index) => index >= 0), true);
 assert.deepEqual([...dashboardOrder].sort((a, b) => a - b), dashboardOrder);
@@ -109,7 +110,7 @@ assert.equal(api.includes("canUserAccessRoute(user, href)"), true);
 assert.equal(routePermissions.includes('"/system-status"'), true);
 assert.equal(routePermissions.includes('permission: "run_diagnostics"'), true);
 assert.equal(routePermissions.includes('"/apk"'), true);
-assert.equal(routePermissions.includes("placeholderOnly: true"), true);
+assert.equal(routePermissions.includes("placeholderOnly: false"), true);
 
 assert.equal(systemStatus.includes('apiFetch("/system/runtime/status")'), false);
 assert.equal(systemStatus.includes("useSystemHealthStatus"), true);
@@ -121,9 +122,9 @@ assert.equal(systemStatus.includes("rtsp://"), false);
 assert.equal(systemStatus.includes("Authorization"), false);
 
 assert.equal(apk.includes("Mobile Client PRO"), false);
-assert.equal(apk.includes("download"), false);
+assert.equal(apk.includes("fetchAndroidRelease"), true);
 assert.equal(apk.includes("href=\"/\""), true);
-assert.equal(apk.includes("apkPage.text"), true);
+assert.equal(apk.includes("androidDownload.instructions"), true);
 
 for (const key of [
   "nav.systemHealth",

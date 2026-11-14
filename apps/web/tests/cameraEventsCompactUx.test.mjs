@@ -23,10 +23,10 @@ test("one bulk icon outside the list replaces disappearing per-row read actions"
   const actions = hub.slice(hub.indexOf("function rowActions"), hub.indexOf("const historyContent"));
   assert.doesNotMatch(actions, /readSelection|markRead|row\.read/);
   assert.equal((actions.match(/className="cameraEventsIconButton"/g) || []).length, 2);
-  assert.match(hub, /selection\.length \? readSelection\(selection\) : readAll\(\)/);
+  assert.match(hub, /selectedCount \? readSelection\(selection\) : readAll\(\)/);
   assert.match(hub, /apiFetch\("\/camera-events\/read-all"/);
   assert.match(hub, /JSON\.stringify\(\{ through \}\)/);
-  assert.match(hub, /\.indeterminate = selection\.length > 0 && !allSelected/);
+  assert.match(hub, /\.indeterminate = selectedCount > 0 && !allSelected/);
   assert.match(hub, /t\(eventLabelKey\(row\)\)/);
   assert.match(hub, /t\(eventLabelKey\(eventToast\)\)/);
   assert.match(read("../components/ChronologyTimeline.js"), /t\(eventLabelKey\(event\)\)/);

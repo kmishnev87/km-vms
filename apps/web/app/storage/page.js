@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Layout from "../../components/Layout";
 import { createSingleFlight } from "../../lib/singleFlight";
+import { partitionArchiveCameras } from "../../lib/archiveCameraGroups";
 import useStorageMigrationController from "../../lib/useStorageMigrationController";
 import useStorageIntegrityController from "../../lib/useStorageIntegrityController";
 import ArchiveIntegrityDialog from "../../components/storage/ArchiveIntegrityDialog";
@@ -695,7 +696,10 @@ function StorageOperationsPageContent() {
   const archiveRootDiscoveryModel = discoveryStateModel(archiveRootDiscovery || {});
   const archiveRootDiscoveryHeader = discoveryHeaderStatusModel(archiveRootDiscovery);
   const archiveRootChoices = archiveRootDiscoveryModel.candidates;
-  const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
+  const cameraRows = useMemo(() => {
+    const groups = partitionArchiveCameras(cameraStorageRows(operations.per_camera_usage), row => row.camera_deleted);
+    return [...groups.active, ...groups.archived];
+  }, [operations.per_camera_usage]);
   const [cameraRowLimit, setCameraRowLimit] = useState(12);
   const visibleCameraRows = cameraRows.slice(0, cameraRowLimit);
   const autoFreeConfigured = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
@@ -1529,7 +1533,7 @@ function StorageOperationsPageContent() {
                 </Section>
               </div>
 
-              <Section title={copy.cameras} className="storageOpsSection-cameras">
+              <Section title={copy.cameras} className="storageOpsSection-cameras storageOpsCompactCameras">
                 {cameraRows.length ? (
                   <>
                     <div className="storageOpsTableWrap storageOpsCameraTable">
@@ -1543,8 +1547,10 @@ function StorageOperationsPageContent() {
                           </tr>
                         </thead>
                         <tbody>
-                          {visibleCameraRows.map((row) => (
-                            <tr key={row.camera_id || row.camera_name}>
+                          {visibleCameraRows.map((row, index) => (
+                            <Fragment key={row.camera_id || row.camera_name}>
+                            {row.camera_deleted && !visibleCameraRows[index - 1]?.camera_deleted ? <tr className="storageArchivedDivider"><td colSpan={4}>{t("archiveCameraGroups.retained")}</td></tr> : null}
+                            <tr className="storageCompactCameraRow" data-archived={row.camera_deleted || undefined}>
                               <td><div className="storageCameraIdentity"><span className="storageCameraName" title={row.camera_name}>{row.camera_name}</span>{row.camera_deleted ? <span className="storageDeletedCamera">({copy.cameraDeletedMark})</span> : null}</div></td>
                               <td>{formatBytes(row.size_bytes)}</td>
                               <td>{row.segment_count}</td>
@@ -1555,25 +1561,10 @@ function StorageOperationsPageContent() {
                                   </button>
                                 ) : "0"}
                               </td>
-                            </tr>
+                            </tr></Fragment>
                           ))}
                         </tbody>
                       </table>
-                    </div>
-                    <div className="storageOpsCameraCards">
-                      {visibleCameraRows.map((row) => (
-                        <div className="storageOpsCameraCard" key={`card-${row.camera_id || row.camera_name}`}>
-                          <div className="storageOpsCameraCardIdentity"><strong className="storageCameraIdentity"><span className="storageCameraName" title={row.camera_name}>{row.camera_name}</span>{row.camera_deleted ? <span className="storageDeletedCamera">({copy.cameraDeletedMark})</span> : null}</strong></div>
-                          <div className="storageOpsCameraCardMetric"><span>{copy.size}</span><strong>{formatBytes(row.size_bytes)}</strong></div>
-                          <div className="storageOpsCameraCardMetric"><span>{copy.segments}</span><strong>{row.segment_count}</strong></div>
-                          <div className="storageOpsCameraCardMetric">
-                            <span>{copy.problems}</span>
-                            {row.problem_file_count > 0 ? (
-                              <button className="storageOpsCameraProblemButton" type="button" onClick={() => showCameraProblems(row)}>{row.problem_file_count}</button>
-                            ) : <strong>0</strong>}
-                          </div>
-                        </div>
-                      ))}
                     </div>
                     {cameraRows.length > cameraRowLimit ? (
                       <button type="button" className="button" onClick={() => setCameraRowLimit((value) => value + 12)}>

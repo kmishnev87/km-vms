@@ -8,6 +8,7 @@ import { useSystemHealthStatus } from "../components/SystemHealthIndicator";
 import { canAccessPath, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
+import { CAMERA_EVENT_HUB_OPEN } from "../lib/cameraEvents";
 
 const DASHBOARD_ITEMS = [
   {
@@ -55,12 +56,13 @@ const DASHBOARD_ITEMS = [
     kind: "systemHealth",
   },
   {
-    href: "/apk",
-    iconSrc: "/assets/icons/dashboard/apk.png",
-    backgroundSrc: "/assets/backgrounds/dashboard-cards/apk.svg",
-    titleKey: "dashboard.apkTitle",
-    descriptionKey: "dashboard.apkText",
-    kind: "placeholder",
+    href: "/?camera_events=1",
+    iconSrc: "/assets/icons/dashboard/events-v2.png",
+    backgroundSrc: "/assets/backgrounds/dashboard-cards/events.svg",
+    titleKey: "cameraEvents.title",
+    descriptionKey: "cameraEvents.dashboardText",
+    kind: "cameraEvents",
+    permission: "view_live",
   },
   {
     href: "/settings",
@@ -68,6 +70,14 @@ const DASHBOARD_ITEMS = [
     backgroundSrc: "/assets/backgrounds/dashboard-cards/settings.svg",
     titleKey: "dashboard.settingsTitle",
     descriptionKey: "dashboard.settingsText",
+  },
+  {
+    href: "/apk",
+    iconSrc: "/assets/icons/dashboard/apk.png",
+    backgroundSrc: "/assets/backgrounds/dashboard-cards/apk.svg",
+    titleKey: "dashboard.apkTitle",
+    descriptionKey: "dashboard.apkText",
+    kind: "placeholder",
   },
 ];
 
@@ -125,7 +135,8 @@ export default function HomePage() {
     );
   }
 
-  const visibleItems = currentUser ? DASHBOARD_ITEMS.filter((item) => canAccessPath(currentUser, item.href)) : [];
+  const visibleItems = currentUser ? DASHBOARD_ITEMS.filter((item) =>
+    canAccessPath(currentUser, item.href) && (!item.permission || currentUser.permissions?.includes(item.permission))) : [];
 
   return (
     <Layout>
@@ -149,6 +160,11 @@ export default function HomePage() {
               className={`dashboardCard ${item.kind === "placeholder" ? "dashboardCard-placeholder" : ""} ${isSystemHealth && systemHealth.hasProblems ? "dashboardCard-alert" : ""}`}
               key={item.href}
               style={{ "--dashboard-card-bg": `url(${item.backgroundSrc})` }}
+              onClick={item.kind === "cameraEvents" ? (event) => {
+                if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+                event.preventDefault();
+                window.dispatchEvent(new CustomEvent(CAMERA_EVENT_HUB_OPEN));
+              } : undefined}
             >
               <div className="dashboardCardIcon">
                 <img src={iconSrc} alt="" />

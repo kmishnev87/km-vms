@@ -1,0 +1,13 @@
+/.gradle/
+/.kotlin/
+/local.properties
+**/build/
+*.jks
+*.keystore
+*.apk
+*.aab
+signing.properties
+!app/src/main/java/ru/kmvms/mobile/data/
+!app/src/main/java/ru/kmvms/mobile/data/**
+!app/src/test/java/ru/kmvms/mobile/data/
+!app/src/test/java/ru/kmvms/mobile/data/**

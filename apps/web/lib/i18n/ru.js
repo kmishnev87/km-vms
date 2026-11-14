@@ -1,6 +1,10 @@
 export const ruDictionary = {
+  archiveCameraGroups: { retained: "Удалённые камеры с записями", deleted: "удалена" },
+  androidDownload: { checking: "Проверяем официальный выпуск…", available: "APK для Android", failed: "Не удалось проверить выпуск. Повторите попытку.", unpublished: "Официальный APK ещё не опубликован.", subtitle: "KM VMS для Android", instructions: "Скачайте APK на телефон, откройте файл и подтвердите установку в Android. Затем добавьте адрес NAS и войдите под своей учётной записью KM VMS. Поддерживаются HTTP и HTTPS.", version: "Версия", download: "Скачать APK", check: "Проверить выпуск", languages: "Android 8 и новее. Английский, китайский и русский языки. Обновления предлагаются в самом Android-приложении." },
+  chronologyArchive: { retainedCameras: "Удалённые камеры с записями", deleted: "удалена", archiveOnly: "Только сохранённый архив" },
   cameraEvents: {
     "title": "События камер",
+    "dashboardText": "Движение, люди и машины. История событий и переход к видео.",
     "history": "История",
     "notifications": "Оповещения",
     "detection": "Обнаружение",
@@ -16,6 +20,9 @@ export const ruDictionary = {
     "refresh": "Обновить",
     "selectPage": "Выбрать страницу",
     "selected": "Выбрано: {count}",
+    "selectFiltered": "Выбрать все ({count})",
+    "clearSelection": "Снять выбор",
+    "selectionFrozen": "Выбраны события по фильтру на момент выбора. Новые события не включены.",
     "found": "Найдено: {count}",
     "selectEvent": "Выбрать событие: {camera}",
     "markRead": "Просмотрено",
@@ -36,7 +43,7 @@ export const ruDictionary = {
     "watchNow": "Смотреть сейчас",
     "watchEvent": "Посмотреть событие",
     "active": "продолжается",
-    "stateUnconfirmed": "Связь прервалась; окончание события не подтверждено.",
+    "stateUnconfirmed": "Окончание события не подтверждено камерой.",
     "ambiguous": "Событие устройства: объектив не указан камерой.",
     "clockUncertain": "Время камеры не подтверждено; использовано время получения.",
     "retention": "История: до {days} дней, до 100 000 событий.",
@@ -94,6 +101,8 @@ export const ruDictionary = {
     },
     "errors": {
       "request_failed": "Не удалось выполнить действие. Проверьте соединение и повторите.",
+      "event_selection_expired": "Выбор больше недоступен. Выберите события заново.",
+      "event_selection_too_large": "Событий слишком много для одного выбора. Уточните камеру или период.",
       "event_camera_not_available": "Камера удалена или недоступна для просмотра.",
       "event_source_ambiguous": "Камера не указала, какой объектив вызвал событие.",
       "event_archive_unavailable": "Запись этого момента пока недоступна: она могла не вестись, ещё сохраняться или уже быть удалена.",

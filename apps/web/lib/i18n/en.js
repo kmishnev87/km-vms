@@ -1,6 +1,10 @@
 export const enDictionary = {
+  archiveCameraGroups: { retained: "Deleted cameras with recordings", deleted: "deleted" },
+  androidDownload: { checking: "Checking the official release…", available: "Android APK", failed: "Could not check the release. Try again.", unpublished: "The official APK has not been published yet.", subtitle: "KM VMS for Android", instructions: "Download the APK to your phone, open it and confirm installation in Android. Then add your NAS address and sign in with your KM VMS account. HTTP and HTTPS connections are supported.", version: "Version", download: "Download APK", check: "Check release", languages: "Android 8 or newer. English, Chinese and Russian. Updates are offered inside the Android app." },
+  chronologyArchive: { retainedCameras: "Deleted cameras with recordings", deleted: "deleted", archiveOnly: "Retained recordings only" },
   cameraEvents: {
     "title": "Camera events",
+    "dashboardText": "Motion, people and vehicles. Event history and direct access to video.",
     "history": "History",
     "notifications": "Notifications",
     "detection": "Detection",
@@ -16,6 +20,9 @@ export const enDictionary = {
     "refresh": "Refresh",
     "selectPage": "Select page",
     "selected": "Selected: {count}",
+    "selectFiltered": "Select all ({count})",
+    "clearSelection": "Clear selection",
+    "selectionFrozen": "Selection is fixed to the current filter when selected. New events are not included.",
     "found": "Found: {count}",
     "selectEvent": "Select event: {camera}",
     "markRead": "Mark as read",
@@ -36,7 +43,7 @@ export const enDictionary = {
     "watchNow": "Watch live",
     "watchEvent": "Watch event",
     "active": "ongoing",
-    "stateUnconfirmed": "Connection lost; the event ending is unconfirmed.",
+    "stateUnconfirmed": "The camera has not confirmed that this event ended.",
     "ambiguous": "Device event: the camera did not identify a lens.",
     "clockUncertain": "Camera time is unconfirmed; receipt time is used.",
     "retention": "Up to {days} days and 100,000 events.",
@@ -93,6 +100,8 @@ export const enDictionary = {
       "capacity_limit": "Connection limit reached"
     },
     "errors": {
+      "event_selection_expired": "This selection is no longer available. Select the events again.",
+      "event_selection_too_large": "Too many events for one selection. Narrow the camera or time period.",
       "request_failed": "The action could not be completed. Check the connection and try again.",
       "event_camera_not_available": "The camera is removed or unavailable for live view.",
       "event_source_ambiguous": "The camera did not identify which lens raised this event.",

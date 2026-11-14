@@ -389,6 +389,14 @@
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
 }
 
+.apkDownloadActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+
 .apkVisual img {
   width: 180px;
   height: 180px;

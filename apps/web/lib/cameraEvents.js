@@ -1,6 +1,7 @@
 export const CAMERA_EVENT_KINDS = ["motion", "person", "vehicle", "animal", "intrusion", "line_crossing", "loitering", "tamper", "audio", "wrong_direction", "fire"];
 export const CAMERA_EVENT_REFRESH = "km-vms-camera-events-updated";
 export const CAMERA_EVENT_OPEN = "km-vms-open-camera-event";
+export const CAMERA_EVENT_HUB_OPEN = "km-vms-open-camera-events";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 export function cameraEventId(search) {
@@ -12,7 +13,8 @@ export function eventErrorKey(error) {
   const code = error?.code || error?.detail?.code;
   return ["event_camera_not_available", "event_source_ambiguous", "event_archive_unavailable", "event_not_found",
     "event_access_denied", "detector_state_changed", "detector_change_unconfirmed", "detector_switch_not_exposed",
-    "detector_read_failed", "analytics_unsupported", "analytics_profile_unavailable"].includes(code) ? code : "request_failed";
+    "detector_read_failed", "analytics_unsupported", "analytics_profile_unavailable", "event_selection_expired",
+    "event_selection_too_large"].includes(code) ? code : "request_failed";
 }
 
 export function eventHistoryQuery(filters = {}, offset = 0) {

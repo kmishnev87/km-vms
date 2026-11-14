@@ -16,6 +16,7 @@ from app.core.version import APP_VERSION
 from app.db.session import SessionLocal
 from app.routers.audit import router as audit_router
 from app.routers.camera_events import router as camera_events_router
+from app.routers.mobile_push import router as mobile_push_router
 from app.routers.auth import router as auth_router
 from app.routers.archive_exports import router as archive_exports_router
 from app.routers.cameras import router as cameras_router, viewer_router as viewer_cameras_router
@@ -39,6 +40,7 @@ from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 from app.services.update_check import run_startup_due_check
 from app.services.camera_events_worker import start_camera_events_worker, stop_camera_events_worker
+from app.services.mobile_push_worker import start_mobile_push_worker, stop_mobile_push_worker
 
 
 class AccessLogRedactionFilter(logging.Filter):
@@ -184,10 +186,12 @@ def startup():
     start_archive_migration_worker()
     start_cleanup_worker()
     start_camera_events_worker()
+    start_mobile_push_worker()
 
 
 @app.on_event("shutdown")
 def shutdown():
+    stop_mobile_push_worker()
     stop_camera_events_worker()
     stop_archive_migration_worker()
     stop_archive_integrity_worker()
@@ -227,6 +231,7 @@ def system_info(current_user=Depends(require_permission("manage_settings"))):
 app.include_router(auth_router)
 app.include_router(audit_router)
 app.include_router(camera_events_router)
+app.include_router(mobile_push_router)
 app.include_router(archive_exports_router)
 app.include_router(maintenance_router)
 app.include_router(migrations_router)

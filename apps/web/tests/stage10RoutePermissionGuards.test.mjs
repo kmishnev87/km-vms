@@ -72,7 +72,7 @@ for (const path of [
   );
 }
 assert.equal(entries["/apk"].access, routePermissions.ROUTE_ACCESS_PUBLIC);
-assert.equal(entries["/apk"].placeholderOnly, true);
+assert.equal(entries["/apk"].placeholderOnly, false);
 
 for (const [route, entry] of Object.entries(entries)) {
   assert.equal(route.startsWith("/"), true, `${route} must be absolute`);
@@ -138,5 +138,6 @@ for (const forbidden of [
   "apiFetch(\"/apk",
   "fetch(\"/api/apk",
 ]) {
-  assert.equal(apkPage.includes(forbidden), false, `${forbidden} must stay absent from APK placeholder`);
+  assert.equal(apkPage.includes(forbidden), false, `${forbidden} must stay absent from the public APK page`);
 }
+assert.equal(apkPage.includes("fetchAndroidRelease"), true);

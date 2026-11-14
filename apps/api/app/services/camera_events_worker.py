@@ -110,6 +110,15 @@ class Receiver:
                     _state(group, "other_receiver")
                     self.stop.wait(60)
                     continue
+                with SessionLocal() as db:
+                    renew_worker_lease(db, handle, lease_seconds=150)
+                    if not group_is_current(db, group):
+                        _wake.set()
+                        return
+                    # A process crash can leave an old positive observation.
+                    # Re-subscription reconciles it; a missing end is not proof
+                    # of an ongoing event and must not be closed by a timer.
+                    source_disconnected(db, group)
                 _state(group, "connecting")
                 self.client = DeviceClient(group["host"], group["port"], group["username"], group["password"], group["onvif_path"])
                 topics = self.client.topics()
@@ -117,10 +126,13 @@ class Receiver:
                 self.client.subscribe()
                 failures = 0
                 counts = {"messages_received": 0, "messages_parsed": 0, "messages_rejected": 0,
-                          "messages_ignored": 0, "messages_unsupported": 0, "events_saved": 0, "excluded_source": 0}
+                          "messages_ignored": 0, "messages_unsupported": 0, "events_saved": 0, "excluded_source": 0,
+                          "messages_initialized": 0, "messages_inactive": 0, "messages_deleted": 0,
+                          "messages_without_state": 0, "messages_unclassified_end": 0, "messages_suppressed": 0}
                 unclassified = {}
                 supported_kinds = sorted({kind_for(topic) for topic in topics} & set(EVENT_KINDS))
-                _state(group, "waiting", kinds=supported_kinds, dropped=0, unclassified=[], **counts)
+                observed_kinds = set()
+                _state(group, "waiting", kinds=supported_kinds, advertised_kinds=supported_kinds, observed_kinds=[], dropped=0, unclassified=[], **counts)
                 minute, accepted, dropped = time.monotonic(), 0, 0
                 while not self.stop.is_set() and not _stop.is_set():
                     with SessionLocal() as db:
@@ -144,14 +156,21 @@ class Receiver:
                                 counts["messages_ignored" if ignored_notification(message) else "messages_rejected"] += 1
                                 continue
                             counts["messages_parsed"] += 1
+                            counts["messages_initialized"] += int(signal.initialized)
+                            counts["messages_inactive"] += int(signal.active is False)
+                            counts["messages_deleted"] += int(signal.operation == "Deleted")
+                            counts["messages_without_state"] += int(signal.active is None)
                             if signal.kind not in EVENT_KINDS:
-                                counts["messages_unsupported"] += 1
+                                counts["messages_unclassified_end" if signal.active is False else "messages_unsupported"] += 1
                                 # Bounded, in-memory diagnostic types/field names only;
                                 # never XML, field values, credentials or history spam.
                                 unclassified[signal.topic] = {"topic": signal.topic, "fields": list(signal.data_keys)}
                                 if len(unclassified) > 16:
                                     unclassified.pop(next(iter(unclassified)))
-                                continue
+                                if signal.active is not False:
+                                    continue
+                            else:
+                                observed_kinds.add(signal.kind)
                             if accepted >= 120 and (signal is None or signal.active is not False):
                                 dropped += 1
                                 continue
@@ -160,13 +179,14 @@ class Receiver:
                                 return
                             camera, allowed = signal_camera(group, identities, signal)
                             if allowed:
-                                saved = record_signal(db, group, camera, signal)
+                                saved = record_signal(db, group, camera, signal, diagnostics=counts)
                                 counts["events_saved"] += int(saved is not None)
                             else:
                                 counts["excluded_source"] += 1
                             accepted += 1
                     status = ("partial_messages" if counts["messages_rejected"] else "connected") if counts["messages_parsed"] else "invalid_messages" if counts["messages_rejected"] else "waiting"
-                    _state(group, status, kinds=supported_kinds,
+                    _state(group, status, kinds=sorted(set(supported_kinds) | observed_kinds),
+                           advertised_kinds=supported_kinds, observed_kinds=sorted(observed_kinds),
                            unclassified=list(unclassified.values()), dropped=dropped, **counts)
                     # Some devices ignore the requested timeout. Empty replies must
                     # not turn a long-poll into a hot retry loop.

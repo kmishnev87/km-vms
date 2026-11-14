@@ -7,6 +7,7 @@ import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../c
 import { installModalKeyboard } from "../../lib/modalKeyboard";
 import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
 import ArchiveExportDialog from "../../components/ArchiveExportDialog";
+import ArchiveCameraSelect from "../../components/ArchiveCameraSelect";
 import useArchiveExport from "../../lib/useArchiveExport";
 import { apiFetch, canDeleteRecordings, issueRecordingMediaToken, getAuthToken, captureAuthSession } from "../../lib/api";
 import { useAuthSession } from "../../lib/useAuthSession";
@@ -19,6 +20,7 @@ import {
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n } from "../../lib/i18n";
 import { resolveEffectiveRecordingCamera } from "../../lib/recordingFilters";
+import { recordingCameraOptions } from "../../lib/archiveCameraGroups";
 import {
   shouldUseAdaptiveHighResolutionPlayback,
   normalizeVideoDimensions,
@@ -518,19 +520,21 @@ function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
   return states.some((item) => {
     const state = String(item?.job_state || item?.status || item?.state || "").toLowerCase();
     const cameraName = String(item?.camera_name || item?.name || item?.camera || "");
-    const selectedMatches = !selectedCamera || selectedCamera === "__all__" || cameraName === selectedCamera;
+    const selectedMatches = !selectedCamera || selectedCamera === "__all__" || cameraName === selectedCamera
+      || `camera:${item.camera_id}` === selectedCamera;
     return selectedMatches && (state === "recording" || state === "active" || state === "running");
   });
 }
 
 export default function RecordingsPage() {
   const exportSession = useAuthSession();
-  const { text } = useI18n();
+  const { text, t: dictionary } = useI18n();
   const t = useMemo(
     () => Object.fromEntries(Object.entries(TEXT).map(([key, value]) => [key, text(value)])),
     [text]
   );
   const [cameras, setCameras] = useState([]);
+  const [cameraItems, setCameraItems] = useState([]);
   const [exportCameraOptions, setExportCameraOptions] = useState([]);
   const [selectedCamera, setSelectedCamera] = useState("__all__");
   const [selectedDate, setSelectedDate] = useState("");
@@ -606,8 +610,10 @@ export default function RecordingsPage() {
 
   async function loadCameras() {
     const data = await apiFetch("/recordings/cameras");
-    const cameraOptions = data.items || [];
+    const options = recordingCameraOptions(data);
+    const cameraOptions = options.map(item => item.value);
     setCameras(cameraOptions);
+    setCameraItems(options);
     setExportCameraOptions(data.export_items || []);
     return cameraOptions;
   }
@@ -618,7 +624,11 @@ export default function RecordingsPage() {
     setRecordingsLoadState(loadedQueryKey ? "refreshing" : "loading");
     setSelectedPaths([]);
     const params = new URLSearchParams();
-    if (camera && camera !== "__all__") params.set("camera", camera);
+    if (camera && camera !== "__all__") {
+      const selected = cameraItems.find(item => item.value === camera);
+      if (selected?.byId) params.set("camera_id", selected.id);
+      else params.set("camera", camera);
+    }
     if (dateValue) params.set("date", productDateFilterParam(dateValue));
     params.set("limit", String(pageSize));
     params.set("offset", String(Math.max(0, (page - 1) * pageSize)));
@@ -886,7 +896,7 @@ export default function RecordingsPage() {
     const contextKey = JSON.stringify([selectedCamera, selectedDate, selectedPaths.slice().sort()]);
     if (exportDraftRef.current?.contextKey === contextKey) { setExportModal(exportDraftRef.current); return; }
     const selected = selectedPaths.length === 1 ? items.find((item) => recordingIdentityKey(item) === selectedPaths[0]) : null;
-    const camera = clipCameraOptions.find((item) => String(item.id) === String(selected?.camera_id) || item.name === (selected?.camera || selectedCamera));
+    const camera = clipCameraOptions.find((item) => String(item.id) === String(selected?.camera_id) || `camera:${item.id}` === selectedCamera || item.name === (selected?.camera || selectedCamera));
     const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits, productTimezone);
     setError("");
     setExportModal({
@@ -1288,13 +1298,14 @@ export default function RecordingsPage() {
       const plan = await apiFetch("/recordings/deletion-plans", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scope, camera }),
+        body: JSON.stringify({ scope, camera: cameraItems.find(item => item.value === camera)?.name || camera,
+          ...(camera && cameraItems.find(item => item.value === camera)?.byId ? { camera_id: Number(cameraItems.find(item => item.value === camera).id) } : {}) }),
       });
       if (!ownsAction()) return;
       const title = scope === "all" ? t.deleteAllTitle : t.deleteCameraTitle;
       const message = scope === "all"
         ? t.deleteAllMessage
-        : t.deleteCameraMessage.replace("{camera}", camera || "");
+        : t.deleteCameraMessage.replace("{camera}", cameraItems.find(item => item.value === camera)?.name || camera || "");
       setDeleteDialog({
         id: `recording-plan-confirm-${plan.plan_id}`,
         readyPlanId: plan.plan_id,
@@ -1372,18 +1383,8 @@ export default function RecordingsPage() {
       <div className="card recordingsFilterCard">
         <div className="recordingsFilterBar">
           <div className="recordingsFilterGroup">
-            <select
-              className="select recordingsFilterSelect"
-              value={selectedCamera}
-              onChange={(e) => setSelectedCamera(e.target.value)}
-            >
-              <option value="__all__">{t.allCameras}</option>
-              {cameras.map((camera) => (
-                <option key={camera} value={camera}>
-                  {camera}
-                </option>
-              ))}
-            </select>
+            <ArchiveCameraSelect items={cameraItems} value={selectedCamera} onChange={setSelectedCamera}
+              allLabel={t.allCameras} retainedLabel={dictionary("archiveCameraGroups.retained")} deletedLabel={dictionary("archiveCameraGroups.deleted")}/>
 
             <input
               type="date"

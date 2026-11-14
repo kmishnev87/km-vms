@@ -8,6 +8,32 @@ from app.services.schema_migrations import execute_migration_plan
 from test_format_schema_stage1375_postgres import format_database, business_snapshot, pytestmark
 
 
+def test_filter_snapshot_batches_over_a_thousand_ids_without_expanding_scope(format_database):
+    from app.models.user import User
+    from app.services import camera_event_selections as selections
+    _engine, db = format_database
+    execute_migration_plan(db)
+    before = business_snapshot(db)
+    stamp = events.now_utc() - timedelta(seconds=2)
+    ids = [str(uuid.uuid4()) for _ in range(1005)]
+    for identifier in ids:
+        db.add(AuditEvent(id=identifier, created_at=stamp, category=events.CATEGORY, event_type="camera.person",
+            severity="info", message_ru="", message_en="", target_type="camera", target_id="1", target_name="Front", event_metadata={}))
+    db.commit()
+    page = events.list_camera_events(db, 1, kind="person", limit=25)
+    boundary, identifier = page["read_cursor"].split("|", 1)
+    chosen = selections.create(db, 1, (datetime.fromisoformat(boundary), identifier), {"kind": "person", "unread": True})
+    assert chosen["count"] == 1005
+    later = str(uuid.uuid4())
+    db.add(AuditEvent(id=later, created_at=events.now_utc(), category=events.CATEGORY, event_type="camera.person",
+        severity="info", message_ru="", message_en="", event_metadata={}))
+    db.commit()
+    assert selections.apply(db, 1, chosen["id"], excluded_ids=[ids[0]]) == 1004
+    assert selections.apply(db, 1, chosen["id"], excluded_ids=[ids[0]], delete=True, actor=db.get(User, 1)) == 1004
+    assert {row.id for row in events.event_query(db).all()} == {ids[0], later}
+    assert business_snapshot(db) == before
+
+
 def test_useful_rule_class_filters_and_clock_cleanup_on_real_postgres(format_database):
     from app.services import onvif_events as ov
     from test_camera_events_stage172 import notification, group

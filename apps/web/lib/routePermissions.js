@@ -17,8 +17,8 @@ export const FRONTEND_ROUTE_ACCESS = Object.freeze({
   }),
   "/apk": Object.freeze({
     access: ROUTE_ACCESS_PUBLIC,
-    placeholderOnly: true,
-    reason: "placeholder-only client page; no backend APK download route is exposed",
+    placeholderOnly: false,
+    reason: "public official Android release metadata and GitHub download; no NAS credentials or backend artifact route",
   }),
   "/live": Object.freeze({
     access: ROUTE_ACCESS_PERMISSION,

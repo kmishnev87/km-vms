@@ -8,8 +8,8 @@ const key=camera=>JSON.stringify([camera,"",1,20,"created_at","desc"]);
 const requestIdRef={current:0},currentQueryKeyRef={current:key("A")};
 const requests=[], errors=[];let resolveCameras;
 const state={items:[],loadedQueryKey:"",loadState:"idle"};
-function context(camera){
-  const ctx={selectedCamera:camera,selectedDate:"",currentPage:1,pageSize:20,sortBy:"created_at",sortDir:"desc",currentQueryKey:key(camera),
+function context(camera,cameraItems=[]){
+  const ctx={cameraItems,selectedCamera:camera,selectedDate:"",currentPage:1,pageSize:20,sortBy:"created_at",sortDir:"desc",currentQueryKey:key(camera),
     currentQueryKeyRef,requestIdRef,loadedQueryKey:"",URLSearchParams,
     apiFetch:path=>new Promise(resolve=>requests.push({path,resolve})),
     setRecordingsLoadState:value=>state.loadState=value,setSelectedPaths:()=>{},setItems:value=>state.items=value,
@@ -31,3 +31,11 @@ assert.equal(state.items[0].camera,"B");
 assert.equal(state.loadedQueryKey,currentQueryKeyRef.current);
 assert.equal(state.loadState,"loaded");assert.deepEqual(errors,[]);
 console.log("Real Records refresh/filter chain keeps newest rows, query identity and enabled actions PASS");
+currentQueryKeyRef.current=key("camera:9");
+const typed=context("camera:9",[{id:"9",value:"camera:9",name:"Yard",byId:true}]);
+const typedLoad=typed.load("camera:9","",1);
+assert.equal(requests.length,2);
+assert.equal(new URL("http://nas"+requests[1].path).searchParams.get("camera_id"),"9");
+assert.equal(new URL("http://nas"+requests[1].path).searchParams.has("camera"),false);
+requests[1].resolve({items:[{camera_id:9}],pagination:{total_count:1}});await typedLoad;
+assert.equal(state.items[0].camera_id,9);assert.deepEqual(errors,[]);

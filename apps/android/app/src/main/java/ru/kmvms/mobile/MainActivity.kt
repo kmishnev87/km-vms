@@ -1,0 +1,32 @@
+package ru.kmvms.mobile
+
+import android.os.Bundle
+import android.content.Context
+import android.content.Intent
+import ru.kmvms.mobile.push.NotificationNavigation
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import ru.kmvms.mobile.ui.MobileApp
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+class MainActivity : ComponentActivity() {
+    private val updates: ru.kmvms.mobile.update.AppUpdates by viewModels()
+    override fun attachBaseContext(newBase:Context) { super.attachBaseContext(AppLocales.wrap(newBase)) }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        NotificationNavigation.accept(intent)
+        setContent { MobileApp(updates = updates) }
+    }
+    override fun onResume() {
+        super.onResume()
+        updates.foreground()
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        NotificationNavigation.accept(intent)
+    }
+}
