@@ -16,9 +16,10 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 
 /** A separate public client. Never uses NAS cookies, Authorization, or its TLS configuration. */
-class OfficialAndroidSource {
-    private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
+class OfficialAndroidSource internal constructor(
+    private val client: OkHttpClient = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(10, TimeUnit.MINUTES).build()
+) {
 
     suspend fun latest(): AndroidRelease? = withContext(Dispatchers.IO) {
         client.newCall(Request.Builder().url(AndroidRelease.METADATA).header("Accept", "application/json")

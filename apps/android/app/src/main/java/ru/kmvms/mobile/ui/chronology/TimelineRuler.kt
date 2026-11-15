@@ -30,11 +30,12 @@ import ru.kmvms.mobile.ui.Outline
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
-@Composable internal fun TimelineRuler(state: ChronologyState, cameras: List<Camera>, seek: (Long) -> Unit) {
+@Composable internal fun TimelineRuler(state: ChronologyState, cameras: List<Camera>, seek: (Long) -> Unit,
+                                      visibleWindow:(Long,Long)->Unit) {
     val dayStart=state.day.atStartOfDay(state.zone).toInstant().toEpochMilli()
     val dayEnd=state.day.plusDays(1).atStartOfDay(state.zone).toInstant().toEpochMilli()
     var scale by rememberSaveable { mutableIntStateOf(3) }
-    var origin by rememberSaveable(dayStart, scale) {
+    var origin by rememberSaveable(scale) {
         mutableLongStateOf(TimelineViewport.around(dayStart,dayEnd,state.position,TimelineViewport.scales[scale]*60_000L).start)
     }
     val viewport=TimelineViewport.around(dayStart,dayEnd,origin+TimelineViewport.scales[scale]*30_000L,TimelineViewport.scales[scale]*60_000L)
@@ -45,6 +46,7 @@ import java.time.format.DateTimeFormatter
     val current=preview ?: state.position
     val latestSeek by rememberUpdatedState(seek)
     val latestPosition by rememberUpdatedState(state.position)
+    val latestWindow by rememberUpdatedState(visibleWindow)
     val density=LocalDensity.current
     val paint=remember(density){android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color=android.graphics.Color.rgb(100,116,139);textSize=with(density){10.dp.toPx()}
@@ -53,9 +55,12 @@ import java.time.format.DateTimeFormatter
         if(preview==null && (state.position<viewport.start || state.position>=viewport.end))
             origin=viewport.centred(state.position).start
     }
+    LaunchedEffect(viewport.start,viewport.end,preview) {
+        if(preview==null)latestWindow(viewport.start,viewport.end)
+    }
     Column {
         Row(Modifier.fillMaxWidth().height(36.dp),verticalAlignment=Alignment.CenterVertically) {
-            Text(Instant.ofEpochMilli(current).atZone(state.zone).format(DateTimeFormatter.ofPattern("HH:mm:ss")),
+            Text(Instant.ofEpochMilli(current).atZone(state.zone).format(DateTimeFormatter.ofPattern("dd.MM HH:mm:ss")),
                 color=Muted,style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f).testTag("timeline-ruler-time"))
             TextButton(onClick={scale=(scale-1).coerceAtLeast(0)},enabled=scale>0,contentPadding=PaddingValues(0.dp),modifier=Modifier.size(40.dp,36.dp).testTag("timeline-zoom-out")){Text("−")}
             val minutes=TimelineViewport.scales[scale]
@@ -88,14 +93,15 @@ import java.time.format.DateTimeFormatter
                         val delta=(-totalDrag/size.width*viewport.span).toLong()
                         val initial=TimelineViewport(dayStart,dayEnd,dragOrigin,viewport.span)
                         origin=initial.shifted(delta).start
-                        preview=(dragPosition+origin-dragOrigin).coerceIn(dayStart,dayEnd-1)
+                        preview=dragPosition+origin-dragOrigin
                     }
                 }) {
                 val ticks=viewport.ticks((size.width/56.dp.toPx()).toInt().coerceAtLeast(2))
                 ticks.forEach { time ->
                     val x=viewport.fraction(time)*size.width
                     drawLine(Outline,Offset(x,19.dp.toPx()),Offset(x,size.height),1.dp.toPx())
-                    val label=Instant.ofEpochMilli(time).atZone(state.zone).format(DateTimeFormatter.ofPattern("HH:mm"))
+                    val tick=Instant.ofEpochMilli(time).atZone(state.zone)
+                    val label=tick.format(DateTimeFormatter.ofPattern(if(tick.hour==0&&tick.minute==0)"dd.MM"else"HH:mm"))
                     drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(label,(x-paint.measureText(label)/2).coerceIn(0f,(size.width-paint.measureText(label)).coerceAtLeast(0f)),13.dp.toPx(),paint) }
                 }
                 state.selected.forEachIndexed { index,id ->

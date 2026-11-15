@@ -292,7 +292,7 @@
     <string name="mobile_update_current">You have the latest published Android version.</string>
     <string name="mobile_update_unpublished">No official Android release has been published yet.</string>
     <string name="mobile_update_available">Android version %1$s is available. Android will ask you to confirm installation.</string>
-    <string name="mobile_update_downloading">Downloading and verifying the update…</string>
+    <string name="mobile_update_downloading">Downloading the update…</string>
     <string name="mobile_update_ready">The verified update is ready to install.</string>
     <string name="mobile_update_permission">Allow KM VMS to install this update in Android settings, then return here.</string>
     <string name="mobile_update_failed">Could not check, download, or verify the update. Your current app is unchanged. Try again.</string>
@@ -347,4 +347,25 @@
     <string name="push_offer_enable">Enable</string>
     <string name="push_offer_decline">Don’t enable</string>
     <string name="push_offer_settings">You can change delivery in Events → Alerts → Alerts on this phone.</string>
+    <string name="mobile_update_verifying">Download complete. Checking the APK and signing certificate…</string>
+    <string name="mobile_update_hide">Hide</string>
+    <string name="nas_target_version">Updating to %1$s</string>
+    <string name="nas_step_count">Stage %1$d of %2$d: %3$s</string>
+    <string name="nas_step_request">Accepting the request</string>
+    <string name="nas_step_preflight">Preparing the update</string>
+    <string name="nas_step_applying">Applying the update</string>
+    <string name="nas_step_health">Checking services</string>
+    <string name="nas_step_verification">Confirming the installed version</string>
+    <string name="nas_phase_download">Downloading release files…</string>
+    <string name="nas_phase_source">Preparing release files…</string>
+    <string name="nas_phase_validation">Validating files and configuration…</string>
+    <string name="nas_phase_build">Building application components…</string>
+    <string name="nas_phase_pull">Downloading application components…</string>
+    <string name="nas_phase_database">Checking and preparing the database…</string>
+    <string name="nas_phase_rollback">Restoring the previous installation…</string>
+    <string name="nas_rolled_back">Update failed. The previous installation was restored.</string>
+    <string name="nas_items_progress">Completed: %1$d / %2$d (%3$d%%)</string>
+    <string name="nas_status_checking">Checking…</string>
+    <string name="nas_status_received">Status received at %1$s</string>
+    <string name="nas_status_failed">Could not retrieve a fresh status. The last known stage is shown above.</string>
 </resources>

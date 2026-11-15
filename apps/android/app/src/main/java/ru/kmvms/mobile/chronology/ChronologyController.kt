@@ -53,6 +53,7 @@ class ChronologyController(private val context: Context, private val api: Chrono
     private var active = true
     private var rangeRequest = 0L
     private var zoneKnown = false
+    private var visibleWindow:Pair<Long,Long>? = null
 
     init {
         scope.launch {
@@ -85,14 +86,26 @@ class ChronologyController(private val context: Context, private val api: Chrono
     fun day(day: LocalDate) {
         val value = mutable.value
         val time = Instant.ofEpochMilli(clock.positionMillis).atZone(value.zone).toLocalTime()
-        mutable.update { it.copy(day = day) }
         seek(day.atTime(time).atZone(value.zone).toInstant().toEpochMilli())
-        refreshRanges()
+    }
+
+    fun rangeWindow(from:Long,to:Long) {
+        val before=rangeBounds()
+        timelineRangeWindow(from,to,mutable.value.zone) // Validate the bounded visible request.
+        visibleWindow=from to to
+        if(before!=rangeBounds())refreshRanges()
+    }
+
+    private fun rangeBounds():Pair<Instant,Instant> {
+        val value=mutable.value
+        return visibleWindow?.let{timelineRangeWindow(it.first,it.second,value.zone)}
+            ?: (value.day.atStartOfDay(value.zone).toInstant() to value.day.plusDays(1).atStartOfDay(value.zone).toInstant())
     }
 
     fun seek(position: Long, resetBuffer: Boolean = true) {
         val day = Instant.ofEpochMilli(position).atZone(mutable.value.zone).toLocalDate()
         val dayChanged = day != mutable.value.day
+        if(visibleWindow?.let{position<it.first||position>=it.second}==true)visibleWindow=null
         if (dayChanged) mutable.update { it.copy(day = day) }
         epoch++
         lookups.values.forEach(Job::cancel); lookups.clear()
@@ -123,10 +136,11 @@ class ChronologyController(private val context: Context, private val api: Chrono
         val request = ++rangeRequest
         val day = mutable.value.day
         val zone = mutable.value.zone
+        val (from,to)=rangeBounds()
         mutable.update { it.copy(loadingRanges = true) }
         rangesJob = scope.launch {
             try {
-                val result = api.ranges(ids, day.atStartOfDay(zone).toInstant(), day.plusDays(1).atStartOfDay(zone).toInstant())
+                val result = api.ranges(ids, from, to)
                 if (request == rangeRequest) {
                     val dayInZone = if (zoneKnown) day else Instant.ofEpochMilli(clock.positionMillis).atZone(result.zone).toLocalDate()
                     zoneKnown = true
@@ -205,8 +219,12 @@ class ChronologyController(private val context: Context, private val api: Chrono
         val step = clock.step(samples, elapsed, mutable.value.speed)
         step.seekToMillis?.let { position -> tracks.values.forEach { it.seek(position) } }
         tracks.values.forEach { it.playback(step.running, mutable.value.speed) }
-        mutable.update { it.copy(position = step.positionMillis, wantsPlay = clock.wantsPlayback,
+        val day=Instant.ofEpochMilli(step.positionMillis).atZone(mutable.value.zone).toLocalDate()
+        val dayChanged=day!=mutable.value.day
+        if(dayChanged&&visibleWindow?.let{step.positionMillis<it.first||step.positionMillis>=it.second}==true)visibleWindow=null
+        mutable.update { it.copy(position = step.positionMillis, day=day, wantsPlay = clock.wantsPlayback,
             running = step.running, waiting = step.waiting, phases = tracks.mapValues { row -> row.value.phase() }) }
+        if(dayChanged&&zoneKnown)refreshRanges()
     }
 
     private fun publishIntent() { mutable.update { it.copy(wantsPlay = clock.wantsPlayback) } }

@@ -136,7 +136,7 @@ import java.time.format.DateTimeFormatter
                     }
                 }
                 if (!compact) TimelineControls(controller, state)
-                TimelineRuler(state, archiveCameras, controller::seek)
+                TimelineRuler(state, archiveCameras, controller::seek,controller::rangeWindow)
             }
         }
         LazyColumn(Modifier.fillMaxSize().testTag("timeline-videos"), contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

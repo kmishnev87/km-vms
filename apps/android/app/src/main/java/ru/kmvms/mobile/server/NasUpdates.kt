@@ -37,8 +37,12 @@ data class NasUpdateCheck(val installed: String?, val status: String, val candid
         }
     }
 }
+val nasUpdateStepOrder = listOf("request", "preflight", "applying", "health_check", "commit_verification")
+data class NasUpdateStep(val name: String, val status: String)
 data class NasUpdateProgress(val submission: String?, val status: String, val percent: Int?, val elapsed: Long?,
-                             val step: String?, val verified: Boolean, val installedCommit: String?, val canCancel: Boolean) {
+    val step: String?, val verified: Boolean, val installedCommit: String?, val canCancel: Boolean,
+    val phase: String? = null, val current: Long? = null, val total: Long? = null, val unit: String? = null,
+    val steps: List<NasUpdateStep> = emptyList(), val targetVersion: String? = null) {
     val terminal get() = status in setOf("completed", "failed", "failed_rolled_back", "cancelled", "blocked")
     val visible get() = status !in setOf("idle", "unknown", "not_configured")
     fun completed(attempt: NasUpdateAttempt?) = status == "completed" && verified &&
@@ -47,11 +51,32 @@ data class NasUpdateProgress(val submission: String?, val status: String, val pe
         fun from(value: JSONObject): NasUpdateProgress {
             val body = value.optJSONObject("apply_status") ?: value
             val status = body.text("status") ?: "unknown"
+            val current = measuredCount(body, "progress_current")
+            val total = measuredCount(body, "progress_total")
+            val unit = body.text("progress_unit")
+            val measured = current != null && total != null && total > 0 && current <= total && unit in setOf("bytes", "items")
+            val percent = if (body.has("progress_percent") && !body.isNull("progress_percent"))
+                body.optInt("progress_percent").takeIf { measured && it in 0..100 && it == (current!! * 100 / total!!).toInt() } else null
+            val steps = body.optJSONArray("steps")?.let { array ->
+                (0 until minOf(array.length(), 20)).mapNotNull { index ->
+                    val item = array.optJSONObject(index) ?: return@mapNotNull null
+                    val name = item.text("name") ?: return@mapNotNull null
+                    val state = item.text("status") ?: return@mapNotNull null
+                    NasUpdateStep(name, state).takeIf { name in nasUpdateStepOrder && state in setOf("pending", "running", "completed", "failed") }
+                }.distinctBy { it.name }
+            }.orEmpty()
             return NasUpdateProgress(body.text("submission_id"), status,
-                if (body.has("progress_percent") && !body.isNull("progress_percent")) body.optInt("progress_percent").takeIf { it in 0..100 } else null,
+                percent,
                 body.number("elapsed_seconds"), body.text("current_step"), body.optBoolean("commit_verified"),
-                body.text("installed_commit"), body.optBoolean("can_cancel") && status == "queued")
+                body.text("installed_commit"), body.optBoolean("can_cancel") && status == "queued",
+                body.text("phase"), current.takeIf { percent != null }, total.takeIf { percent != null }, unit.takeIf { percent != null },
+                steps, body.text("target_version"))
         }
+        private fun measuredCount(body: JSONObject, key: String): Long? = when (val value = body.opt(key)) {
+            is Int -> value.toLong()
+            is Long -> value
+            else -> null
+        }?.takeIf { it in 0..Long.MAX_VALUE / 100 }
     }
 }
 interface NasUpdateAttempts { fun load(): NasUpdateAttempt?; fun save(value: NasUpdateAttempt?) }
@@ -62,7 +87,8 @@ private class SavedNasUpdateAttempts(context: Context, private val namespace: St
 }
 data class NasUpdatesState(val check: NasUpdateCheck? = null, val progress: NasUpdateProgress? = null,
     val pending: NasUpdateAttempt? = null, val loading: Boolean = false, val checking: Boolean = false,
-    val posting: Boolean = false, val watching: Boolean = false, val reconnecting: Boolean = false, val failures: Int = 0)
+    val posting: Boolean = false, val watching: Boolean = false, val reconnecting: Boolean = false, val failures: Int = 0,
+    val statusRequested: Boolean = false, val statusCheckedAt: Long? = null, val statusCheckFailed: Boolean = false)
 
 class NasUpdatesApi(private val api: NasApi) {
     suspend fun check(manual: Boolean) = NasUpdateCheck.from(api.json("api/system/update/${if (manual) "check" else "status"}", if (manual) "POST" else "GET") as JSONObject)
@@ -79,28 +105,36 @@ class NasUpdatesController(private val api: NasUpdatesApi, private val store: Na
     val state = mutable.asStateFlow()
     private var active = false
     private var watch: Job? = null
-    init { refresh() }
+    // A new screen checks the official release once. A saved in-flight receipt takes precedence.
+    init { refresh(manual = mutable.value.pending == null) }
     fun foreground(value: Boolean) {
         active = value
         if (value) { refresh(); startWatching() } else { watch?.cancel(); watch = null; mutable.update { it.copy(watching=false) } }
     }
-    fun refresh(manual: Boolean = false) {
+    fun refresh(manual: Boolean = false) = reload(manual, false)
+    fun refreshStatus() = reload(false, true)
+    private fun reload(manual: Boolean, statusOnly: Boolean) {
         if (mutable.value.loading || mutable.value.posting) return
-        mutable.update { it.copy(loading=true, checking=manual) }
+        mutable.update { it.copy(loading=true, checking=manual, statusRequested=statusOnly, statusCheckFailed=false) }
         scope.launch {
             try {
-                val check = api.check(manual)
-                mutable.update { it.copy(check=check) }
                 accept(api.progress())
+                if (statusOnly) mutable.update { it.copy(statusCheckedAt=System.currentTimeMillis()) }
+                else {
+                    val progress = mutable.value.progress
+                    val running = progress?.let { it.visible && !it.terminal } == true || mutable.value.pending != null
+                    val check = api.check(manual && !running)
+                    mutable.update { it.copy(check=check) }
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { mutable.update { it.copy(failures=it.failures+1) } }
-            finally { mutable.update { it.copy(loading=false, checking=false) }; startWatching() }
+            catch (_: Exception) { mutable.update { it.copy(failures=it.failures+1, statusCheckFailed=statusOnly) } }
+            finally { mutable.update { it.copy(loading=false, checking=false, statusRequested=false) }; startWatching() }
         }
     }
     fun start(candidate: NasUpdateCandidate) {
         if (mutable.value.pending != null || mutable.value.posting || candidate != mutable.value.check?.candidate) return
         val attempt = NasUpdateAttempt(UUID.randomUUID().toString(), candidate)
-        store.save(attempt); mutable.update { it.copy(pending=attempt, progress=null) }
+        store.save(attempt); mutable.update { it.copy(pending=attempt, progress=null, statusCheckedAt=null, statusCheckFailed=false) }
         submit(attempt)
     }
     fun retry() { mutable.value.pending?.let(::submit) }

@@ -292,7 +292,7 @@
     <string name="mobile_update_current">Установлена последняя опубликованная версия Android-приложения.</string>
     <string name="mobile_update_unpublished">Официальный выпуск Android-приложения пока не опубликован.</string>
     <string name="mobile_update_available">Доступна версия %1$s. Android попросит подтвердить установку.</string>
-    <string name="mobile_update_downloading">Скачиваем и проверяем обновление…</string>
+    <string name="mobile_update_downloading">Скачиваем обновление…</string>
     <string name="mobile_update_ready">Обновление проверено и готово к установке.</string>
     <string name="mobile_update_permission">Разрешите KM VMS устанавливать обновление в настройках Android и вернитесь сюда.</string>
     <string name="mobile_update_failed">Не удалось проверить, скачать или подтвердить обновление. Текущее приложение не изменено. Повторите попытку.</string>
@@ -347,4 +347,25 @@
     <string name="push_offer_enable">Включить</string>
     <string name="push_offer_decline">Не включать</string>
     <string name="push_offer_settings">Доставку можно изменить в разделе «События → Оповещения → Оповещения на этом телефоне».</string>
+    <string name="mobile_update_verifying">Файл скачан. Проверяем APK и сертификат подписи…</string>
+    <string name="mobile_update_hide">Скрыть</string>
+    <string name="nas_target_version">Обновление до %1$s</string>
+    <string name="nas_step_count">Этап %1$d из %2$d: %3$s</string>
+    <string name="nas_step_request">Приём запроса</string>
+    <string name="nas_step_preflight">Подготовка обновления</string>
+    <string name="nas_step_applying">Применение обновления</string>
+    <string name="nas_step_health">Проверка служб</string>
+    <string name="nas_step_verification">Подтверждение установленной версии</string>
+    <string name="nas_phase_download">Скачиваем файлы выпуска…</string>
+    <string name="nas_phase_source">Подготавливаем файлы выпуска…</string>
+    <string name="nas_phase_validation">Проверяем файлы и конфигурацию…</string>
+    <string name="nas_phase_build">Собираем компоненты приложения…</string>
+    <string name="nas_phase_pull">Скачиваем компоненты приложения…</string>
+    <string name="nas_phase_database">Проверяем и подготавливаем базу данных…</string>
+    <string name="nas_phase_rollback">Восстанавливаем предыдущую установку…</string>
+    <string name="nas_rolled_back">Обновление не удалось. Предыдущая установка восстановлена.</string>
+    <string name="nas_items_progress">Выполнено: %1$d / %2$d (%3$d%%)</string>
+    <string name="nas_status_checking">Проверяем…</string>
+    <string name="nas_status_received">Статус получен в %1$s</string>
+    <string name="nas_status_failed">Не удалось получить свежий статус. Выше показан последний известный этап.</string>
 </resources>

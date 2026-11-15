@@ -20,7 +20,13 @@ object AppLocales {
         if(Build.VERSION.SDK_INT>=33)return context
         val language=selected(context)
         if(language.isEmpty())return context
-        val configuration=Configuration(context.resources.configuration).apply{setLocales(LocaleList.forLanguageTags(language))}
+        return localizedContext(context,language)
+    }
+    // Override language only. Copying the whole configuration freezes orientation,
+    // screen size and density in this context on Android versions before 13.
+    internal fun localizedContext(context:Context,language:String):Context {
+        require(language in supported && language.isNotEmpty())
+        val configuration=Configuration().apply{setLocales(LocaleList.forLanguageTags(language))}
         return context.createConfigurationContext(configuration)
     }
     fun set(context:Context,language:String) {

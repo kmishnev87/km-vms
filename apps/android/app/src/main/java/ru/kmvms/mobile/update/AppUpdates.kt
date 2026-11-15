@@ -18,7 +18,7 @@ import ru.kmvms.mobile.core.shouldCheckForUpdate
 import java.io.File
 import java.time.LocalDate
 
-enum class UpdatePhase { IDLE, CHECKING, CURRENT, UNPUBLISHED, AVAILABLE, DOWNLOADING, READY, PERMISSION, FAILED, INCOMPATIBLE, DEVELOPMENT }
+enum class UpdatePhase { IDLE, CHECKING, CURRENT, UNPUBLISHED, AVAILABLE, DOWNLOADING, VERIFYING, READY, PERMISSION, FAILED, INCOMPATIBLE, DEVELOPMENT }
 data class AppUpdateState(val phase: UpdatePhase = UpdatePhase.IDLE, val release: AndroidRelease? = null, val bytes: Long = 0,
                           val offer: Boolean = false)
 
@@ -77,12 +77,14 @@ class AppUpdates(application: Application) : AndroidViewModel(application) {
         val release = mutable.value.release ?: return
         if (BuildConfig.DEBUG || release.code <= BuildConfig.VERSION_CODE) return
         running = true
-        mutable.update { it.copy(phase = UpdatePhase.DOWNLOADING, bytes = 0, offer = false) }
+        // An accepted automatic offer remains visible while the transfer is running.
+        mutable.update { it.copy(phase = UpdatePhase.DOWNLOADING, bytes = 0) }
         viewModelScope.launch {
             try {
                 source.download(release, apk) { bytes -> mutable.update { it.copy(bytes = bytes) } }
+                mutable.update { it.copy(phase = UpdatePhase.VERIFYING) }
                 withContext(Dispatchers.IO) { verifyApk(context, apk, release) }
-                mutable.update { it.copy(phase = UpdatePhase.READY) }
+                mutable.update { it.copy(phase = UpdatePhase.READY, offer = false) }
                 install()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { apk.delete(); mutable.update { it.copy(phase = UpdatePhase.FAILED) } }

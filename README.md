@@ -1,204 +1,225 @@
 # KM VMS
 
-## NAS-first, self-hosted video management system and network video recorder
+## Self-hosted VMS and NVR for IP cameras — on your NAS, in your browser, and on Android
 
-**KM VMS is a web-based Video Management System (VMS) with Network Video Recorder (NVR) capabilities for RTSP and ONVIF IP cameras.** Run it on your own NAS or Linux server using Docker, keep your recordings on your own storage, and manage surveillance from a browser.
+**Watch live. Investigate in sync. Keep the footage that matters.**
 
-Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings camera setup, multi-camera live viewing, recording, archive playback, storage management, and system diagnostics into one application.
+KM VMS is a self-hosted **Video Management System (VMS)** with **Network Video Recorder (NVR)** capabilities for **RTSP and ONVIF IP cameras**. It brings camera configuration, multi-camera live monitoring, recording, synchronized playback, camera events, archive management, and server maintenance into one connected product.
 
-**Interface languages: English · 简体中文 (Simplified Chinese) · Русский (Russian).**
+Run it on your own NAS or Docker-capable Linux server. Keep video on storage you control. Watch from a browser or the native Android app, control supported PTZ cameras, follow events across recordings, and export important moments. Local recording and viewing do not require a camera manufacturer's cloud account.
 
-[MIT License](LICENSE) — use, modify and distribute, including commercially, with the required copyright and license notices.
+**Your cameras. Your archive. Your surveillance system.**
 
-[Quick start](#quick-start) · [Features](#features) · [Screenshots](#screenshots) · [Installation guide](docs/INSTALL.md) · [Releases](https://github.com/kmishnev87/km-vms/releases) · [Report a problem](https://github.com/kmishnev87/km-vms/issues)
+**Three interface languages: English · 简体中文 (Simplified Chinese) · Русский (Russian).**
 
-![KM VMS English-language dashboard with cameras, recordings, live view, chronology, storage, system health, and settings](docs/images/dashboard-en.png)
+**MIT licensed:** use, modify, and distribute the project, including commercially, with the notices required by the license.
 
-*English web interface. The native Android client is available from Settings → Download APK and GitHub Releases.*
+[Quick start](#quick-start) · [Features](#what-km-vms-can-do) · [Android](#native-android-app) · [Releases](https://github.com/kmishnev87/km-vms/releases) · [Report a problem](https://github.com/kmishnev87/km-vms/issues)
 
-## Why KM VMS?
+![Real KM VMS dashboard in English: cameras, recordings, live viewing, chronology, storage, system health, and settings](docs/images/dashboard-en.png)
 
-- **A complete surveillance workflow.** Connect cameras, watch live video, record, find an event in the archive, and export the relevant footage without switching between unrelated tools.
-- **Your server, your archive.** Video recordings stay on storage you control. Local recording and viewing do not require a camera manufacturer's cloud account or cloud recording service.
-- **Standards-based camera connections.** Use RTSP streams and ONVIF services rather than restricting the entire installation to one camera brand.
-- **A shared view of time.** Chronology keeps available recordings together: when one needs data, the group waits instead of drifting apart. Confirmed archive gaps do not block the other cameras.
-- **PTZ that follows the camera's capabilities.** Compatible cameras expose movement, zoom, speed, and saved positions without a separate manual PTZ setup. Low-latency video is used during control when the selected stream supports it.
-- **Storage management as part of the product.** Retention rules, archive limits, free-space monitoring, and integrity tools are available alongside recording and playback.
-- **More visibility when something goes wrong.** System Health, recording states, audit history, and diagnostics help distinguish a camera connection problem from a storage or recording problem.
-- **Everyday administration in the browser.** Manage users, camera settings, backups, and published updates through the web interface after installation.
+## Why choose KM VMS?
 
-## Features
+### One system from live viewing to saved footage
 
-| Area | What you can do |
-| --- | --- |
-| Native Android | Android 8.0+, three languages, original KM VMS artwork, independent NAS profiles, native video/PTZ, archive, events and NAS maintenance. Signed APK 0.8.2 offers notification setup after the first login to each NAS, remembers your choice and shows registration/test results. Compact fullscreen controls, recording deletion/replay and a touch-friendly archive ruler are included. |
-| IP cameras | Add and edit RTSP/ONVIF cameras, check connections, select video sources and main/sub streams, and configure recording. |
-| ONVIF video settings | Discover Media1/Media2 services, read supported encoder settings, and apply camera-provided options for codec, resolution, frame rate, and bitrate where the device exposes them. |
-| Camera events | Opt-in ONVIF PullPoint reception, eleven useful event types, rule and object details, history filters and personal camera/type/time notifications. Mark events viewed, delete selected events or a confirmed history snapshot, and open live video or an existing archive. Clock/service chatter is excluded; event deletion never removes footage. |
-| Camera detection | Read ONVIF detection rules and change explicitly exposed boolean switches with conflict detection and confirmation. Not all devices expose these controls; KM VMS does not invent unavailable switches or overwrite detection zones. |
-| Live monitoring | Add or remove multiple cameras, align tiles or automatically fit their frame aspect ratios, and use main/sub stream and audio controls in individual fullscreen views. Recover viewing after temporary connection interruptions. |
-| PTZ control | Automatically detect supported PTZ capabilities for the selected camera/lens. Move, zoom, choose speed or saved positions, and use a movable fullscreen control panel. Point positioning and area zoom are available only through supported device capabilities/control paths. |
-| Recording | Record video on your NAS/server, monitor recording state, and retry after temporary camera or network failures while recording remains enabled. After interruption, readable saved fragments can be finalized without rewriting video; unconfirmed files remain available for review. |
-| Records and playback | Search and filter archive files, play recordings, and download source files. Compact camera groups separate current and deleted cameras with retained footage; stable camera IDs keep identically named cameras separate. |
-| Video clips and evidence | Create clips up to three hours from Records or Chronology, including retained recordings of removed cameras. No fixed 4 GiB source-size cap; preparation checks available storage. Download the clip and its passport, clear the selection, or explicitly delete the derived result without deleting source footage. Completed clips stay until you delete them. |
-| Synchronized chronology | Navigate a shared time point across cameras with 3/6/12/24-hour and 3/7-day scales. Play waits for the required recordings; buffering pauses the group and its clock. Confirmed gaps are not blockers, and the last frame is held while the next segment loads. Add all uses frame-aware alignment and adds only current cameras; retained cameras are available manually. |
-| Archive management | Configure retention and size limits, inspect storage usage with original names for removed cameras, and review archive findings by camera, problem, date, and state. Confirm individual or bulk actions. Filter and page the operation history, with grouped steps and a distinction between an earlier attempt and the issue's current relevance. |
-| System Health | Distinguish current camera, recording, storage, and playback problems from findings about older archive files. Historical findings do not by themselves mean that current recording has stopped. |
-| Users and permissions | Separate access through user accounts, roles, and server-enforced permissions. |
-| Maintenance | Create and verify database/configuration backups, inspect diagnostics, and apply published updates with preflight and post-update verification. |
-| Video acceleration | Select supported server-side hardware acceleration when the host, drivers, and video format provide a usable path. |
-| Localization | Switch the interface between English, Simplified Chinese, and Russian. |
+See what is happening, open the relevant recording, compare several viewpoints on a shared timeline, and export a clip with its information passport. Camera events, viewing, playback, and export are connected parts of the same workflow.
 
-ONVIF capabilities are device-dependent: a camera must expose the relevant service and supported options. A panoramic lens and a PTZ lens on the same device can have different controls. Point positioning and area zoom are not promised for every PTZ camera. RTSP compatibility, browser playback, audio, low-latency video, and hardware acceleration also depend on the camera, codec, browser, and server. KM VMS does not claim compatibility with every camera or hardware combination.
+### A synchronized archive you can follow
+
+Multiple recordings share one time point. When an available recording needs more data, the group and its clock pause together while all available sources continue buffering. A confirmed recording gap does not block the other cameras.
+
+When following a person or vehicle across viewpoints, the sequence should not depend on which video loaded first.
+
+### A native Android client for the same NAS
+
+The browser provides a spacious surveillance workspace; Android provides touch-oriented controls, fullscreen video, PTZ, and notifications. Both use the same cameras, archive, events, and server-enforced permissions. Saved connections let you switch between home and a holiday property without repeatedly signing out and back in.
+
+### PTZ built into the viewing experience
+
+Supported PTZ controls appear after normal camera setup. Move the camera, adjust zoom and speed, or select a saved position without leaving the live view. During control, a compatible stream uses the low-latency video path so the picture can follow your actions more closely.
+
+### Storage management belongs inside the VMS
+
+Configure retention and archive limits, inspect usage by camera, check integrity, and resolve findings individually or in batches. System Health distinguishes current recording problems from findings about older files.
+
+### Your storage stays yours
+
+Choose the NAS or server, archive location, and retention rules. Local RTSP/ONVIF recording and viewing do not require a camera-vendor cloud subscription. Video stays on your storage and is not attached to diagnostic reports sent to the developer.
+
+Built for homes, holiday properties, small sites, and homelabs where control over footage, convenient multi-camera operation, and independence from one camera-cloud ecosystem matter.
 
 ## Quick start
 
-The example below installs the published **[0.9.18](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.18)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
+Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-### 1. Prepare your NAS or Linux server
-
-You need:
-
-- Docker Engine **25.0+** and Docker Compose **2.20.2+**, or a compatible implementation of `healthcheck.start_interval`.
-- Python 3, `curl`, a POSIX shell, archive utilities, and a working `getfacl` command.
-- Permission to run Docker and write to the selected application directory.
-- Network access to GitHub and the image/package registries needed for the initial downloads and Docker builds.
-
-The installer does **not** install Docker or host packages for you. Host Node.js, npm, and Git are not required for the normal public installation.
-
-### 2. Download and run the installer
-
-Run these commands in the NAS/server terminal or over SSH:
+For a **new installation** of published KM VMS **[0.9.19](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.19)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.18/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.18
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.19/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.19
 ```
 
-The interactive installer uses `$HOME/km-vms` as the default application directory and port `8088`. It asks for confirmation before creating a new application directory. To choose a persistent application directory on your NAS instead, add `--app-dir /path/to/km-vms` to the second command; replace that example path with your own.
+The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
 
-The application directory contains configuration and application data. The video archive location is selected separately during browser setup. Initial installation includes Docker image preparation; download/build time depends on the NAS and network.
-
-### 3. Finish in your browser
-
-After the installer reports that setup is starting, open:
+After the services are prepared, open:
 
 ```text
 http://<NAS-IP>:8088/setup
 ```
 
-Follow the setup wizard to choose storage and create your owner account. There is no shipped default administrator password. Then add your cameras and configure recording.
+The wizard guides storage selection and owner-account creation. There is no shipped default administrator password. Add cameras and configure recording afterward. Host Node.js, npm, and Git are not required for normal installation. Docker and host packages must be prepared beforehand; initial download/build time depends on hardware and network access.
 
-For prerequisites, custom paths/ports, troubleshooting, and existing installations, see the [installation guide](docs/INSTALL.md). Check [GitHub Releases](https://github.com/kmishnev87/km-vms/releases) for newer published versions. The examples deliberately select an immutable release tag rather than the moving `main` development branch.
+**Already running KM VMS?** Update through **Settings → Maintenance** instead of running a new installation over the existing application directory.
 
-## Screenshots
+[Detailed installation guide](docs/INSTALL.md) · [Latest published release](https://github.com/kmishnev87/km-vms/releases/latest)
 
-These are real screenshots of KM VMS using the **English interface**. They contain no camera credentials, private camera addresses, or surveillance footage.
+## What KM VMS can do
 
-The dashboard shown above links camera configuration, records, live monitoring, synchronized chronology, storage, and system health in one web application.
+### Cameras and ONVIF video profiles
 
-### Settings and maintenance entry points
+- Connect IP cameras through **RTSP and ONVIF**.
+- Check connections and select the appropriate lens/video source and main/sub streams.
+- Discover **ONVIF Media1 and Media2** services and the device's available video profiles.
+- Read and change exposed encoder settings: codec, resolution, frame rate, bitrate, and related camera-provided options.
+- Handle multiple lenses on one device while respecting differences between panoramic and movable channels.
+- Configure recording and control its enabled state from KM VMS.
 
-Language, timezone, recording format, hardware acceleration, security, maintenance, and user management are available from the settings workspace.
+Camera controls are grounded in what the device reports. Supported settings can be managed from the VMS without opening the camera's own web interface for each adjustment.
 
-![Real KM VMS settings in English with language, timezone, recording format, hardware acceleration, maintenance, and user management](docs/images/settings-en.png)
+### Multi-camera live monitoring
 
-## Deployment and compatibility
+- View several cameras in a configurable workspace.
+- Align by tile or **fit the cameras' frame aspect ratios** to use the screen more effectively.
+- Add all current cameras with frame-aware alignment.
+- Open individual fullscreen views with main/sub selection and audio controls.
+- Recover viewing after temporary connection interruptions.
 
-KM VMS is a Docker-based, self-hosted application for Linux/NAS environments. Its web interface runs in the browser; no separate desktop client is required for normal use.
+### Capability-based PTZ
 
-The current development and hardware-validation environment is a TerraMaster NAS. Other Linux-based NAS/server environments must provide the documented Docker, Compose, Python, filesystem/ACL, and storage capabilities; their vendor name alone is not a compatibility guarantee. No vendor certification or ONVIF conformance certification is claimed.
+- Automatically discover supported PTZ functions for the selected lens.
+- Pan, tilt, zoom, select speed, and move to camera-provided saved positions.
+- Move the translucent fullscreen control panel to a convenient screen location.
+- During PTZ control, switch the corresponding view to **low-latency WebSocket/fMP4 video** when the selected stream supports this path.
+- Use point positioning and area zoom when a supported device-control path is available.
 
-A GPU is optional: hosts without `/dev/dri` use software video processing. Supported DRM devices are passed through automatically by the shared installation/update/restart launcher when available; a missing GPU does not prevent container startup.
+A fixed panoramic lens does not gain PTZ because another lens in the same device can move. Controls follow the selected channel's actual capabilities.
 
-The implementation uses a Python/FastAPI backend, PostgreSQL, Redis, FFmpeg-based video processing, a Next.js web frontend, and nginx. See [dependency notes](docs/DEPENDENCIES.md) for pinned component information.
+### Recording and playback
 
-### Implemented versus planned
+- Record to your NAS/server, inspect Recorder state, and recover after temporary camera or network failures.
+- Choose MKV or MP4 recording behavior to suit your installation.
+- Check fragments saved before an interruption: readable footage can be finalized without rewriting video; unconfirmed files remain available for review.
+- Search and filter recordings, play them, download source files, and confirm deletion explicitly.
+- Keep retained footage from removed cameras accessible under their original names, clearly marked as removed.
 
-Live viewing, recording recovery, records playback, strict synchronized chronology, managed clip exports, retention, archive review and bulk actions, readable operation history, ONVIF video configuration and camera events, conditional detection-rule switches, capability-based PTZ controls, frame-aware workspaces, users/roles, diagnostics, backups, update workflows and the native Android client are implemented. Available camera controls and event classes still depend on the device and lens.
+### Synchronized chronology
 
-The following are **future work**, not current product promises:
+- Navigate a shared time point across cameras.
+- Use 3-, 6-, 12-, and 24-hour views and 3- or 7-day views in the browser.
+- On Android, pan and zoom a touch-friendly ruler into shorter intervals.
+- Pan across calendar days on Android, with archive ranges loaded for the visible dates in the NAS timezone.
+- Start available recordings together and pause the group when buffering is required.
+- Adapt the recovery buffer after real data starvation without imposing a fixed extra delay on a fast first start.
+- Hold the last frame while the next segment loads.
+- Navigate event markers and manually add removed cameras with retained recordings.
 
-- Recording triggered only by events. Opening an event uses existing recordings and does not create missing pre-event footage.
-- AI video analytics and object detection.
-- Multi-storage recording placement and archive tiering.
+This is a common time-based workspace for investigating footage, not just a grid of unrelated playback controls. It still requires enough sustained bandwidth for the selected recordings; buffering cannot create bandwidth that is not available.
 
-## Frequently asked questions
+### Clips and important moments
 
-### Is KM VMS a VMS or an NVR?
+- Create clips from Records or Chronology, including footage from removed cameras.
+- Select up to three hours without a fixed 4 GiB source-size cap; preparation checks available storage.
+- Download the resulting video and its clip-information passport.
+- Browse saved clips and explicitly delete derived results.
+- Deleting a clip does not delete its source recordings. Original footage follows separate retention rules.
 
-Both descriptions are relevant. As an NVR, it records IP-camera video to server storage. As a VMS, it also manages cameras, viewing workspaces, synchronized archive navigation, users, permissions, storage policies, and diagnostics.
+### Camera events and notifications
 
-### Does local surveillance require a cloud service?
+Receive ONVIF events from compatible cameras, keep a searchable history, and move from an event to its video. KM VMS recognizes eleven useful categories:
 
-No camera-vendor cloud account is required for the local RTSP/ONVIF recording and viewing workflow. Installation and update downloads need internet access. Remote viewing requires you to configure a suitable network access path.
+**Motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame.**
 
-### Can I use cameras from different manufacturers?
+- Enable event reception separately for each compatible camera.
+- Select personal notifications by camera, event type, and time window.
+- Open live video or available recordings around an event; keep event markers visible even when that moment was not recorded.
+- Keep service chatter, such as clock synchronization, out of detection history.
+- Discard identical triggers arriving less than **45 seconds** after the preceding matching signal, before storage and push delivery. Each repeat advances that sliding interval; cameras, rules, types, and reported object classes have independent intervals.
+- Quiet ordinary alerts on the client already visibly playing that camera, without globally muting other devices or distinct critical alarms.
+- Mark events viewed, select matching events across pages, and confirm history deletion without deleting footage.
+- Change supported ONVIF detection switches when the camera explicitly exposes them.
 
-The connection mechanisms are RTSP and ONVIF, not one manufacturer's cloud API. Actual support depends on the device's streams, services, authentication, and codec implementation. A compatible device is not automatically a tested device.
+Detection is performed by the camera. Receiving its events is not a claim that KM VMS already runs its own server-side AI analytics. Opening an event uses existing footage; it cannot recreate a recording that was never made.
 
-### Can I change a camera's video settings from KM VMS?
+### Storage and System Health
 
-Yes, when the camera exposes the corresponding ONVIF Media1/Media2 services and encoder options. Available settings are read from the device rather than advertised as universal controls for every camera.
+- Configure archive retention and size limits.
+- Inspect free space, archive roots, and recorded volume by camera.
+- Filter archive-integrity findings by camera, cause, time, and state.
+- Confirm individual or bulk actions.
+- Review operation history with grouped stages and a distinction between an earlier failed attempt and the issue's current state.
+- Separate current recording problems from findings about old files: a historically damaged recording does not by itself mean that recording has stopped now.
 
-### Can I control a PTZ camera without configuring it separately?
+### Administration and maintenance
 
-Add the camera normally. If the selected lens exposes supported PTZ capabilities, KM VMS shows its controls automatically. Movement, zoom, speed, and camera-provided saved positions are supported where available. Additional point/area controls appear only when a supported control path is detected; a fixed panoramic lens does not gain PTZ controls just because another lens on the same device can move.
+- Manage users, roles, and server-enforced permissions.
+- Create database/configuration backups and verify restoration.
+- Apply published releases through the interface, with preflight checks, managed schema migration, installed-release verification, and rollback support.
+- Collect diagnostics and explicitly consent to sending a report to the developer, with acknowledgement after acceptance.
+- Use optional hardware acceleration when compatible devices and drivers are available. **A GPU and `/dev/dri` are not required for installation**; software processing is supported.
 
-### How do camera event notifications work?
+A database backup is not a video-archive backup. Footage needs its own backup strategy.
 
-Open the bell in the top navigation to see camera event history, personal notification preferences, and, with camera-management permission, detection rules. Events can link to live video or available archive footage about five seconds before the event. Chronology keeps brown event markers even when no recording exists. Identical repeated triggers less than 45 seconds after the previous received trigger are discarded, not expanded into a group; every repeat moves that sliding interval. Different cameras, rules, types and object classes remain independent. Initial subscription state does not trigger a new alarm. History is automatically cleaned on a five-minute schedule with a target of 30 days and 100,000 events; a bounded recent backlog can exist between sweeps.
+![Real KM VMS settings in English, showing server configuration and maintenance entry points](docs/images/settings-en.png)
 
-Enable **Receive camera events** under a camera's **Recording and events** settings when its ONVIF capabilities are confirmed. This is off by default for both new cameras and cameras present before the upgrade. A temporary capability-check failure is not reported as permanent incompatibility, and reception can be turned off even when the camera is offline.
+![KM VMS maintenance overview in English](docs/images/maintenance-en.png)
 
-KM VMS recognizes motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame events when the camera reports them. Rules and reported object classes are preserved together: a person crossing a line remains searchable as both. Notifications use the same eleven types in an aligned, responsive selection. This does not enable detectors on the camera or infer objects from video. Clock synchronization, known service chatter, and abandoned/removed-object messages are not saved as detections; unfamiliar signals remain available in bounded receiver diagnostics rather than being mislabeled as useful events.
+## Native Android app
 
-A dot identifies an unviewed event without changing the row layout. The eye/check icon above the list marks selected events, or all retained events when nothing is selected. Newly arriving events after that list snapshot stay unviewed; marking does not delete history or footage. Standard object-in-zone and line-crossing rules have useful names even when the camera does not supply an object class. Opening live video from an event fits its complete frame and does not overwrite the ordinary saved workspace.
+KM VMS for Android is a **native client, not a desktop page wrapped in a WebView**. It shares the product's artwork and visual language while providing phone-oriented controls.
 
-Camera managers can use the trash icon beside it to delete selected events, or all retained history through the displayed snapshot when nothing is selected. Confirmation explains that history is shared and that deleting all includes events outside the current filter. Footage, camera settings, personal notification preferences, administrative audit entries and newer events are kept.
+<img src="docs/images/android-home-en.jpg" width="330" alt="Real KM VMS Android home screen in English, with eight feature tiles and bottom navigation">
 
-Camera detection, event reception, personal KM VMS notifications, and continuous recording are separate. Turning notifications off does not turn camera detection or recording off. Controls are offered only where ONVIF exposes a supported switch; some cameras report events but do not permit their detection settings to be changed through ONVIF. No universal object recognition is claimed. Ordinary alerts are quiet while that camera is visibly playing on the same client; other devices and distinct critical alarms are not silently muted.
+- **Android 8.0 and later.**
+- English, Simplified Chinese, and Russian.
+- Multiple saved NAS connections with independent sessions.
+- A live camera feed list, fullscreen viewing, main/sub selection, audio, and pinch/pan image gestures.
+- Supported PTZ with low-latency viewing during control.
+- Recordings, clips, synchronized chronology, camera management, events, storage, server health, and NAS maintenance.
+- A notification setup offer after the first NAS login, with a separately remembered choice for each server.
+- Notifications that open the corresponding server, camera, and event.
+- APK checks on the first foreground opening in a new day, plus manual checks. Before installation, the client checks size, hash, package, version, and signing certificate. Android asks for installation confirmation.
+- NAS update checks start when you enter the Android maintenance screen. Follow server-reported stages and the current operation; APK downloads show transferred bytes and a measured percentage, followed by a separate verification step.
 
-### How do I install the Android app?
+Background alerts use a compatible **UnifiedPush provider**, not continuous NAS polling. Delivery can use supported Google-service infrastructure or a separately installed distributor such as ntfy. Android notification permission, an available delivery service, network access, and suitable device battery settings are required. Video and archive viewing do not depend on push being enabled.
 
-Use **Settings → Download APK** in your NAS web interface, or download [signed Android 0.8.2](https://github.com/kmishnev87/km-vms/releases/download/v0.9.18/km-vms-android-0.8.2.apk). The web download information is bundled with the installed NAS release; updating KM VMS brings its matching APK information without a separate web release check. Android 8.0 or later is required. Allow installation from the chosen source when Android asks, then add your NAS address and sign in with its existing account. You can enter a local NAS as **IP:port** without typing `http://`; explicit HTTP and HTTPS addresses are also supported. HTTP has an explicit warning because it does not encrypt the connection. HTTPS certificates are checked normally. The app does not issue a certificate or alter your NAS network configuration.
+Download the APK from **Settings → Download APK** in the NAS web interface or [GitHub Releases](https://github.com/kmishnev87/km-vms/releases). APK information is bundled with the NAS release. NAS and Android version numbers are independent; use the official signed APK to update an installed client.
 
-The client has separate saved NAS connections, native live video, main/sub and audio controls, digital gesture zoom, supported low-latency PTZ, records/clips, synchronized chronology, camera management, storage, system status and NAS maintenance. It checks official APK updates once on the first opening in a new day or manually; downloading and Android's installation confirmation remain explicit. Server and Android version numbers are independent.
+## Architecture and compatibility
 
-After the first login to each NAS, the app offers notification setup. Accepting requests Android notification permission when needed and registers an available **UnifiedPush** provider. A decline is remembered, and an existing explicit disable is not silently reversed. You can change the choice under **Events → Notifications → Alerts on this phone**. This is push delivery, not repeated NAS polling. The provider may use Google services or a separately installed distributor such as ntfy; the app explains provider availability. Delivery still depends on provider/network access, Android permission and device battery restrictions. No blanket guarantee is made for untested Huawei/microG combinations or every vendor's sleep policy. Live and archive viewing do not require push to be enabled. Physical-device video, gestures and long-term battery behavior should be evaluated on your own phone.
+The server uses **Python/FastAPI, PostgreSQL, Redis, and FFmpeg**. The web client uses **Next.js**, with **nginx** handling incoming web traffic. Android uses **Kotlin, Jetpack Compose, and Media3**. Server services are deployed through Docker Compose.
 
-### Does marking an archive finding reviewed repair the video?
+RTSP provides video streams; ONVIF exposes supported sources, profiles, PTZ, events, and configuration. This supports installations built from compatible devices across manufacturers rather than tying the entire product to one camera cloud.
 
-No. Keeping a file and marking its finding reviewed records your decision; it does not turn damaged or unconfirmed footage into a verified recording. Rechecking, correcting a supported recording state, and deleting recordings are separate, explicitly confirmed actions. Current recording health and historical archive findings are shown separately.
+The current primary hardware-validation environment is a TerraMaster NAS. Other Linux/NAS installations must provide the documented Docker, filesystem, and storage capabilities. Compatibility depends on the services, streams, and platform, not just a manufacturer's name. H.265 playback, audio, acceleration, and individual PTZ functions depend on the camera, codec, and client. Universal compatibility and ONVIF certification are not claimed.
 
-### What happens when a recording buffers in Chronology?
+For remote access, configure a secured HTTPS reverse proxy or VPN. Initial HTTP setup does not issue a certificate or configure internet access automatically. Android supports HTTP with an explicit warning and HTTPS with normal certificate verification.
 
-The recordings present at the selected moment wait for each other, and the shared clock pauses with them. On both PC and Android, all available sources continue filling their buffers during that pause. After real data starvation, recovery reserves adapt to avoid repeated one-second bursts; a fast first start does not receive a fixed recovery delay. A camera with a confirmed gap does not block the group. A network or file-access error is not treated as a gap: retry playback or remove the affected tile. Memory limits and the remaining file duration are respected. Segment changes can require a loading pause; uninterrupted playback below the cameras' combined bitrate is not promised.
+## Project development
 
-### Do saved clips expire or delete the original footage?
+KM VMS already includes server recording, multi-camera viewing, PTZ, synchronized archives, clips, camera events, storage management, maintenance, and the Android client. [Release history](https://github.com/kmishnev87/km-vms/releases) documents the product's development and the changes shipped in each version.
 
-Completed clips stay until you explicitly delete them. In the shared clip window, use **Saved clips** to select, download, or delete a result and its passport. Deleting a clip does not delete the recordings it was made from. Original recordings still follow their separate archive-retention rules. Clips can also be created from retained footage of a removed camera.
+Further directions include assigning different cameras' recordings to selected storage devices, server-side AI video analytics, and recording triggered only by events. These are future work, not features presented as already available.
 
-### How do I update an existing installation?
+## Feedback and diagnostics
 
-Use **Settings → Maintenance** to check and apply an available published update. Do not rerun the new-install command over an existing application directory. The installation guide also documents the terminal update path.
+To report a problem, open **Settings → Security**, describe it, and select normal or extended diagnostics. Sending requires explicit consent and uses HTTPS; the application shows a report ID after acceptance. You can download the diagnostic ZIP instead.
 
-### Does a database backup include the video archive?
+Video recordings are not included. Diagnostics may contain device names, addresses, and application state; known secret fields are redacted. Do not type passwords into the description or publish diagnostic archives openly.
 
-No. Database backups protect application metadata and configuration; video files require a separate archive-backup strategy. Retention cleanup is not a backup.
+Use [GitHub Issues](https://github.com/kmishnev87/km-vms/issues) for suggestions and sanitized bug reports. For sensitive vulnerability information, use a private channel if available in the repository's Security section.
 
-### Can I expose the web interface to the internet?
+## License
 
-The quick start serves HTTP and is intended for initial setup on a trusted network. It does not configure HTTPS or internet access automatically. For remote use, configure a properly secured HTTPS reverse proxy or VPN and appropriate network restrictions. Never expose the Docker control socket or treat an unprotected HTTP port as a secure remote deployment.
+KM VMS project code is available under the [MIT License](LICENSE). Use, modify, and distribute it, including in commercial projects, subject to the license terms. Third-party components retain their own licenses; see [dependency notes](docs/DEPENDENCIES.md). The software is provided without warranty as stated in the license.
 
-## Project status, support, and licensing
-
-KM VMS is actively developed. Published releases and their notes are available under [Releases](https://github.com/kmishnev87/km-vms/releases). Compatibility and capacity should be evaluated for your own cameras, NAS, storage, and network; no universal camera-count or performance guarantee is claimed.
-
-For a bug report with diagnostics, open **Settings → Security**, describe the problem, choose normal or extended diagnostics, and explicitly consent to sending the report to the KM VMS developer. The application sends it over HTTPS to the developer's support receiver at **кмпрайм.рф** and shows a report ID only after acceptance. This is one-way report delivery, not a live chat or a guaranteed response service. You can download the ZIP instead; no report is sent automatically.
-
-Diagnostics may contain device names, addresses, application state and logs. Known secret fields are redacted; video recordings are not included. Do not type passwords into the description, and do not post diagnostic ZIPs publicly. The developer's receiver is separate infrastructure and is not installed on users' servers. Local recording/viewing do not depend on it.
-
-For feature requests and sanitized public discussion, use [GitHub Issues](https://github.com/kmishnev87/km-vms/issues). Include the release version, environment, expected/actual behavior, and reproduction steps. Do not publish passwords, tokens, camera URLs containing credentials, database dumps, or private video. If private vulnerability reporting is available in the repository's Security section, use it for sensitive security reports rather than disclosing details in a public issue.
-
-KM VMS project code is available under the [MIT License](LICENSE). Third-party components retain their own licenses; see [dependency notes](docs/DEPENDENCIES.md). The software is provided without warranty as described in the license.
+**KM VMS — watch what is happening, understand what happened, and manage the system on your own server.**

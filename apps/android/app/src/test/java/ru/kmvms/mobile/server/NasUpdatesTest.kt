@@ -44,6 +44,7 @@ class NasUpdatesTest {
         try{MockWebServer().use{server->
             val posted=CopyOnWriteArrayList<String>()
             server.dispatcher=object:Dispatcher(){override fun dispatch(request:RecordedRequest):MockResponse {
+                if(request.path=="/api/system/update/check")return MockResponse().setBody(available)
                 if(request.path=="/api/system/update/status")return MockResponse().setBody(available)
                 if(request.method=="GET")return MockResponse().setBody("""{"status":"idle"}""")
                 val body=JSONObject(request.body.readUtf8());val id=body.getString("submission_id");posted.add(id)
@@ -72,6 +73,7 @@ class NasUpdatesTest {
         try{MockWebServer().use{server->
             var rejected=false
             server.dispatcher=object:Dispatcher(){override fun dispatch(request:RecordedRequest):MockResponse {
+                if(request.path=="/api/system/update/check")return MockResponse().setBody(available)
                 if(request.method=="POST"){rejected=true;return MockResponse().setResponseCode(409).setBody("{}")}
                 return MockResponse().setBody(if(request.path=="/api/system/update/status"){
                     if(rejected)"""{"status":"blocked","can_apply_from_ui":false}"""else available
@@ -84,5 +86,73 @@ class NasUpdatesTest {
                 assertNull(controller.state.value.check?.candidate);assertNull(controller.state.value.pending);assertNull(store.value)
             }finally{controller.close()}
         }}finally{Dispatchers.resetMain()}
+    }
+
+    @Test fun openingChecksTheOfficialReleaseOnceButDoesNotPollAnIdleServer()=runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        try { MockWebServer().use { server ->
+            val paths=CopyOnWriteArrayList<String>()
+            server.dispatcher=object:Dispatcher(){override fun dispatch(request:RecordedRequest):MockResponse {
+                paths.add("${request.method} ${request.path}")
+                return MockResponse().setBody(if(request.path=="/api/system/update/apply/status") """{"status":"idle"}""" else available)
+            }}
+            val controller=NasUpdatesController(api(server),MemoryStore())
+            try {
+                withTimeout(15000){controller.state.first{!it.loading}}
+                assertEquals(1,paths.count{it=="POST /api/system/update/check"})
+                assertEquals(candidate,controller.state.value.check?.candidate)
+                controller.foreground(true)
+                withTimeout(15000){controller.state.first{!it.loading}}
+                assertEquals(1,paths.count{it=="POST /api/system/update/check"})
+                assertFalse(controller.state.value.watching)
+                assertTrue(paths.none{it=="POST /api/system/update/apply"})
+            } finally { controller.close() }
+        }} finally { Dispatchers.resetMain() }
+    }
+
+    @Test fun statusButtonFetchesFreshProgressAndAnExplicitReceiptNotAnotherReleaseCheck()=runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        try { MockWebServer().use { server ->
+            val phase=java.util.concurrent.atomic.AtomicReference("building_images")
+            val reject=java.util.concurrent.atomic.AtomicBoolean(false)
+            val paths=CopyOnWriteArrayList<String>()
+            server.dispatcher=object:Dispatcher(){override fun dispatch(request:RecordedRequest):MockResponse {
+                paths.add(request.path.orEmpty())
+                if(request.path=="/api/system/update/apply/status") {
+                    if(reject.get())return MockResponse().setResponseCode(503).setBody("{}")
+                    return MockResponse().setBody("""{"status":"staging","current_step":"preflight","phase":"${phase.get()}","elapsed_seconds":281}""")
+                }
+                return MockResponse().setBody(available)
+            }}
+            val controller=NasUpdatesController(api(server),MemoryStore())
+            try {
+                withTimeout(15000){controller.state.first{!it.loading}}
+                assertEquals("building_images",controller.state.value.progress?.phase)
+                val checks=paths.count{it=="/api/system/update/check"}
+                phase.set("verifying_images");controller.refreshStatus()
+                withTimeout(15000){controller.state.first{!it.loading}}
+                assertEquals("verifying_images",controller.state.value.progress?.phase)
+                assertNotNull(controller.state.value.statusCheckedAt)
+                assertEquals(checks,paths.count{it=="/api/system/update/check"})
+                reject.set(true);controller.refreshStatus()
+                withTimeout(15000){controller.state.first{!it.loading}}
+                assertTrue(controller.state.value.statusCheckFailed)
+                assertEquals("verifying_images",controller.state.value.progress?.phase)
+            } finally { controller.close() }
+        }} finally { Dispatchers.resetMain() }
+    }
+
+    @Test fun detailedPhasesAndMeasuredBytesAreNotAnInventedOverallPercentage() {
+        val payload=JSONObject("""{"status":"staging","phase":"building_images","current_step":"preflight","elapsed_seconds":281,"target_version":"0.9.18","steps":[{"name":"request","status":"completed"},{"name":"preflight","status":"running"}]}""")
+        val value=NasUpdateProgress.from(payload)
+        assertEquals("building_images",value.phase);assertEquals("preflight",value.step)
+        assertNull(value.percent);assertEquals(2,value.steps.size)
+        payload.put("phase","downloading").put("progress_current",250).put("progress_total",1000)
+            .put("progress_unit","bytes").put("progress_percent",25)
+        assertEquals(25,NasUpdateProgress.from(payload).percent)
+        assertEquals(250L,NasUpdateProgress.from(payload).current)
+        for ((key, invalid) in listOf("progress_current" to -1,"progress_total" to 0,"progress_percent" to 98,"progress_unit" to "seconds")) {
+            assertNull(key,NasUpdateProgress.from(JSONObject(payload.toString()).put(key,invalid)).percent)
+        }
     }
 }

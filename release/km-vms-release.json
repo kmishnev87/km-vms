@@ -1,66 +1,75 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.18",
-  "tag": "v0.9.18",
-  "title": "Android notification setup and integrated APK downloads",
-  "summary": "Signed Android 0.8.2 offers notification setup after the first NAS login, remembers each server's choice and shows registration and test results. APK downloads move from the web dashboard to Settings and stay matched to the installed NAS release.",
+  "version": "0.9.19",
+  "tag": "v0.9.19",
+  "title": "Android fullscreen, continuous timeline and clear update progress",
+  "summary": "Signed Android 0.8.3 fixes localized fullscreen rotation, enables timeline navigation across days and shows clear NAS and APK update progress. The English product guide includes current installation instructions and real web and Android screenshots. NAS updater behavior is unchanged.",
   "title_i18n": {
-    "en": "Android notification setup and integrated APK downloads",
-    "ru": "Настройка уведомлений Android и скачивание APK в настройках",
-    "zh-CN": "Android 通知引导与集成 APK 下载"
+    "en": "Android fullscreen, continuous timeline and clear update progress",
+    "ru": "Полный экран Android, непрерывная хронология и понятный прогресс обновлений",
+    "zh-CN": "Android 全屏、连续时间轴与清晰更新进度"
   },
   "summary_i18n": {
-    "en": "Signed Android 0.8.2 offers notification setup after the first NAS login, remembers each server's choice and shows registration and test results. APK downloads move from the web dashboard to Settings and stay matched to the installed NAS release.",
-    "ru": "Подписанный Android 0.8.2 предлагает настроить уведомления после первого входа на NAS, сохраняет выбор для каждого сервера и показывает результаты регистрации и теста. Скачивание APK перенесено с главной в настройки; версия APK соответствует установленному выпуску NAS.",
-    "zh-CN": "签名 Android 0.8.2 在首次登录 NAS 后引导设置通知，分别记住各服务器的选择并显示注册和测试结果。APK 下载从网页主页移至设置，版本信息随已安装的 NAS 版本发布。"
+    "en": "Signed Android 0.8.3 fixes localized fullscreen rotation, enables timeline navigation across days and shows clear NAS and APK update progress. The English product guide includes current installation instructions and real web and Android screenshots. NAS updater behavior is unchanged.",
+    "ru": "Подписанный Android 0.8.3 исправляет fullscreen после выбора языка, листает хронологию через границы суток и понятно показывает обновление NAS и скачивание APK. Английский README дополнен возможностями, актуальной установкой и настоящими снимками web и Android. Механизм обновления NAS не менялся.",
+    "zh-CN": "签名 Android 0.8.3 修复切换语言后的全屏旋转，支持跨日期浏览时间轴，并清晰显示 NAS 和 APK 更新进度。英文产品指南包含当前安装说明及真实网页和 Android 截图。NAS 更新执行机制保持不变。"
   },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.18",
+  "source_ref": "v0.9.19",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
   "requires_migration": false,
-  "schema_update": {
-    "mode": "managed",
-    "target_version": 11
-  },
+  "schema_update": { "mode": "managed", "target_version": 11 },
   "changelog": [
-    "Publish signed Android 0.8.2 (802) with the existing package and signing certificate for normal in-place updates.",
-    "Offer notification setup once after login for each NAS profile; request Android permission and register an available delivery provider after consent.",
-    "Remember a declined offer, preserve existing registrations and explicit disabling, and prevent late provider callbacks from restoring disabled notifications.",
-    "Share registration logic between initial setup and alert settings, with visible status, failures and test-send feedback inside the dialog.",
-    "Move Download APK from the web dashboard to Settings before Security, using one compact download icon aligned with the adjacent Open buttons.",
-    "Bundle APK metadata with the NAS release, remove web release-check buttons and validate metadata parity during release; retain Android's daily update check."
+    "Publish signed Android 0.8.3 (803) with the existing package and official certificate for in-place updates.",
+    "Check NAS releases once on entering Android maintenance, while giving a saved in-flight update precedence.",
+    "Show server-reported NAS stages, current operation and elapsed time in Android; retain a green final result only after installed-commit verification.",
+    "Make Check status visibly acknowledge a fresh response or failure without starting another release check or losing known progress.",
+    "Display actual APK bytes, total size and percentage with a filled bar, followed by a distinct verification step before Android installation.",
+    "Keep an accepted automatic APK update offer visible during download; allow hiding it without interrupting the transfer.",
+    "Refresh the English product guide, feature map, compatibility notes and 0.9.19 quick start, with real web and Android home screenshots.",
+    "Preserve live fullscreen after rotation with explicit English, Chinese or Russian on pre-13 Android by overriding language, not screen configuration.",
+    "Pan the Android timeline across calendar days and fetch visible archive ranges on both sides of midnight, respecting the NAS timezone."
   ],
   "changelog_i18n": {
     "en": [
-      "Publish signed Android 0.8.2 (802) with the existing package and signing certificate for normal in-place updates.",
-      "Offer notification setup once after login for each NAS profile; request Android permission and register an available delivery provider after consent.",
-      "Remember a declined offer, preserve existing registrations and explicit disabling, and prevent late provider callbacks from restoring disabled notifications.",
-      "Share registration logic between initial setup and alert settings, with visible status, failures and test-send feedback inside the dialog.",
-      "Move Download APK from the web dashboard to Settings before Security, using one compact download icon aligned with the adjacent Open buttons.",
-      "Bundle APK metadata with the NAS release, remove web release-check buttons and validate metadata parity during release; retain Android's daily update check."
+      "Publish signed Android 0.8.3 (803) with the existing package and official certificate for in-place updates.",
+      "Check NAS releases once on entering Android maintenance, while giving a saved in-flight update precedence.",
+      "Show server-reported NAS stages, current operation and elapsed time in Android; retain a green final result only after installed-commit verification.",
+      "Make Check status visibly acknowledge a fresh response or failure without starting another release check or losing known progress.",
+      "Display actual APK bytes, total size and percentage with a filled bar, followed by a distinct verification step before Android installation.",
+      "Keep an accepted automatic APK update offer visible during download; allow hiding it without interrupting the transfer.",
+      "Refresh the English product guide, feature map, compatibility notes and 0.9.19 quick start, with real web and Android home screenshots.",
+      "Preserve live fullscreen after rotation with explicit English, Chinese or Russian on pre-13 Android by overriding language, not screen configuration.",
+      "Pan the Android timeline across calendar days and fetch visible archive ranges on both sides of midnight, respecting the NAS timezone."
     ],
     "ru": [
-      "Подписанный Android 0.8.2 (802) сохраняет идентификатор приложения и прежний сертификат для обычного обновления поверх установленной версии.",
-      "После входа APK однократно предлагает настроить уведомления для каждого NAS; после согласия запрашивает разрешение Android и регистрирует доступного поставщика доставки.",
-      "Отказ запоминается, существующая регистрация и явное выключение сохраняются; запоздалый ответ поставщика не включает уведомления обратно.",
-      "Первичная настройка и раздел оповещений используют общую регистрацию; состояние, ошибки и результат тестовой отправки видны непосредственно в окне.",
-      "Скачивание APK перенесено с главной web в настройки перед безопасностью: компактная кнопка с рисунком скачивания, выровненная с соседними кнопками открытия.",
-      "Сведения об APK входят в выпуск NAS; web-кнопки проверки выпуска убраны, согласованность metadata проверяется при выпуске. Ежедневная проверка в Android сохранена."
+      "Подписанный Android 0.8.3 (803) сохраняет идентификатор приложения и официальный сертификат для обновления поверх установленной версии.",
+      "При входе в обслуживание Android однократно проверяет выпуски NAS; сохранённая незавершённая операция имеет приоритет.",
+      "В APK видны серверные этапы NAS, текущая операция и время; зелёный финал остаётся только после подтверждения установленного commit.",
+      "Проверка статуса явно показывает получение ответа или ошибку, не запускает лишнюю проверку выпусков и сохраняет известный прогресс.",
+      "Скачивание APK показывает реальные байты, общий размер, проценты и заполнение полосы; проверка перед установкой выделена отдельным этапом.",
+      "Принятое предложение обновить APK остаётся видимым при скачивании; его можно скрыть без прерывания передачи.",
+      "Английский README содержит полную карту возможностей, ограничения, установку 0.9.19 и настоящие снимки web и главной Android.",
+      "На Android до 13 выбранный язык больше не фиксирует размеры и ориентацию: поворот сохраняет полноценный fullscreen без нижней навигации.",
+      "Хронология Android листается через границы суток и загружает архив видимых дней с учётом часового пояса NAS."
     ],
     "zh-CN": [
-      "发布签名 Android 0.8.2（802），保留原包名和签名证书，支持覆盖更新。",
-      "每个 NAS 配置首次登录后仅提示一次通知设置；用户同意后申请 Android 权限并注册可用推送提供方。",
-      "记住拒绝选择，保留现有注册和主动关闭状态，避免延迟的提供方回调重新启用通知。",
-      "首次设置与通知设置共用注册逻辑，在对话框内直接显示状态、错误及测试发送结果。",
-      "网页主页移除 APK 下载入口，在设置的安全项前提供紧凑下载图标按钮，与相邻打开按钮对齐。",
-      "APK 信息随已安装 NAS 版本发布，移除网页独立检查版本按钮，并在发布时验证信息一致性；保留 Android 每日更新检查。"
+      "发布签名 Android 0.8.3（803），保留包名与官方证书，支持覆盖更新。",
+      "进入 Android 维护页面时检查一次 NAS 新版本，并优先恢复已保存的进行中更新。",
+      "Android 显示服务器报告的 NAS 阶段、当前操作和耗时；仅在确认已安装提交后保留绿色完成状态。",
+      "检查状态后明确显示收到新响应或失败，不额外检查版本，也不丢失已知进度。",
+      "APK 下载显示实际字节、总大小、百分比和填充进度条，安装前单独显示验证阶段。",
+      "接受自动 APK 更新后，下载期间保留进度对话框；隐藏对话框不会中断下载。",
+      "更新英文产品指南、完整功能与兼容性说明、0.9.19 安装命令，并加入真实网页及 Android 主页截图。",
+      "Android 13 之前仅覆盖语言，不冻结屏幕配置，修复选择英文、中文或俄文后旋转导致的全屏问题。",
+      "Android 时间轴可跨日期拖动，并按 NAS 时区获取午夜两侧可见日期的录像范围。"
     ]
   }
 }

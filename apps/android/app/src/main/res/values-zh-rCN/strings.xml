@@ -292,7 +292,7 @@
     <string name="mobile_update_current">已安装最新发布的 Android 版本。</string>
     <string name="mobile_update_unpublished">尚未发布正式 Android 版本。</string>
     <string name="mobile_update_available">版本 %1$s 可用。Android 会请求您确认安装。</string>
-    <string name="mobile_update_downloading">正在下载并验证更新…</string>
+    <string name="mobile_update_downloading">正在下载更新…</string>
     <string name="mobile_update_ready">更新已验证，可以安装。</string>
     <string name="mobile_update_permission">请在 Android 设置中允许 KM VMS 安装更新，然后返回。</string>
     <string name="mobile_update_failed">无法检查、下载或验证更新。当前应用未改变，请重试。</string>
@@ -347,4 +347,25 @@
     <string name="push_offer_enable">启用</string>
     <string name="push_offer_decline">不启用</string>
     <string name="push_offer_settings">可在“事件 → 警报 → 此手机上的警报”中更改通知。</string>
+    <string name="mobile_update_verifying">下载完成。正在验证 APK 和签名证书…</string>
+    <string name="mobile_update_hide">隐藏</string>
+    <string name="nas_target_version">更新至 %1$s</string>
+    <string name="nas_step_count">第 %1$d 步，共 %2$d 步：%3$s</string>
+    <string name="nas_step_request">接受请求</string>
+    <string name="nas_step_preflight">准备更新</string>
+    <string name="nas_step_applying">应用更新</string>
+    <string name="nas_step_health">检查服务</string>
+    <string name="nas_step_verification">确认已安装版本</string>
+    <string name="nas_phase_download">正在下载版本文件…</string>
+    <string name="nas_phase_source">正在准备版本文件…</string>
+    <string name="nas_phase_validation">正在验证文件和配置…</string>
+    <string name="nas_phase_build">正在构建应用组件…</string>
+    <string name="nas_phase_pull">正在下载应用组件…</string>
+    <string name="nas_phase_database">正在检查和准备数据库…</string>
+    <string name="nas_phase_rollback">正在恢复上一个安装版本…</string>
+    <string name="nas_rolled_back">更新失败。已恢复上一个安装版本。</string>
+    <string name="nas_items_progress">已完成：%1$d / %2$d（%3$d%%）</string>
+    <string name="nas_status_checking">正在检查…</string>
+    <string name="nas_status_received">状态接收时间：%1$s</string>
+    <string name="nas_status_failed">无法获取最新状态。上方显示最后已知的步骤。</string>
 </resources>
