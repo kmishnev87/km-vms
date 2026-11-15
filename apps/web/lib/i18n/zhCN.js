@@ -1,6 +1,6 @@
 export const zhCNDictionary = {
   archiveCameraGroups: { retained: "保留录像的已删除摄像机", deleted: "已删除" },
-  androidDownload: { checking: "正在检查官方版本…", available: "Android APK", failed: "无法检查版本，请重试。", unpublished: "官方 APK 尚未发布。", subtitle: "Android 版 KM VMS", instructions: "将 APK 下载到手机，打开文件并在 Android 中确认安装。然后添加 NAS 地址并登录 KM VMS 账户。支持 HTTP 和 HTTPS。", version: "版本", download: "下载 APK", check: "检查版本", languages: "支持 Android 8 及以上版本，提供英文、中文和俄文。可在 Android 应用中获取更新。" },
+  androidDownload: { checking: "正在加载 APK 信息…", available: "Android APK", failed: "无法获取 APK 信息，请刷新页面。", unpublished: "官方 APK 尚未发布。", subtitle: "Android 版 KM VMS", instructions: "将 APK 下载到手机，打开文件并在 Android 中确认安装。然后添加 NAS 地址并登录 KM VMS 账户。支持 HTTP 和 HTTPS。", version: "版本", download: "下载 APK", check: "检查版本", languages: "支持 Android 8 及以上版本，提供英文、中文和俄文。可在 Android 应用中获取更新。" },
   chronologyArchive: { retainedCameras: "仍有录像的已删除摄像机", deleted: "已删除", archiveOnly: "仅保留的录像" },
   cameraEvents: {
     "title": "摄像机事件",

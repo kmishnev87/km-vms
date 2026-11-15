@@ -464,6 +464,12 @@
   width: var(--settings-compact-select-width);
 }
 
+.settingsAndroidRow .settingsRowText span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settingsRowCompactSelect .settingsSelect {
   height: 34px;
   min-height: 34px;

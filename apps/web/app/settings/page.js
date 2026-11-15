@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
+import AndroidDownloadSetting from "../../components/AndroidDownloadSetting";
 import useSettingsFormLoader from "../../lib/useSettingsFormLoader";
 import useSettingsUsersController from "../../lib/useSettingsUsersController";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
@@ -2540,6 +2541,8 @@ export default function SettingsPage() {
                     </select>
                   </div>
                 </div>
+
+                <AndroidDownloadSetting />
 
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src="/assets/icons/ui/security.png" alt="" /></div>

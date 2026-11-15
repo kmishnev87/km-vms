@@ -342,4 +342,9 @@
     <string name="timeline_hours">%1$d ч</string>
     <string name="timeline_minutes">%1$d мин</string>
     <string name="timeline_buffering">Подгружаем видео…</string>
+    <string name="push_offer_title">Уведомления на телефон</string>
+    <string name="push_offer_message">Получать события камер с сервера «%1$s» на этом телефоне, в том числе при свёрнутом приложении? Камеры и типы событий можно выбрать в разделе «События → Оповещения».</string>
+    <string name="push_offer_enable">Включить</string>
+    <string name="push_offer_decline">Не включать</string>
+    <string name="push_offer_settings">Доставку можно изменить в разделе «События → Оповещения → Оповещения на этом телефоне».</string>
 </resources>

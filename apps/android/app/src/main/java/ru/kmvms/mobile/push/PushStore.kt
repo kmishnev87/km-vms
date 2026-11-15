@@ -16,6 +16,11 @@ data class PushBinding(val profileId: String, val instance: String, val enabled:
 /** Serializes callbacks, logout and upload completion across all store instances. */
 class PushStore(context: Context) {
     private val vault = ProfileVault(context.applicationContext)
+    // A legacy binding is already a choice, including an explicitly disabled one.
+    fun shouldOfferSetup(profileId: String): Boolean = synchronized(lock) {
+        !vault.pushSetupAnswered(profileId) && binding(profileId) == null
+    }
+    fun answerSetup(profileId: String) = synchronized(lock) { vault.answerPushSetup(profileId) }
     fun binding(profileId: String): PushBinding? = synchronized(lock) {
         vault.pushState(profileId)?.let { value -> runCatching {
             PushBinding(profileId, value.getString("instance"), value.getBoolean("enabled"), value.getString("vapid"),

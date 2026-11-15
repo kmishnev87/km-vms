@@ -65,11 +65,11 @@ for (const asset of [
 
 assert.equal(home.includes("OperatorProblemBanners"), false);
 assert.equal(home.includes('href: "/system-status"'), true);
-assert.equal(home.includes('href: "/apk"'), true);
+assert.equal(home.includes('href: "/apk"'), false);
 assert.equal(home.includes("system-status-base.png"), true);
 assert.equal(home.includes("system-status-alert.png"), true);
 assert.equal(home.includes("dashboard-cards/system-status.svg"), true);
-assert.equal(home.includes("dashboard-cards/apk.svg"), true);
+assert.equal(home.includes("dashboard-cards/apk.svg"), false);
 assert.equal(home.includes("dashboard-cards/storage.svg"), true);
 assert.equal(home.includes("dashboard-cards/settings.svg"), true);
 assert.equal(home.includes('href: "/storage"'), true);
@@ -83,7 +83,6 @@ const dashboardOrder = [
   'href: "/system-status"',
   'href: "/?camera_events=1"',
   'href: "/settings"',
-  'href: "/apk"',
 ].map((needle) => home.indexOf(needle));
 assert.equal(dashboardOrder.every((index) => index >= 0), true);
 assert.deepEqual([...dashboardOrder].sort((a, b) => a - b), dashboardOrder);

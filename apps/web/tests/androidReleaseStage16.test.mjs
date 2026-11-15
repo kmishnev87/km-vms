@@ -9,7 +9,7 @@ test("unpublished APK must not become a false download", () => assert.equal(andr
 test("rejects malformed release identity and oversized artifacts", () => {
   for (const field of [{ release_tag: "../../latest" }, { version_name: "bad" }, { size_bytes: 300 * 1024 * 1024 }, { sha256: "bad" }, { package_name: "other" }]) assert.throws(() => androidRelease({ ...release, ...field }));
 });
-test("an absent first publication is not a failed connection and never sends NAS credentials", async () => {
+test("bundled metadata is read without credentials and an unpublished installation has no download", async () => {
   const previous=globalThis.fetch;
   try {
     globalThis.fetch=async(url,options)=>{

@@ -342,4 +342,9 @@
     <string name="timeline_hours">%1$d 小时</string>
     <string name="timeline_minutes">%1$d 分钟</string>
     <string name="timeline_buffering">正在加载视频…</string>
+    <string name="push_offer_title">手机通知</string>
+    <string name="push_offer_message">是否在此手机上接收来自“%1$s”的摄像机警报，包括 KM VMS 在后台运行时？可在“事件 → 警报”中选择摄像机和事件类型。</string>
+    <string name="push_offer_enable">启用</string>
+    <string name="push_offer_decline">不启用</string>
+    <string name="push_offer_settings">可在“事件 → 警报 → 此手机上的警报”中更改通知。</string>
 </resources>

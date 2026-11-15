@@ -342,4 +342,9 @@
     <string name="timeline_hours">%1$d h</string>
     <string name="timeline_minutes">%1$d min</string>
     <string name="timeline_buffering">Loading video…</string>
+    <string name="push_offer_title">Notifications on this phone</string>
+    <string name="push_offer_message">Receive camera alerts from “%1$s” on this phone, including when KM VMS is in the background? You can choose cameras and event types in Events → Alerts.</string>
+    <string name="push_offer_enable">Enable</string>
+    <string name="push_offer_decline">Don’t enable</string>
+    <string name="push_offer_settings">You can change delivery in Events → Alerts → Alerts on this phone.</string>
 </resources>

@@ -7,6 +7,7 @@ KM VMS release-cycle helper
 
 Usage:
   sh scripts/km-vms-release-cycle.sh --check [--allow-dirty]
+  sh scripts/km-vms-release-cycle.sh --sync-android-metadata [--dry-run]
   sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version <x.y.z> [--allow-dirty]
   sh scripts/km-vms-release-cycle.sh --prepare-version <x.y.z> [--allow-dirty]
   sh scripts/km-vms-release-cycle.sh --print-github-release-commands [--version <x.y.z>]
@@ -18,6 +19,7 @@ EOF
 }
 
 CHECK=0
+SYNC_ANDROID_METADATA=0
 DRY_RUN=0
 PREPARE_VERSION=""
 PRINT_COMMANDS=0
@@ -30,6 +32,7 @@ APP_DIR_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --check) CHECK=1; shift ;;
+    --sync-android-metadata) SYNC_ANDROID_METADATA=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --prepare-version)
       [ "$#" -ge 2 ] || { printf '%s\n' "--prepare-version requires a value" >&2; exit 2; }
@@ -61,7 +64,7 @@ if [ "$SYNC_LOCAL_IDENTITY" = "1" ]; then
   exec sh "$@"
 fi
 
-python3 - "$CHECK" "$DRY_RUN" "$PREPARE_VERSION" "$PRINT_COMMANDS" "$ALLOW_DIRTY" "$VERSION_ARG" <<'PY'
+python3 - "$CHECK" "$DRY_RUN" "$PREPARE_VERSION" "$PRINT_COMMANDS" "$ALLOW_DIRTY" "$VERSION_ARG" "$SYNC_ANDROID_METADATA" <<'PY'
 import ast
 import json
 import re
@@ -75,6 +78,7 @@ prepare_version = sys.argv[3]
 print_commands = sys.argv[4] == "1"
 allow_dirty = sys.argv[5] == "1"
 version_arg = sys.argv[6]
+sync_android_metadata = sys.argv[7] == "1"
 
 ROOT = Path.cwd()
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
@@ -135,6 +139,43 @@ def load_json(path: Path) -> dict:
 
 def write_json(path: Path, payload: dict) -> None:
     (ROOT / path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def android_metadata() -> dict | None:
+    source = ROOT / "apps/android/release.json"
+    snapshot = ROOT / "apps/web/public/android-release.json"
+    if not source.is_file():
+        if snapshot.exists():
+            fail("Android web snapshot has no source apps/android/release.json")
+        return None  # Historical release fixtures without a mobile client.
+    value = load_json(Path("apps/android/release.json"))
+    if (not isinstance(value, dict) or value.get("format") != 1
+            or value.get("package_name") != "ru.kmvms.mobile"
+            or type(value.get("published")) is not bool):
+        fail("invalid Android release metadata")
+    return value
+
+
+def sync_android_web_metadata() -> None:
+    value = android_metadata()
+    if value is None:
+        return
+    if dry_run:
+        print("DRY-RUN: would bundle Android metadata with the NAS web release")
+        return
+    destination = Path("apps/web/public/android-release.json")
+    (ROOT / destination).parent.mkdir(parents=True, exist_ok=True)
+    write_json(destination, value)
+    print("Bundled Android metadata with the NAS web release")
+
+
+def check_android_web_metadata() -> None:
+    value = android_metadata()
+    if value is None:
+        return
+    snapshot = ROOT / "apps/web/public/android-release.json"
+    if not snapshot.is_file() or load_json(Path("apps/web/public/android-release.json")) != value:
+        fail("Android web snapshot is stale; run --sync-android-metadata after updating apps/android/release.json")
 
 
 def validate_release_note_text(value: object, field: str, max_length: int) -> str:
@@ -489,6 +530,7 @@ def prepare(version: str) -> None:
             "localized release notes for the new version"
         )
         return
+    sync_android_web_metadata()
     api_path = ROOT / "apps/api/app/core/version.py"
     api_path.write_text(replace_app_version(api_path.read_text(encoding="utf-8"), version), encoding="utf-8")
     package_path = Path("apps/web/package.json")
@@ -544,6 +586,9 @@ def print_release_commands(version: str) -> None:
     print("# If update status requires authentication, validate it through an authenticated operator session or Settings -> Maintenance.")
 
 
+if sync_android_metadata:
+    sync_android_web_metadata()
+
 if prepare_version:
     check_dirty()
     check_permission_policy()
@@ -554,12 +599,13 @@ if check:
     check_versions()
     validate_descriptor()
     validate_update_lineage()
+    check_android_web_metadata()
     check_permission_policy()
     print("release-cycle check PASS")
 
 if print_commands:
     print_release_commands(version_arg)
 
-if not any([check, prepare_version, print_commands]):
+if not any([check, prepare_version, print_commands, sync_android_metadata]):
     fail("no action selected; use --help")
 PY

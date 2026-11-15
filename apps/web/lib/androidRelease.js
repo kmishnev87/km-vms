@@ -1,5 +1,6 @@
-// Public metadata only. NAS credentials must never be sent to the release host.
-export const ANDROID_RELEASE_METADATA = "https://raw.githubusercontent.com/kmishnev87/km-vms/main/apps/android/release.json";
+// Public snapshot bundled with this installed NAS release, not GitHub's moving main.
+// The APK itself is downloaded from its exact official release asset.
+export const ANDROID_RELEASE_METADATA = "/android-release.json";
 export function androidRelease(value) {
   if (value?.format !== 1 || value?.package_name !== "ru.kmvms.mobile" || typeof value?.published !== "boolean") throw new Error("invalid_release");
   if (!value.published) return null;

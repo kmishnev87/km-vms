@@ -62,6 +62,8 @@ import ru.kmvms.mobile.ui.live.LiveScreen
 import ru.kmvms.mobile.ui.archive.RecordingsScreen
 import ru.kmvms.mobile.ui.chronology.ChronologyScreen
 import ru.kmvms.mobile.ui.events.EventsScreen
+import ru.kmvms.mobile.ui.events.PushSetupOffer
+import ru.kmvms.mobile.push.PushStore
 import ru.kmvms.mobile.events.MobileVideoRequest
 import ru.kmvms.mobile.events.EventsApi
 import ru.kmvms.mobile.events.EventVideoNavigation
@@ -104,6 +106,15 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     val navigationVisible=!state.showConnection&&state.user!=null&&!immersive
     val problemText = state.problem?.let { stringResource(problemResource(it)) }
     val notification by NotificationNavigation.pending.collectAsStateWithLifecycle()
+    val pushContext = LocalContext.current
+    var pushSetupVisible by rememberSaveable(state.active?.id, state.user?.id) {
+        mutableStateOf(state.user?.can("view_live") == true && state.active?.let { PushStore(pushContext).shouldOfferSetup(it.id) } == true)
+    }
+    val pushEligible = !state.showConnection && state.user?.can("view_live") == true && !immersive && notification == null
+    LaunchedEffect(state.active?.id, state.user?.id, pushEligible) {
+        if (!pushEligible) pushSetupVisible = false
+        else state.active?.let { if (PushStore(pushContext).shouldOfferSetup(it.id)) pushSetupVisible = true }
+    }
     LaunchedEffect(notification?.key) {
         notification?.let { pending ->
             val profile = state.profiles.find { it.id == pending.profileId }
@@ -204,7 +215,13 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                 }
             }
         }
-        AppUpdateOffer(updates, visible = !immersive && !state.showConnection)
+        if (pushSetupVisible && pushEligible) state.active?.let { profile -> model.api()?.let { api ->
+            key(profile.id, state.user?.id) {
+                PushSetupOffer(api, profile, { text -> uiScope.launch { snackbars.showSnackbar(text) } },
+                    close = { pushSetupVisible = false })
+            }
+        } }
+        AppUpdateOffer(updates, visible = !immersive && !state.showConnection && !pushSetupVisible)
         if (signOutConfirmation) AlertDialog(onDismissRequest = { signOutConfirmation = false },
             text = { Text(stringResource(R.string.sign_out_confirmation)) },
             confirmButton = { TextButton(onClick = { signOutConfirmation = false; model.signOut() }) { Text(stringResource(R.string.sign_out)) } },

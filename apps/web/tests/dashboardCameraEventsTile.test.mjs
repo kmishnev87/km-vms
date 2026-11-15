@@ -5,18 +5,18 @@ import vm from "node:vm";
 
 const read = path => fs.readFileSync(new URL(path, import.meta.url), "utf8");
 
-test("camera events replaces APK in row two and APK moves to ninth, keeping permissions", () => {
+test("Home keeps eight product sections, with Events and no APK tile, keeping permissions", () => {
   const source = read("../app/page.js");
   const definition = source.match(/const DASHBOARD_ITEMS = (\[[\s\S]*?\n\]);/)[1];
   const items = vm.runInNewContext(definition);
-  assert.equal(items.length, 9);
-  assert.deepEqual(Array.from(items, item => item.href), ["/cameras", "/recordings", "/live", "/chronology", "/storage", "/system-status", "/?camera_events=1", "/settings", "/apk"]);
+  assert.equal(items.length, 8);
+  assert.deepEqual(Array.from(items, item => item.href), ["/cameras", "/recordings", "/live", "/chronology", "/storage", "/system-status", "/?camera_events=1", "/settings"]);
   assert.equal(items[7].href, "/settings");
   assert.equal(items[6].href, "/?camera_events=1");
   assert.equal(items[6].permission, "view_live");
   assert.equal(items[6].iconSrc, "/assets/icons/dashboard/events-v2.png");
   assert.equal(items[6].backgroundSrc, "/assets/backgrounds/dashboard-cards/events.svg");
-  assert.equal(items[8].kind, "placeholder");
+  assert.equal(items.some(item => item.href === "/apk"), false);
   assert.match(source, /currentUser\.permissions\?\.includes\(item\.permission\)/);
   assert.match(source, /event\.preventDefault\(\)/);
   assert.match(source, /dispatchEvent\(new CustomEvent\(CAMERA_EVENT_HUB_OPEN\)\)/);

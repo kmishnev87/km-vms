@@ -14,7 +14,7 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 
 ![KM VMS English-language dashboard with cameras, recordings, live view, chronology, storage, system health, and settings](docs/images/dashboard-en.png)
 
-*English web interface. The native Android client is available separately from the APK download page and GitHub Releases.*
+*English web interface. The native Android client is available from Settings → Download APK and GitHub Releases.*
 
 ## Why KM VMS?
 
@@ -31,7 +31,7 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 
 | Area | What you can do |
 | --- | --- |
-| Native Android | Android 8.0+, three languages, original KM VMS artwork, independent NAS profiles, native video/PTZ, archive, events and NAS maintenance. Signed APK 0.8.1 adds compact fullscreen controls, recording deletion/replay and a zoomable, pannable archive ruler. |
+| Native Android | Android 8.0+, three languages, original KM VMS artwork, independent NAS profiles, native video/PTZ, archive, events and NAS maintenance. Signed APK 0.8.2 offers notification setup after the first login to each NAS, remembers your choice and shows registration/test results. Compact fullscreen controls, recording deletion/replay and a touch-friendly archive ruler are included. |
 | IP cameras | Add and edit RTSP/ONVIF cameras, check connections, select video sources and main/sub streams, and configure recording. |
 | ONVIF video settings | Discover Media1/Media2 services, read supported encoder settings, and apply camera-provided options for codec, resolution, frame rate, and bitrate where the device exposes them. |
 | Camera events | Opt-in ONVIF PullPoint reception, eleven useful event types, rule and object details, history filters and personal camera/type/time notifications. Mark events viewed, delete selected events or a confirmed history snapshot, and open live video or an existing archive. Clock/service chatter is excluded; event deletion never removes footage. |
@@ -53,7 +53,7 @@ ONVIF capabilities are device-dependent: a camera must expose the relevant servi
 
 ## Quick start
 
-The example below installs the published **[0.9.17](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.17)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
+The example below installs the published **[0.9.18](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.18)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
 
 ### 1. Prepare your NAS or Linux server
 
@@ -71,8 +71,8 @@ The installer does **not** install Docker or host packages for you. Host Node.js
 Run these commands in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.17/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.17
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.18/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.18
 ```
 
 The interactive installer uses `$HOME/km-vms` as the default application directory and port `8088`. It asks for confirmation before creating a new application directory. To choose a persistent application directory on your NAS instead, add `--app-dir /path/to/km-vms` to the second command; replace that example path with your own.
@@ -161,11 +161,11 @@ Camera detection, event reception, personal KM VMS notifications, and continuous
 
 ### How do I install the Android app?
 
-Use **Download APK** on your NAS web dashboard, or download [signed Android 0.8.1](https://github.com/kmishnev87/km-vms/releases/download/v0.9.17/km-vms-android-0.8.1.apk). Android 8.0 or later is required. Allow installation from the chosen source when Android asks, then add your NAS address and sign in with its existing account. You can enter a local NAS as **IP:port** without typing `http://`; explicit HTTP and HTTPS addresses are also supported. HTTP has an explicit warning because it does not encrypt the connection. HTTPS certificates are checked normally. The app does not issue a certificate or alter your NAS network configuration.
+Use **Settings → Download APK** in your NAS web interface, or download [signed Android 0.8.2](https://github.com/kmishnev87/km-vms/releases/download/v0.9.18/km-vms-android-0.8.2.apk). The web download information is bundled with the installed NAS release; updating KM VMS brings its matching APK information without a separate web release check. Android 8.0 or later is required. Allow installation from the chosen source when Android asks, then add your NAS address and sign in with its existing account. You can enter a local NAS as **IP:port** without typing `http://`; explicit HTTP and HTTPS addresses are also supported. HTTP has an explicit warning because it does not encrypt the connection. HTTPS certificates are checked normally. The app does not issue a certificate or alter your NAS network configuration.
 
 The client has separate saved NAS connections, native live video, main/sub and audio controls, digital gesture zoom, supported low-latency PTZ, records/clips, synchronized chronology, camera management, storage, system status and NAS maintenance. It checks official APK updates once on the first opening in a new day or manually; downloading and Android's installation confirmation remain explicit. Server and Android version numbers are independent.
 
-For notifications while the phone sleeps, enable notifications in the app and connect a compatible **UnifiedPush** provider. This is push delivery, not repeated NAS polling. The provider may use Google services or a separately installed distributor such as ntfy; the app explains provider availability. Delivery still depends on provider/network access, Android permission and device battery restrictions. No blanket guarantee is made for untested Huawei/microG combinations or every vendor's sleep policy. Live and archive viewing do not require push to be enabled. Physical-device video, gestures and long-term battery behavior should be evaluated on your own phone.
+After the first login to each NAS, the app offers notification setup. Accepting requests Android notification permission when needed and registers an available **UnifiedPush** provider. A decline is remembered, and an existing explicit disable is not silently reversed. You can change the choice under **Events → Notifications → Alerts on this phone**. This is push delivery, not repeated NAS polling. The provider may use Google services or a separately installed distributor such as ntfy; the app explains provider availability. Delivery still depends on provider/network access, Android permission and device battery restrictions. No blanket guarantee is made for untested Huawei/microG combinations or every vendor's sleep policy. Live and archive viewing do not require push to be enabled. Physical-device video, gestures and long-term battery behavior should be evaluated on your own phone.
 
 ### Does marking an archive finding reviewed repair the video?
 

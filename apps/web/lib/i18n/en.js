@@ -1,6 +1,6 @@
 export const enDictionary = {
   archiveCameraGroups: { retained: "Deleted cameras with recordings", deleted: "deleted" },
-  androidDownload: { checking: "Checking the official release…", available: "Android APK", failed: "Could not check the release. Try again.", unpublished: "The official APK has not been published yet.", subtitle: "KM VMS for Android", instructions: "Download the APK to your phone, open it and confirm installation in Android. Then add your NAS address and sign in with your KM VMS account. HTTP and HTTPS connections are supported.", version: "Version", download: "Download APK", check: "Check release", languages: "Android 8 or newer. English, Chinese and Russian. Updates are offered inside the Android app." },
+  androidDownload: { checking: "Loading APK information…", available: "Android APK", failed: "APK information is unavailable. Reload the page.", unpublished: "The official APK has not been published yet.", subtitle: "KM VMS for Android", instructions: "Download the APK to your phone, open it and confirm installation in Android. Then add your NAS address and sign in with your KM VMS account. HTTP and HTTPS connections are supported.", version: "Version", download: "Download APK", check: "Check release", languages: "Android 8 or newer. English, Chinese and Russian. Updates are offered inside the Android app." },
   chronologyArchive: { retainedCameras: "Deleted cameras with recordings", deleted: "deleted", archiveOnly: "Retained recordings only" },
   cameraEvents: {
     "title": "Camera events",

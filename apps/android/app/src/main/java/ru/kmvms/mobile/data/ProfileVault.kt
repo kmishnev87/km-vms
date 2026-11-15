@@ -30,6 +30,8 @@ class ProfileVault(context: Context) {
     internal fun putPushState(id: String, value: JSONObject) {
         preferences.edit().putString("push.$id", encrypt(value.toString(), "push:$id")).apply()
     }
+    internal fun pushSetupAnswered(id: String) = preferences.getBoolean("push_setup.$id", false)
+    internal fun answerPushSetup(id: String) { preferences.edit().putBoolean("push_setup.$id", true).apply() }
     fun select(id: String) { preferences.edit().putString("selected", id).apply() }
     fun save(profile: ServerProfile, password: String, access: String) = synchronized(transaction) {
         val profiles = profiles().filterNot { it.id == profile.id } + profile
@@ -59,7 +61,7 @@ class ProfileVault(context: Context) {
         val remaining = profiles().filterNot { it.id == id }
         val array = JSONArray()
         remaining.forEach { array.put(JSONObject().put("id", it.id).put("name", it.name).put("address", it.address).put("username", it.username)) }
-        val edit = preferences.edit().putString("profiles", array.toString()).remove("signin.$id").remove("push.$id")
+        val edit = preferences.edit().putString("profiles", array.toString()).remove("signin.$id").remove("push.$id").remove("push_setup.$id")
         if (selectedId() == id) edit.putString("selected", remaining.firstOrNull()?.id)
         edit.apply()
     }

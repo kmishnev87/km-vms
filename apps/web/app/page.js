@@ -71,14 +71,6 @@ const DASHBOARD_ITEMS = [
     titleKey: "dashboard.settingsTitle",
     descriptionKey: "dashboard.settingsText",
   },
-  {
-    href: "/apk",
-    iconSrc: "/assets/icons/dashboard/apk.png",
-    backgroundSrc: "/assets/backgrounds/dashboard-cards/apk.svg",
-    titleKey: "dashboard.apkTitle",
-    descriptionKey: "dashboard.apkText",
-    kind: "placeholder",
-  },
 ];
 
 export default function HomePage() {

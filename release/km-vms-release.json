@@ -1,79 +1,66 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.17",
-  "tag": "v0.9.17",
-  "title": "Android refinements and adaptive synchronized archive buffering",
-  "summary": "Signed Android 0.8.1 improves NAS connection, home layout, recording deletion and replay, timeline navigation and fullscreen controls. PC and Android archive groups refill together after starvation without deliberately slowing a fast first start.",
+  "version": "0.9.18",
+  "tag": "v0.9.18",
+  "title": "Android notification setup and integrated APK downloads",
+  "summary": "Signed Android 0.8.2 offers notification setup after the first NAS login, remembers each server's choice and shows registration and test results. APK downloads move from the web dashboard to Settings and stay matched to the installed NAS release.",
   "title_i18n": {
-    "en": "Android refinements and adaptive synchronized archive buffering",
-    "ru": "Удобнее Android и адаптивная буферизация синхронного архива",
-    "zh-CN": "Android 体验改进与同步录像自适应缓冲"
+    "en": "Android notification setup and integrated APK downloads",
+    "ru": "Настройка уведомлений Android и скачивание APK в настройках",
+    "zh-CN": "Android 通知引导与集成 APK 下载"
   },
   "summary_i18n": {
-    "en": "Signed Android 0.8.1 improves NAS connection, home layout, recording deletion and replay, timeline navigation and fullscreen controls. PC and Android archive groups refill together after starvation without deliberately slowing a fast first start.",
-    "ru": "Подписанный Android 0.8.1: адрес NAS без обязательного http://, компактная главная, удаление и повтор записей, удобная линейка времени и полноэкранный просмотр. На ПК и Android вся группа наполняет буфер после задержки; быстрый первый запуск не замедляется специально.",
-    "zh-CN": "签名 Android 0.8.1 改进 NAS 地址输入、主页布局、录像删除与重播、时间轴导航和全屏控制。PC 与 Android 在数据不足后共同补充缓冲，不对快速首次播放施加固定等待。"
+    "en": "Signed Android 0.8.2 offers notification setup after the first NAS login, remembers each server's choice and shows registration and test results. APK downloads move from the web dashboard to Settings and stay matched to the installed NAS release.",
+    "ru": "Подписанный Android 0.8.2 предлагает настроить уведомления после первого входа на NAS, сохраняет выбор для каждого сервера и показывает результаты регистрации и теста. Скачивание APK перенесено с главной в настройки; версия APK соответствует установленному выпуску NAS.",
+    "zh-CN": "签名 Android 0.8.2 在首次登录 NAS 后引导设置通知，分别记住各服务器的选择并显示注册和测试结果。APK 下载从网页主页移至设置，版本信息随已安装的 NAS 版本发布。"
   },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.17",
+  "source_ref": "v0.9.18",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
   "requires_migration": false,
-  "schema_update": { "mode": "managed", "target_version": 11 },
+  "schema_update": {
+    "mode": "managed",
+    "target_version": 11
+  },
   "changelog": [
-    "Publish signed Android 0.8.1 with the existing application identity and signing certificate for normal in-place updates.",
-    "Accept NAS IP:port without a required scheme while preserving explicit HTTP/HTTPS choices and normal TLS verification.",
-    "Place the server name below a lighter, shorter home heading and keep the camera Connection tab on one line.",
-    "Delete exact recordings with permission checks and confirmation, refresh the list, and replay completed recordings from the beginning.",
-    "Add a labelled, pannable Android timeline with scales down to ten minutes and accurate selection of short recordings.",
-    "Replace the large white archive fullscreen panel with compact translucent controls in portrait and landscape.",
-    "Show subtle camera names over live previews before the first frame and remove misleading group text from single-camera event playback.",
-    "Adapt recovery reserve after archive starvation on PC and Android; pause the group clock while every real recording continues buffering.",
-    "Preserve fast initial playback, manual pause, confirmed gaps, memory limits, speed changes and synchronized file-boundary transitions.",
-    "Fix the web Records camera filter overlapping the date, including narrow layouts, without redesigning the archive table."
+    "Publish signed Android 0.8.2 (802) with the existing package and signing certificate for normal in-place updates.",
+    "Offer notification setup once after login for each NAS profile; request Android permission and register an available delivery provider after consent.",
+    "Remember a declined offer, preserve existing registrations and explicit disabling, and prevent late provider callbacks from restoring disabled notifications.",
+    "Share registration logic between initial setup and alert settings, with visible status, failures and test-send feedback inside the dialog.",
+    "Move Download APK from the web dashboard to Settings before Security, using one compact download icon aligned with the adjacent Open buttons.",
+    "Bundle APK metadata with the NAS release, remove web release-check buttons and validate metadata parity during release; retain Android's daily update check."
   ],
   "changelog_i18n": {
     "en": [
-      "Publish signed Android 0.8.1 with the existing application identity and signing certificate for normal in-place updates.",
-      "Accept NAS IP:port without a required scheme while preserving explicit HTTP/HTTPS choices and normal TLS verification.",
-      "Place the server name below a lighter, shorter home heading and keep the camera Connection tab on one line.",
-      "Delete exact recordings with permission checks and confirmation, refresh the list, and replay completed recordings from the beginning.",
-      "Add a labelled, pannable Android timeline with scales down to ten minutes and accurate selection of short recordings.",
-      "Replace the large white archive fullscreen panel with compact translucent controls in portrait and landscape.",
-      "Show subtle camera names over live previews before the first frame and remove misleading group text from single-camera event playback.",
-      "Adapt recovery reserve after archive starvation on PC and Android; pause the group clock while every real recording continues buffering.",
-      "Preserve fast initial playback, manual pause, confirmed gaps, memory limits, speed changes and synchronized file-boundary transitions.",
-      "Fix the web Records camera filter overlapping the date, including narrow layouts, without redesigning the archive table."
+      "Publish signed Android 0.8.2 (802) with the existing package and signing certificate for normal in-place updates.",
+      "Offer notification setup once after login for each NAS profile; request Android permission and register an available delivery provider after consent.",
+      "Remember a declined offer, preserve existing registrations and explicit disabling, and prevent late provider callbacks from restoring disabled notifications.",
+      "Share registration logic between initial setup and alert settings, with visible status, failures and test-send feedback inside the dialog.",
+      "Move Download APK from the web dashboard to Settings before Security, using one compact download icon aligned with the adjacent Open buttons.",
+      "Bundle APK metadata with the NAS release, remove web release-check buttons and validate metadata parity during release; retain Android's daily update check."
     ],
     "ru": [
-      "Подписанный Android 0.8.1 сохраняет идентификатор приложения и прежний сертификат для обычного обновления поверх установленной версии.",
-      "Адрес NAS допускает IP:порт без обязательной схемы; явные HTTP/HTTPS и обычная проверка сертификата сохранены.",
-      "Имя сервера под облегчённым компактным заголовком главной; вкладка «Подключение» камеры помещается в одну строку.",
-      "Удаление точной записи с правами и подтверждением обновляет список; завершённая запись повторно запускается с начала.",
-      "Подписанная линейка Android перемещается пальцем и увеличивается до десяти минут; короткие записи выбираются точно.",
-      "Большой белый блок полноэкранного архива заменён компактным полупрозрачным управлением в обеих ориентациях.",
-      "Названия онлайн-камер видны до первого кадра; в одиночном просмотре события нет ложной подписи о совместном воспроизведении.",
-      "После нехватки данных на ПК и Android запас буфера растёт адаптивно; часы стоят, но все действительные записи продолжают загружаться.",
-      "Сохранены быстрый первый запуск, ручная пауза, пустые камеры, пределы памяти, скорость и синхронные переходы между файлами.",
-      "Выбор камеры в web «Записи» больше не накладывается на дату, в том числе в узком окне; таблица не переделывалась."
+      "Подписанный Android 0.8.2 (802) сохраняет идентификатор приложения и прежний сертификат для обычного обновления поверх установленной версии.",
+      "После входа APK однократно предлагает настроить уведомления для каждого NAS; после согласия запрашивает разрешение Android и регистрирует доступного поставщика доставки.",
+      "Отказ запоминается, существующая регистрация и явное выключение сохраняются; запоздалый ответ поставщика не включает уведомления обратно.",
+      "Первичная настройка и раздел оповещений используют общую регистрацию; состояние, ошибки и результат тестовой отправки видны непосредственно в окне.",
+      "Скачивание APK перенесено с главной web в настройки перед безопасностью: компактная кнопка с рисунком скачивания, выровненная с соседними кнопками открытия.",
+      "Сведения об APK входят в выпуск NAS; web-кнопки проверки выпуска убраны, согласованность metadata проверяется при выпуске. Ежедневная проверка в Android сохранена."
     ],
     "zh-CN": [
-      "发布签名 Android 0.8.1，保留原应用标识与签名证书，支持覆盖更新。",
-      "NAS 地址可直接输入 IP:端口；保留显式 HTTP/HTTPS 选择及正常证书验证。",
-      "服务器名称移到更紧凑的主页标题下方，摄像机连接标签保持单行显示。",
-      "通过权限检查和确认删除精确录像，自动刷新列表；播放结束后可从头重播。",
-      "Android 时间轴提供清晰刻度、拖动、最短十分钟视窗及短录像精确选择。",
-      "纵横屏录像全屏改用紧凑半透明控制，不再用大面积白色面板遮挡画面。",
-      "实时画面首帧加载前即可辨认摄像机名称；单摄像机事件回放移除误导性的共同播放文字。",
-      "PC 和 Android 在数据不足后自适应增加缓冲；共同时间暂停时所有有效录像继续加载。",
-      "保留快速首次播放、手动暂停、确认无录像的摄像机处理、内存限制、变速及同步文件切换。",
-      "修复网页录像摄像机筛选器覆盖日期的问题，兼容窄屏且不重做录像表格。"
+      "发布签名 Android 0.8.2（802），保留原包名和签名证书，支持覆盖更新。",
+      "每个 NAS 配置首次登录后仅提示一次通知设置；用户同意后申请 Android 权限并注册可用推送提供方。",
+      "记住拒绝选择，保留现有注册和主动关闭状态，避免延迟的提供方回调重新启用通知。",
+      "首次设置与通知设置共用注册逻辑，在对话框内直接显示状态、错误及测试发送结果。",
+      "网页主页移除 APK 下载入口，在设置的安全项前提供紧凑下载图标按钮，与相邻打开按钮对齐。",
+      "APK 信息随已安装 NAS 版本发布，移除网页独立检查版本按钮，并在发布时验证信息一致性；保留 Android 每日更新检查。"
     ]
   }
 }

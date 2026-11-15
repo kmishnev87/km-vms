@@ -1,6 +1,6 @@
 export const ruDictionary = {
   archiveCameraGroups: { retained: "Удалённые камеры с записями", deleted: "удалена" },
-  androidDownload: { checking: "Проверяем официальный выпуск…", available: "APK для Android", failed: "Не удалось проверить выпуск. Повторите попытку.", unpublished: "Официальный APK ещё не опубликован.", subtitle: "KM VMS для Android", instructions: "Скачайте APK на телефон, откройте файл и подтвердите установку в Android. Затем добавьте адрес NAS и войдите под своей учётной записью KM VMS. Поддерживаются HTTP и HTTPS.", version: "Версия", download: "Скачать APK", check: "Проверить выпуск", languages: "Android 8 и новее. Английский, китайский и русский языки. Обновления предлагаются в самом Android-приложении." },
+  androidDownload: { checking: "Загружаем сведения об APK…", available: "APK для Android", failed: "Сведения об APK недоступны. Обновите страницу.", unpublished: "Официальный APK ещё не опубликован.", subtitle: "KM VMS для Android", instructions: "Скачайте APK на телефон, откройте файл и подтвердите установку в Android. Затем добавьте адрес NAS и войдите под своей учётной записью KM VMS. Поддерживаются HTTP и HTTPS.", version: "Версия", download: "Скачать APK", check: "Проверить выпуск", languages: "Android 8 и новее. Английский, китайский и русский языки. Обновления предлагаются в самом Android-приложении." },
   chronologyArchive: { retainedCameras: "Удалённые камеры с записями", deleted: "удалена", archiveOnly: "Только сохранённый архив" },
   cameraEvents: {
     "title": "События камер",
