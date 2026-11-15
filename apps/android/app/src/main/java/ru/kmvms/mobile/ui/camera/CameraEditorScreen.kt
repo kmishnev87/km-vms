@@ -41,8 +41,9 @@ import org.json.JSONObject
         }
         Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
             listOf(R.string.connection,R.string.video_streams,R.string.recording_settings).forEachIndexed{index,label->
-                TextButton(onClick={controller.phase(index)},enabled=!state.busy&&(id!=null||index==0||state.verified),modifier=Modifier.weight(1f).testTag("camera-step-$index")) {
-                    Text(stringResource(label),color=if(state.phase==index)MaterialTheme.colorScheme.primary else Muted)
+                TextButton(onClick={controller.phase(index)},enabled=!state.busy&&(id!=null||index==0||state.verified),
+                    contentPadding=PaddingValues(horizontal=2.dp,vertical=8.dp),modifier=Modifier.weight(1f).testTag("camera-step-$index")) {
+                    Text(stringResource(label),maxLines=1,color=if(state.phase==index)MaterialTheme.colorScheme.primary else Muted)
                 }
             }
         }

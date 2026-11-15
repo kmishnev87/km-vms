@@ -8,6 +8,9 @@ data class TimelineSample(
     val cameraId: Long,
     val phase: TimelinePhase,
     val positionMillis: Long? = null,
+    val bufferedAheadMillis: Long = 0,
+    val remainingMillis: Long = Long.MAX_VALUE,
+    val bufferCapacityMillis: Long = Long.MAX_VALUE,
 )
 
 data class TimelineStep(
@@ -31,8 +34,11 @@ class GroupTimeline(initialPositionMillis: Long, private val toleranceMillis: Lo
         private set
     private var members: Set<Long> = emptySet()
     private var foreground = true
+    private val buffers=ArchiveBufferPolicy()
+    val bufferReserveMillis get()=buffers.reserveMillis
 
-    fun prepare(position: Long, cameraIds: Set<Long>, resume: Boolean = wantsPlayback) {
+    fun prepare(position: Long, cameraIds: Set<Long>, resume: Boolean = wantsPlayback, resetBuffer: Boolean = true) {
+        if(resetBuffer)buffers.reset()
         positionMillis = position
         members = cameraIds.toSet()
         wantsPlayback = resume
@@ -64,12 +70,19 @@ class GroupTimeline(initialPositionMillis: Long, private val toleranceMillis: Lo
         }
         if (waiting.isNotEmpty()) {
             val wasRunning = running
+            if(wasRunning && current.any{it.phase==TimelinePhase.BUFFERING && it.positionMillis!=null})buffers.starved()
             if (wasRunning) {
                 current.filter { it.phase in setOf(TimelinePhase.READY, TimelinePhase.BUFFERING) }
                     .mapNotNull { it.positionMillis }.minOrNull()?.let { positionMillis = it }
             }
             running = false
             return TimelineStep(positionMillis, false, waiting, if (wasRunning) positionMillis else null)
+        }
+        if(!running) {
+            val filling=current.filter { it.phase==TimelinePhase.READY &&
+                it.bufferedAheadMillis<buffers.required(speed,it.remainingMillis,it.bufferCapacityMillis) }
+                .map{it.cameraId}.toSet()
+            if(filling.isNotEmpty())return TimelineStep(positionMillis,false,filling)
         }
         if (!running && ready.any { abs(it - positionMillis) > toleranceMillis }) {
             return TimelineStep(positionMillis, false, emptySet(), positionMillis)
@@ -86,6 +99,7 @@ class GroupTimeline(initialPositionMillis: Long, private val toleranceMillis: Lo
             positionMillis + (elapsedMillis.coerceIn(0, 500) * speed).toLong()
         } else maxOf(positionMillis, ready.min())
         running = true
+        buffers.progressed(elapsedMillis)
         return TimelineStep(positionMillis, true, emptySet())
     }
 }

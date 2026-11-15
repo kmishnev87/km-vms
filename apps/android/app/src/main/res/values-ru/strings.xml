@@ -336,4 +336,10 @@
     <string name="archive_uncatalogued_file">Требуется каталогизация файла</string>
     <string name="archive_item_needs_review">Требует внимания</string>
     <string name="archive_scan_stale">Предыдущая проверка устарела. Проверьте архив заново.</string>
+    <string name="recording_delete_title">Удалить запись?</string>
+    <string name="recording_delete_confirmation">Безвозвратно удалить запись камеры «%1$s» (%2$s)? Остальные записи останутся.</string>
+    <string name="recording_delete_failed">Не удалось подтвердить удаление. Повторите попытку.</string>
+    <string name="timeline_hours">%1$d ч</string>
+    <string name="timeline_minutes">%1$d мин</string>
+    <string name="timeline_buffering">Подгружаем видео…</string>
 </resources>

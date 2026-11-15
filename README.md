@@ -31,7 +31,7 @@ Designed for homes, holiday properties, homelabs, and small sites, KM VMS brings
 
 | Area | What you can do |
 | --- | --- |
-| Native Android | Android 8.0+, three languages, original KM VMS artwork, independent NAS profiles, native video/PTZ, archive, events and NAS maintenance. Download signed APK 0.8.0 from the web app or this release. |
+| Native Android | Android 8.0+, three languages, original KM VMS artwork, independent NAS profiles, native video/PTZ, archive, events and NAS maintenance. Signed APK 0.8.1 adds compact fullscreen controls, recording deletion/replay and a zoomable, pannable archive ruler. |
 | IP cameras | Add and edit RTSP/ONVIF cameras, check connections, select video sources and main/sub streams, and configure recording. |
 | ONVIF video settings | Discover Media1/Media2 services, read supported encoder settings, and apply camera-provided options for codec, resolution, frame rate, and bitrate where the device exposes them. |
 | Camera events | Opt-in ONVIF PullPoint reception, eleven useful event types, rule and object details, history filters and personal camera/type/time notifications. Mark events viewed, delete selected events or a confirmed history snapshot, and open live video or an existing archive. Clock/service chatter is excluded; event deletion never removes footage. |
@@ -53,7 +53,7 @@ ONVIF capabilities are device-dependent: a camera must expose the relevant servi
 
 ## Quick start
 
-The example below installs the published **[0.9.16](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.16)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
+The example below installs the published **[0.9.17](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.17)** release on a **new installation**. It is not an update command for an existing installation. Check the [latest published release](https://github.com/kmishnev87/km-vms/releases/latest) for subsequent versions.
 
 ### 1. Prepare your NAS or Linux server
 
@@ -71,8 +71,8 @@ The installer does **not** install Docker or host packages for you. Host Node.js
 Run these commands in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.16/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.16
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.17/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.17
 ```
 
 The interactive installer uses `$HOME/km-vms` as the default application directory and port `8088`. It asks for confirmation before creating a new application directory. To choose a persistent application directory on your NAS instead, add `--app-dir /path/to/km-vms` to the second command; replace that example path with your own.
@@ -161,7 +161,7 @@ Camera detection, event reception, personal KM VMS notifications, and continuous
 
 ### How do I install the Android app?
 
-Use **Download APK** on your NAS web dashboard, or download [signed Android 0.8.0](https://github.com/kmishnev87/km-vms/releases/download/v0.9.16/km-vms-android-0.8.0.apk). Android 8.0 or later is required. Allow installation from the chosen source when Android asks, then add your NAS address and sign in with its existing account. Both HTTP and HTTPS are supported; HTTP has an explicit warning because it does not encrypt the connection. HTTPS certificates are checked normally. The app does not issue a certificate or alter your NAS network configuration.
+Use **Download APK** on your NAS web dashboard, or download [signed Android 0.8.1](https://github.com/kmishnev87/km-vms/releases/download/v0.9.17/km-vms-android-0.8.1.apk). Android 8.0 or later is required. Allow installation from the chosen source when Android asks, then add your NAS address and sign in with its existing account. You can enter a local NAS as **IP:port** without typing `http://`; explicit HTTP and HTTPS addresses are also supported. HTTP has an explicit warning because it does not encrypt the connection. HTTPS certificates are checked normally. The app does not issue a certificate or alter your NAS network configuration.
 
 The client has separate saved NAS connections, native live video, main/sub and audio controls, digital gesture zoom, supported low-latency PTZ, records/clips, synchronized chronology, camera management, storage, system status and NAS maintenance. It checks official APK updates once on the first opening in a new day or manually; downloading and Android's installation confirmation remain explicit. Server and Android version numbers are independent.
 
@@ -173,7 +173,7 @@ No. Keeping a file and marking its finding reviewed records your decision; it do
 
 ### What happens when a recording buffers in Chronology?
 
-The recordings present at the selected moment wait for each other, and the shared clock pauses with them. A camera with a confirmed gap does not block the group. A network or file-access error is not treated as a gap: retry playback or remove the affected tile. Segment changes can require a loading pause; zero-delay playback on every network is not promised.
+The recordings present at the selected moment wait for each other, and the shared clock pauses with them. On both PC and Android, all available sources continue filling their buffers during that pause. After real data starvation, recovery reserves adapt to avoid repeated one-second bursts; a fast first start does not receive a fixed recovery delay. A camera with a confirmed gap does not block the group. A network or file-access error is not treated as a gap: retry playback or remove the affected tile. Memory limits and the remaining file duration are respected. Segment changes can require a loading pause; uninterrupted playback below the cameras' combined bitrate is not promised.
 
 ### Do saved clips expire or delete the original footage?
 

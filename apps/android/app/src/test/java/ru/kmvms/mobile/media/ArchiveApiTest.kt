@@ -12,6 +12,27 @@ import ru.kmvms.mobile.data.NasApi
 import java.time.*
 
 class ArchiveApiTest {
+    @Test fun deletingRecordingUsesExactReferenceAndStableOperationNotFilename()=runBlocking {
+        MockWebServer().use{server->
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            val item=Recording(12,"root-a","root-a:12",5,"Garden","same.mkv","today",null,null,null,"1 MB",false)
+            val operation="8bb88b98-00c3-42d1-9c0f-2739f8b31c99"
+            client(server).deleteRecording(item,operation)
+            val request=server.takeRequest();val url=request.requestUrl!!
+            assertEquals("DELETE",request.method);assertEquals("root-a:12",url.queryParameter("recording_ref"))
+            assertEquals(operation,url.queryParameter("operation_id"));assertNull(url.queryParameter("path"))
+            assertNull(url.queryParameter("segment_id"))
+        }
+    }
+    @Test fun deletingLegacyRecordingStillIncludesArchiveRootIdentity()=runBlocking {
+        MockWebServer().use{server->
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            client(server).deleteRecording(Recording(12,"root-b",null,5,"Garden","same.mkv","today",null,null,null,"1 MB",true),
+                "8bb88b98-00c3-42d1-9c0f-2739f8b31c99")
+            val url=server.takeRequest().requestUrl!!
+            assertEquals("12",url.queryParameter("segment_id"));assertEquals("root-b",url.queryParameter("archive_root_id"))
+        }
+    }
     @Test fun groupedBrowserKeepsEqualNamesSeparateAndSortsDeletedLast()=runBlocking{
         MockWebServer().use{server->
             server.enqueue(MockResponse().setBody("""{"items":["Yard"],"export_items":[],"camera_items":[{"id":"1","name":"Yard","deleted":true,"value":"camera:1"},{"id":"2","name":"Yard","deleted":false,"value":"camera:2"}]}"""))

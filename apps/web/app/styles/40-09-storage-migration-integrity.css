@@ -1065,8 +1065,8 @@
 .storageOpsCompactCameras .storageOpsCameraTable th, .storageOpsCompactCameras .storageOpsCameraTable td { padding: 4px 8px; height: 30px; line-height: 20px; box-sizing: border-box; }
 .storageOpsCompactCameras .storageCameraIdentity { align-items: center; }
 .storageOpsCompactCameras .storageArchivedDivider td { border-top: 1px solid #cbd7e4; height: 28px; padding-top: 6px; color: #64748b; font-size: 11px; text-align: left; background: #f8fbfe; }
-.archiveCameraSelect { position: relative; min-width: 0; }
-.archiveCameraTrigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; }
+.archiveCameraSelect { position: relative; flex: 0 0 280px; min-width: 260px; max-width: 320px; }
+.archiveCameraTrigger.recordingsFilterSelect { width: 100%; min-width: 0; max-width: none; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; }
 .archiveCameraTrigger > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .archiveCameraMenu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(420px, calc(100vw - 48px)); max-height: 320px; overflow: auto; padding: 4px; border: 1px solid #cbd7e4; border-radius: 7px; background: #fff; box-shadow: 0 6px 18px #1722381a; }
 .archiveCameraOption { display: flex; align-items: center; gap: 6px; height: 30px; width: 100%; padding: 3px 8px; border: 0; border-radius: 4px; background: transparent; color: #172238; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
@@ -1075,6 +1075,7 @@
 .archiveCameraOption[aria-selected="true"], .archiveCameraOption:hover, .archiveCameraOption:focus-visible { background: #eaf3fb; outline: none; }
 .archiveCameraDivider { margin: 4px 4px 2px; padding: 6px 4px 2px; border-top: 1px solid #cbd7e4; color: #64748b; font-size: 11px; }
 @media (max-width: 640px) {
+  .archiveCameraSelect { flex: 1 1 100%; min-width: 0; max-width: none; }
   .archiveCameraOption { height: 42px; }
   .storageOpsCompactCameras .storageOpsCameraTable th, .storageOpsCompactCameras .storageOpsCameraTable td { padding: 4px; font-size: 11px; }
   .storageOpsCompactCameras .storageDeletedCamera { font-size: 10px; }

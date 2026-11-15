@@ -336,4 +336,10 @@
     <string name="archive_uncatalogued_file">The file needs archive cataloguing</string>
     <string name="archive_item_needs_review">Needs review</string>
     <string name="archive_scan_stale">The previous check is out of date. Check the archive again.</string>
+    <string name="recording_delete_title">Delete recording?</string>
+    <string name="recording_delete_confirmation">Permanently delete this recording from %1$s (%2$s)? Other recordings will remain.</string>
+    <string name="recording_delete_failed">Could not confirm deletion. Try again.</string>
+    <string name="timeline_hours">%1$d h</string>
+    <string name="timeline_minutes">%1$d min</string>
+    <string name="timeline_buffering">Loading video…</string>
 </resources>

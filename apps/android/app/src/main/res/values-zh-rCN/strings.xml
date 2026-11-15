@@ -336,4 +336,10 @@
     <string name="archive_uncatalogued_file">文件需要编入录像目录</string>
     <string name="archive_item_needs_review">需要检查</string>
     <string name="archive_scan_stale">先前的检查已过期，请重新检查录像。</string>
+    <string name="recording_delete_title">删除录像？</string>
+    <string name="recording_delete_confirmation">永久删除 %1$s（%2$s）的这段录像？其他录像将保留。</string>
+    <string name="recording_delete_failed">无法确认删除，请重试。</string>
+    <string name="timeline_hours">%1$d 小时</string>
+    <string name="timeline_minutes">%1$d 分钟</string>
+    <string name="timeline_buffering">正在加载视频…</string>
 </resources>

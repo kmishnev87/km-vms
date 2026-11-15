@@ -136,7 +136,7 @@ import java.time.format.DateTimeFormatter
                     }
                 }
                 if (!compact) TimelineControls(controller, state)
-                TimelineStrip(state, controller::seek)
+                TimelineRuler(state, archiveCameras, controller::seek)
             }
         }
         LazyColumn(Modifier.fillMaxSize().testTag("timeline-videos"), contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -181,83 +181,29 @@ import java.time.format.DateTimeFormatter
             }
         }
         Box(Modifier.weight(1f).heightIn(min = 40.dp), contentAlignment = Alignment.CenterStart) {
-            val status = when {
-                state.wantsPlay && state.waiting.isNotEmpty() -> stringResource(R.string.timeline_waiting, state.waiting.size)
-                state.running -> stringResource(R.string.timeline_playing)
-                else -> stringResource(R.string.timeline_paused)
-            }
-            Text(status, color = Muted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.testTag("timeline-state"))
+            if(state.wantsPlay && state.waiting.isNotEmpty())
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                    CircularProgressIndicator(Modifier.size(14.dp),strokeWidth=2.dp)
+                    Text(stringResource(R.string.timeline_buffering),color=Muted,style=MaterialTheme.typography.labelSmall,modifier=Modifier.testTag("timeline-state"))
+                }
+            else if(!state.wantsPlay) Text(stringResource(R.string.timeline_paused),color=Muted,style=MaterialTheme.typography.labelSmall,modifier=Modifier.testTag("timeline-state"))
         }
         TextButton(onClick = controller::firstRecording, enabled = state.ranges.values.any { it.isNotEmpty() }, modifier = Modifier.testTag("timeline-first")) { Text(stringResource(R.string.timeline_find)) }
     }
 }
 
-@Composable private fun TimelineStrip(state: ChronologyState, seek: (Long) -> Unit) {
-    val start = state.day.atStartOfDay(state.zone).toInstant().toEpochMilli()
-    val end = state.day.plusDays(1).atStartOfDay(state.zone).toInstant().toEpochMilli()
-    val duration = (end - start).toFloat()
-    val description = stringResource(R.string.timeline_archive_map)
-    Column {
-        Canvas(Modifier.fillMaxWidth().height((state.selected.size.coerceIn(1, 8) * 8 + 12).dp)
-            .testTag("timeline-ranges").semantics { contentDescription = description }
-            .pointerInput(start, end) { detectTapGestures { point -> seek(start + (point.x / size.width).coerceIn(0f, 1f).times(duration).toLong()) } }) {
-            val rowHeight = size.height / state.selected.size.coerceAtLeast(1)
-            state.selected.forEachIndexed { index, id ->
-                val y = index * rowHeight + 2.dp.toPx()
-                drawRect(Outline, Offset(0f, y), Size(size.width, (rowHeight - 3.dp.toPx()).coerceAtLeast(1f)))
-                state.ranges[id].orEmpty().forEach { range ->
-                    val left = ((range.start - start) / duration).coerceIn(0f, 1f) * size.width
-                    val right = ((range.end - start) / duration).coerceIn(0f, 1f) * size.width
-                    if (right > left) drawRect(Accent.copy(alpha = .65f), Offset(left, y), Size((right - left).coerceAtLeast(2f), (rowHeight - 3.dp.toPx()).coerceAtLeast(1f)))
-                }
-            }
-            val x = ((state.position - start) / duration).coerceIn(0f, 1f) * size.width
-            drawLine(Accent, Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("00:00", style = MaterialTheme.typography.labelSmall, color = Muted)
-            Text(zoneLabel(state.zone), style = MaterialTheme.typography.labelSmall, color = Muted)
-            Text("24:00", style = MaterialTheme.typography.labelSmall, color = Muted)
-        }
-    }
-}
-
 @UnstableApi
-@Composable private fun TimelineVideo(controller: ChronologyController, state: ChronologyState, id: Long, modifier: Modifier, expand: () -> Unit) {
+@Composable internal fun TimelineVideo(controller: ChronologyController, state: ChronologyState, id: Long, modifier: Modifier, expand: () -> Unit) {
     val track = controller.track(id)
     val phase = state.phases[id] ?: TimelinePhase.RESOLVING
     if (phase == TimelinePhase.EMPTY) Box(modifier.background(Color.Black).testTag("timeline-empty-$id"), contentAlignment = Alignment.Center) {
         Text(stringResource(R.string.timeline_no_recording), color = Color.White, style = MaterialTheme.typography.bodySmall)
     } else VideoSurface(track?.player,
-        VideoState(when (phase) { TimelinePhase.READY -> VideoStatus.PLAYING; TimelinePhase.FAILED -> VideoStatus.FAILED; else -> VideoStatus.BUFFERING }, unsupportedCodec = track?.unsupportedCodec() == true),
+        VideoState(when { phase==TimelinePhase.FAILED -> VideoStatus.FAILED
+            state.wantsPlay && !state.running && id in state.waiting -> VideoStatus.BUFFERING
+            phase==TimelinePhase.READY -> VideoStatus.PLAYING
+            else -> VideoStatus.BUFFERING }, unsupportedCodec = track?.unsupportedCodec() == true),
         controller::retry, modifier.testTag("timeline-video-$id"), zoomable = true, onTap = expand)
-}
-
-@UnstableApi
-@Composable private fun TimelineFullscreen(controller: ChronologyController, state: ChronologyState, id: Long, close: () -> Unit) {
-    val context = LocalContext.current
-    var sound by remember(id) { mutableStateOf(false) }
-    val track = controller.track(id)
-    SideEffect { track?.player?.volume = if (sound) 1f else 0f }
-    DisposableEffect(context, track) {
-        val bars = (context as? Activity)?.window?.let { WindowCompat.getInsetsController(it, it.decorView) }
-        bars?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        bars?.hide(WindowInsetsCompat.Type.systemBars())
-        onDispose { bars?.show(WindowInsetsCompat.Type.systemBars()); track?.player?.volume = 0f }
-    }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        TimelineVideo(controller, state, id, Modifier.fillMaxSize()) { }
-        Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            IconButton(onClick = close, modifier = Modifier.background(Color(0xAA233044), RoundedCornerShape(12.dp))) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back), tint = Color.White) }
-            IconButton(onClick = { sound = !sound }, modifier = Modifier.background(Color(0xAA233044), RoundedCornerShape(12.dp))) { SpeakerIcon(sound, Color.White) }
-        }
-        Surface(color = Color.White.copy(alpha = .9f), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()) {
-            Column(Modifier.padding(horizontal = 12.dp)) {
-                Text(Instant.ofEpochMilli(state.position).atZone(state.zone).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")), modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
-                TimelineControls(controller, state)
-            }
-        }
-    }
 }
 
 @Composable private fun TimelineCameraPicker(cameras: List<Camera>, current: List<Long>, dismiss: () -> Unit, choose: (List<Long>) -> Unit) {

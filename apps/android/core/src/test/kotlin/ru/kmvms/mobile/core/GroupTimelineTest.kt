@@ -4,7 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class GroupTimelineTest {
-    private fun ready(id: Long, at: Long) = TimelineSample(id, TimelinePhase.READY, at)
+    private fun ready(id: Long, at: Long) = TimelineSample(id, TimelinePhase.READY, at,60_000)
     private fun timeline() = GroupTimeline(10_000).apply { prepare(10_000, setOf(1, 2, 3, 4), true) }
 
     @Test fun playBeforeLoadingWaitsForEveryRealRecordingButNotAnEmptyCamera() {

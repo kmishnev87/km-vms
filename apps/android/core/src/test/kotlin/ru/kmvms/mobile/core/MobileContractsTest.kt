@@ -12,6 +12,13 @@ class MobileContractsTest {
         assertEquals("https://nas.example:8443", address.origin.toString())
     }
     @Test fun omittedSchemeUsesHttps() { assertEquals("https://nas.example/", ServerAddress.parse("nas.example").toString()) }
+    @Test fun bareNasAddressDoesNotRequireTypingHttp() {
+        assertEquals("http://192.168.31.41:8088/", ServerAddress.parse(" 192.168.31.41:8088 ").toString())
+        assertEquals("http://192.168.31.41/", ServerAddress.parse("192.168.31.41").toString())
+        assertEquals("http://nas.example:8088/vms/", ServerAddress.parse("nas.example:8088/vms").toString())
+        assertEquals("http://[::1]:8088/", ServerAddress.parse("[::1]:8088").toString())
+        assertEquals("https://192.168.31.41:8443/", ServerAddress.parse("https://192.168.31.41:8443").toString())
+    }
     @Test fun internationalizedNasHostnamesUseIdnaWithoutLosingThePrefix() {
         val address = ServerAddress.parse("https://кмпрайм.рф:8443/vms/")
         val host = java.net.IDN.toASCII("кмпрайм.рф")

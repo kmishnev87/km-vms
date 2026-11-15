@@ -1,9 +1,20 @@
+import { createArchiveBufferPolicy, requiredArchiveBuffer } from "./archiveBufferPolicy.js";
+
 // One authoritative operation, with React consuming immutable projections.
 export const TILE_READY_STATES = new Set(["ready", "empty"]);
 
 export function coordinatorBarrierComplete(coordinator) {
   return !coordinator?.expectedTileIds?.length || coordinator.expectedTileIds.every(
-    (id) => TILE_READY_STATES.has(String(coordinator.tileStates?.[id]?.state || ""))
+    (id) => {
+      const tile=coordinator.tileStates?.[id];
+      if(tile?.state === "empty") return true;
+      if(tile?.state !== "ready") return false;
+      if(!coordinator.shouldResume || !(coordinator.bufferReserveSeconds>0.5)) return true;
+      const facts=tile.facts || {};
+      return Number.isFinite(facts.bufferedAheadSeconds) && facts.bufferedAheadSeconds >= requiredArchiveBuffer({
+        reserve:coordinator.bufferReserveSeconds,speed:facts.speed,remaining:facts.remainingSeconds,capacity:facts.bufferCapacitySeconds,
+      });
+    }
   );
 }
 
@@ -18,6 +29,7 @@ export function createPlaybackCoordinator({
   let lastPositionMs = null;
   const listeners = new Set();
   const players = new Map();
+  const buffers = createArchiveBufferPolicy(now);
   const timers = { soft: null, hard: null };
   const publish = (next) => {
     snapshot = next;
@@ -47,7 +59,7 @@ export function createPlaybackCoordinator({
     clearTimers();
     const resume = snapshot.shouldResume;
     publish({ ...snapshot, releaseState, state: releaseState === "partial" ? "partial" : "ready" });
-    if (resume) onResume({ empty: snapshot.expectedTileIds.every(tileId => snapshot.tileStates[tileId]?.state === "empty") });
+    if (resume) { buffers.resumed(); onResume({ empty: snapshot.expectedTileIds.every(tileId => snapshot.tileStates[tileId]?.state === "empty") }); }
     return true;
   };
   const timeout = (id, timeoutState = "timeout") => {
@@ -65,13 +77,15 @@ export function createPlaybackCoordinator({
   const start = ({ targetTs, targetMs, shouldResume, expectedTileIds, reason = "seek" }) => {
     if (disposed) return null;
     clearTimers();
+    if (reason === "seek") buffers.reset();
+    buffers.held();
     const id = `chronology-${now()}-${++serial}`;
     const ids = Array.from(new Set(expectedTileIds.map(String).filter(Boolean)));
     if (Number.isFinite(targetMs)) lastPositionMs = targetMs;
     pausePlayers();
     publish({ id, targetTs, targetMs, reason, shouldResume: Boolean(shouldResume), expectedTileIds: ids,
       tileStates: Object.fromEntries(ids.map((tileId) => [tileId, { state: "pending", updatedAt: now(), facts: {} }])),
-      state: "preparing", releaseState: "holding", softTimeoutMs, hardTimeoutMs, createdAt: now() });
+      state: "preparing", releaseState: "holding", bufferReserveSeconds: buffers.reserve(), softTimeoutMs, hardTimeoutMs, createdAt: now() });
     onHold(targetMs, reason);
     if (!ids.length) release(id);
     else {
@@ -90,6 +104,7 @@ export function createPlaybackCoordinator({
   };
   const hold = (reason = "buffering", targetMs = position()) => {
     if (disposed || !snapshot?.shouldResume || snapshot.releaseState !== "released") return false;
+    if(reason === "buffering") buffers.starved();
     start({ targetTs: snapshot.targetTs, targetMs, shouldResume: true, expectedTileIds: snapshot.expectedTileIds, reason });
     return true;
   };
@@ -99,6 +114,7 @@ export function createPlaybackCoordinator({
         || !snapshot.expectedTileIds.includes(id)) return false;
     if (state === "progress") {
       if (snapshot.releaseState !== "released" || !snapshot.shouldResume) return true;
+      buffers.progress();
       const values = samples();
       if (values.length) {
         const minimum = Math.min(...values.map(value => value.positionMs));

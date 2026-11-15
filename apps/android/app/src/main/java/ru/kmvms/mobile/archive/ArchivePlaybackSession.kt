@@ -26,7 +26,8 @@ class ArchivePlaybackSession(context: Context, api: NasApi, recording: Recording
     val position = mutablePosition.asStateFlow()
     private var foreground = true
     private var intentToPlay = true
-    val player = ExoPlayer.Builder(context.applicationContext).build().apply {
+    private var completed = false
+    val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext).build().apply {
         setMediaSource(ProgressiveMediaSource.Factory(RecordingDataSource.Factory(api, recording))
             .createMediaSource(MediaItem.fromUri(api.address.endpoint("api/recordings/stream?${recording.query()}").toString())))
         seekTo(initialPosition.coerceAtLeast(0)); playWhenReady = true
@@ -34,7 +35,15 @@ class ArchivePlaybackSession(context: Context, api: NasApi, recording: Recording
             override fun onPlaybackStateChanged(playbackState: Int) {
                 mutableVideo.value = when (playbackState) {
                     Player.STATE_BUFFERING -> VideoState(VideoStatus.BUFFERING)
-                    Player.STATE_READY, Player.STATE_ENDED -> VideoState(VideoStatus.PLAYING)
+                    Player.STATE_READY -> VideoState(VideoStatus.PLAYING)
+                    Player.STATE_ENDED -> {
+                        completed = true
+                        intentToPlay = false
+                        player.pause()
+                        player.seekTo(0)
+                        mutablePosition.value = ArchivePosition(0, player.duration.coerceAtLeast(0), false)
+                        VideoState(VideoStatus.PLAYING)
+                    }
                     else -> mutableVideo.value
                 }
             }
@@ -50,8 +59,12 @@ class ArchivePlaybackSession(context: Context, api: NasApi, recording: Recording
         if (foreground) mutablePosition.value = ArchivePosition(player.currentPosition.coerceAtLeast(0), player.duration.coerceAtLeast(0), player.isPlaying)
         delay(250)
     } } }
-    fun seek(milliseconds: Long) { player.seekTo(milliseconds.coerceIn(0, player.duration.coerceAtLeast(0))) }
-    fun toggle() { intentToPlay = !player.playWhenReady; player.playWhenReady = intentToPlay }
+    fun seek(milliseconds: Long) { completed=false;player.seekTo(milliseconds.coerceIn(0, player.duration.coerceAtLeast(0))) }
+    fun toggle() {
+        if(completed || player.playbackState == Player.STATE_ENDED) { completed=false;player.seekTo(0);intentToPlay=true }
+        else intentToPlay = !player.playWhenReady
+        player.playWhenReady = intentToPlay
+    }
     fun retry() { player.prepare(); player.playWhenReady = intentToPlay }
     fun foreground(active: Boolean) {
         if (foreground == active) return
@@ -59,5 +72,5 @@ class ArchivePlaybackSession(context: Context, api: NasApi, recording: Recording
         if (!active) { intentToPlay = player.playWhenReady; player.pause(); player.stop() }
         else { player.prepare(); player.playWhenReady = intentToPlay }
     }
-    fun close(): Long { val position = player.currentPosition; scope.cancel(); player.release(); return position }
+    fun close(): Long { val position = if(completed)0L else player.currentPosition; scope.cancel(); player.release(); return position }
 }

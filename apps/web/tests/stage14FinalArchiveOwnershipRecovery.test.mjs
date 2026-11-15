@@ -113,7 +113,9 @@ function archiveHarness(){
   addEventListener(k,f){if(!listeners.has(k))listeners.set(k,new Set());listeners.get(k).add(f);},removeEventListener:(k,f)=>listeners.get(k)?.delete(f),emit(k,ready=null){if(ready!==null)this.readyState=ready;for(const f of[...listeners.get(k)||[]])f();},
  };
  const ctx={...archiveGroupPlayback,AbortController,useI18n:()=>({text:value=>value}),URLSearchParams,normalizeVideoDimensions:(width,height)=>({width,height}),selectCompactVideoRenderMode:()=>({renderer:'video'}),issueChronologyMediaToken:(cameraId,relPath,playback)=>new Promise((resolve,reject)=>requests.push({cameraId,relPath,playback,resolve,reject})),
-  setTimeout(fn,delay){timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),document:{fullscreenElement:null,addEventListener:noop,removeEventListener:noop},MEDIA_REFRESH_RETRY_LIMIT:1};
+  setTimeout(fn,delay){timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),
+  setInterval(fn,delay){timers.set(++timer,{fn,delay,interval:true});return timer;},clearInterval:id=>timers.delete(id),
+  document:{fullscreenElement:null,addEventListener:noop,removeEventListener:noop},MEDIA_REFRESH_RETRY_LIMIT:1};
  let props={playback:{hasVideo:true,cameraId:'1',relPath:'dummy-A.mkv',playbackKey:'dummy-key-A',offsetSec:10},coordination:null,speed:1,isPlaying:false,tileId:'tile-A',onTilePlaybackState:(tile,operation,state,facts)=>states.push({tile,operation,state,facts})};
  vm.runInNewContext(plain(read('lib/archivePlaybackRecovery.js'))+';this.isArchiveRecoveryHealthy=isArchiveRecoveryHealthy;',ctx);
  const h=hooks(archiveComponent,ctx,'ArchiveTilePlayer',props,slots=>{const refs=slots.filter(s=>s.kind==='ref');refs[0].value.current={contains:()=>false};refs[1].value.current=video;});

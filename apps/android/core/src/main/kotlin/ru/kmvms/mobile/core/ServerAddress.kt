@@ -18,7 +18,12 @@ class ServerAddress private constructor(val origin: URI, val base: URI) {
         fun parse(input: String): ServerAddress {
             val value = input.trim()
             require(value.isNotBlank() && value.length <= 2048) { "invalid_server_address" }
-            val raw = URI(if (value.contains("://")) value else "https://$value")
+            // A bare NAS IP:port is the same HTTP address used by its browser UI.
+            // Explicit HTTPS is never downgraded, including on connection failure.
+            val authority = value.substringBefore('/')
+            val nasAddress = ':' in authority || authority == "localhost" ||
+                authority.matches(Regex("[0-9]+(?:\\.[0-9]+){3}"))
+            val raw = URI(if (value.contains("://")) value else "${if (nasAddress) "http" else "https"}://$value")
             require(raw.scheme in setOf("http", "https") && !raw.rawAuthority.isNullOrBlank()) { "invalid_server_address" }
             require(raw.rawUserInfo == null && '@' !in raw.rawAuthority) { "invalid_server_address" }
             val uri = if (raw.host != null) raw else {

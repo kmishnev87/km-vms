@@ -185,7 +185,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                             profileId = state.active!!.id) }
                     }
                     section == Section.RECORDINGS -> model.api()?.let { api -> RecordingsScreen(api,
-                        state.user?.can("export_recordings") == true, { immersive=it },
+                        state.user?.can("export_recordings") == true, state.user?.can("delete_recordings") == true, { immersive=it },
                         { text -> uiScope.launch { snackbars.showSnackbar(text) } }) }
                     section == Section.CHRONOLOGY -> model.api()?.let { api -> ChronologyScreen(api, state.cameras, { immersive = it },
                         { text -> uiScope.launch { snackbars.showSnackbar(text) } }, initial = videoRequest) }
@@ -231,7 +231,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
         OutlinedTextField(name, { name = it }, label = { Text(stringResource(R.string.server_name)) }, singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("server-name"), enabled = !state.connecting)
         OutlinedTextField(address, { address = it }, label = { Text(stringResource(R.string.server_address)) },
-            placeholder = { Text("https://nas.example") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true,
+            placeholder = { Text("192.168.1.10:8088") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("server-address"), enabled = !state.connecting)
         OutlinedTextField(user, { user = it }, label = { Text(stringResource(R.string.username)) }, singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("server-user"), enabled = !state.connecting)
@@ -240,7 +240,8 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
             modifier = Modifier.fillMaxWidth().testTag("server-password"), enabled = !state.connecting)
         // A fixed slot keeps the submit button stable as the URL is edited.
         Box(Modifier.fillMaxWidth().height(64.dp)) {
-            if (address.startsWith("http://")) Text(stringResource(R.string.http_warning), fontSize = 12.sp, color = Muted)
+            if (runCatching { ru.kmvms.mobile.core.ServerAddress.parse(address).origin.scheme == "http" }.getOrDefault(false))
+                Text(stringResource(R.string.http_warning), fontSize = 12.sp, color = Muted)
         }
         Button(onClick = { connect(name, address, user, password) }, modifier = Modifier.fillMaxWidth().height(50.dp).testTag("connect"),
             enabled = !state.connecting && name.isNotBlank() && address.isNotBlank() && user.isNotBlank() && password.isNotEmpty(), shape = RoundedCornerShape(12.dp)) {
@@ -251,16 +252,21 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
 
 @Composable private fun HomeScreen(sections: List<Section>, select: (Section) -> Unit,
                                  state: MobileState, selectServer:(ServerProfile)->Unit, addServer:()->Unit) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val visibleSections = dashboardSections.filter { it in sections }
+    val columns = ((maxWidth.value - 20) / 172).toInt().coerceAtLeast(1)
+    val rows = ((visibleSections.size + columns - 1) / columns).coerceAtLeast(1)
+    val tileHeight = ((maxHeight - 108.dp - 12.dp * rows) / rows).coerceIn(128.dp, 146.dp)
     LazyVerticalGrid(columns = GridCells.Adaptive(160.dp), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             HomeBrandHeader(state,selectServer,addServer)
         }
-        items(dashboardSections.filter { it in sections }) { section ->
+        items(visibleSections) { section ->
             Surface(onClick = { select(section) }, shape = RoundedCornerShape(14.dp), color = Color.White,
                 modifier = Modifier.testTag("home-${section.name}"),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Outline)) {
-                Box(Modifier.fillMaxWidth().height(146.dp)) {
+                Box(Modifier.fillMaxWidth().height(tileHeight)) {
                     DashboardBackground(section, Modifier.matchParentSize())
                     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
                         SectionIcon(section, Modifier.size(64.dp))
@@ -270,19 +276,21 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
             }
         }
     }
+    }
 }
 
 @Composable private fun HomeBrandHeader(state:MobileState,selectServer:(ServerProfile)->Unit,addServer:()->Unit) {
     var serverMenu by remember{mutableStateOf(false)}
-    Box(Modifier.fillMaxWidth().height(104.dp).testTag("home-brand-header")) {
+    Box(Modifier.fillMaxWidth().height(76.dp).testTag("home-brand-header")) {
                 Image(painterResource(R.drawable.kmvms_home_header),null,Modifier.matchParentSize(),contentScale=ContentScale.Crop,alignment=Alignment.CenterEnd)
                 Box(Modifier.matchParentSize().background(Brush.horizontalGradient(listOf(PageBackground,PageBackground.copy(alpha=.8f),Color.Transparent))))
-                Row(Modifier.fillMaxSize().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
-                    Text("KM VMS",fontSize=30.sp,fontWeight=FontWeight.Bold,color=Ink)
+                Column(Modifier.fillMaxSize().padding(horizontal=8.dp),verticalArrangement=Arrangement.Center) {
+                    Text("KM VMS",fontSize=24.sp,fontWeight=FontWeight.Medium,color=Ink)
                     Box {
-                        TextButton(onClick={serverMenu=true},modifier=Modifier.testTag("server-switch")) {
-                            Text(state.active?.name.orEmpty(),fontSize=18.sp,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=150.dp))
-                            Text(" ▾",fontSize=16.sp)
+                        TextButton(onClick={serverMenu=true},modifier=Modifier.height(36.dp).testTag("server-switch"),
+                            contentPadding=PaddingValues(0.dp),colors=ButtonDefaults.textButtonColors(contentColor=Ink)) {
+                            Text(state.active?.name.orEmpty(),fontSize=15.sp,fontWeight=FontWeight.Normal,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=260.dp))
+                            Text(" ▾",fontSize=14.sp,color=Muted)
                         }
                         DropdownMenu(serverMenu,{serverMenu=false}) {
                             state.profiles.forEach{profile->DropdownMenuItem(text={Text(profile.name)},onClick={serverMenu=false;selectServer(profile)})}

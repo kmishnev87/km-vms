@@ -2082,6 +2082,7 @@ export default function ChronologyPage() {
                           targetTs: playbackCoordinator?.targetTs || "",
                           targetMs: playbackCoordinator?.targetMs,
                           shouldResume: Boolean(playbackCoordinator?.shouldResume),
+                          bufferReserveSeconds: playbackCoordinator?.bufferReserveSeconds || 0.5,
                         }}
                         tileId={tile.id}
                         onTilePlaybackState={handleTilePlaybackState}

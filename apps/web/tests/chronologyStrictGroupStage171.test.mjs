@@ -18,8 +18,8 @@ function group(ids = ["a", "b", "c", "missing"]) {
   }
   const op = store.start({ targetMs: 10000, targetTs: "synthetic", shouldResume: true, expectedTileIds: ids });
   return { store, op, timers, resumes, holds, clocks, positions, pauses,
-    ready(id, state = "ready") { store.updateTile(id, store.getSnapshot().id, state); },
-    release() { for (const id of ids) store.updateTile(id, store.getSnapshot().id, id === "missing" ? "empty" : "ready"); },
+    ready(id, state = "ready") { store.updateTile(id, store.getSnapshot().id, state, {bufferedAheadSeconds:60,speed:1}); },
+    release() { for (const id of ids) store.updateTile(id, store.getSnapshot().id, id === "missing" ? "empty" : "ready", {bufferedAheadSeconds:60,speed:1}); },
     expire() { for (const [id, timer] of [...timers]) { timers.delete(id); timer.fn(); } } };
 }
 

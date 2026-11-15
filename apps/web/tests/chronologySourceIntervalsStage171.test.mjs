@@ -118,12 +118,13 @@ test("small same-file seeks cannot stick between seek and readiness tolerances",
     const states = [], timers = new Map();
     const video = { readyState: 4, currentTime: 10, duration: 60, pause: noop,
       addEventListener: noop, removeEventListener: noop };
-    const ctx = { archiveTargetReady: archiveGroupPlayback.archiveTargetReady, setHeldFrame: noop,
+    const ctx = { ...archiveGroupPlayback, setHeldFrame: noop,
       videoRef: { current: video }, prepareSequenceRef: { current: 0 }, prepareCancelRef: { current: null },
       coordinationRef: { current: { operationId: "small-seek", releaseState: "holding", shouldResume: false } },
       playIntentRef: { current: false }, playbackRateRef: { current: 1 },
       sampleVideoDimensions: noop, setStatus: state => states.push(state), reportTileState: noop,
-      setTimeout: fn => { timers.set(1, fn); return 1; }, clearTimeout: id => timers.delete(id) };
+      setTimeout: fn => { timers.set(1, fn); return 1; }, clearTimeout: id => timers.delete(id),
+      setInterval: fn => { timers.set(2, fn); return 2; }, clearInterval: id => timers.delete(id) };
     vm.runInNewContext(code + "\nthis.prepare=prepareVideoAtTarget;", ctx);
     ctx.prepare({ targetTime: 10 + delta });
     assert.equal(video.currentTime, 10 + delta);

@@ -18,6 +18,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -115,8 +120,12 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
         } else LazyColumn(state = list, modifier = Modifier.fillMaxSize().background(PageBackground),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(cameras, key = { it.id }) { camera ->
-                CameraVideo(sessions[camera.id], Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).testTag("live-tile-${camera.id}"),
-                    crop = true, onTap = { selectedId = camera.id })
+                Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).testTag("live-tile-${camera.id}")) {
+                    CameraVideo(sessions[camera.id], Modifier.fillMaxSize(), crop = true, onTap = { selectedId = camera.id })
+                    Text(camera.name, color=Color.White.copy(alpha=.82f), maxLines=2, overflow=TextOverflow.Ellipsis,
+                        style=TextStyle(fontSize=12.sp,shadow=Shadow(Color.Black.copy(alpha=.85f),Offset(0f,1f),3f)),
+                        modifier=Modifier.align(Alignment.CenterStart).padding(horizontal=10.dp).widthIn(max=220.dp).testTag("live-name-${camera.id}"))
+                }
             }
         }
     } else {

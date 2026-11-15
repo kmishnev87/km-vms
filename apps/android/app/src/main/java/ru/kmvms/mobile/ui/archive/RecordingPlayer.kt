@@ -38,7 +38,7 @@ import ru.kmvms.mobile.ui.live.VideoSurface
 @Composable fun RecordingPlayer(api: NasApi, recording: Recording, initialPosition: Long, savePosition: (Long) -> Unit,
                                 close: () -> Unit, immersive: (Boolean) -> Unit) {
     val context=LocalContext.current
-    val playback=remember(api, recording.id) { ArchivePlaybackSession(context,api,recording,initialPosition) }
+    val playback=remember(api, recording.identityKey) { ArchivePlaybackSession(context,api,recording,initialPosition) }
     val video by playback.video.collectAsStateWithLifecycle()
     val position by playback.position.collectAsStateWithLifecycle()
     val playLabel=stringResource(if(position.playing)R.string.pause else R.string.play)

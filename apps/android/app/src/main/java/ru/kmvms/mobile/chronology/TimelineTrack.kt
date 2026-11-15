@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.source.ClippingMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import ru.kmvms.mobile.core.TimelinePhase
 import ru.kmvms.mobile.core.TimelineSample
+import kotlin.math.abs
 
 @UnstableApi
 class TimelineTrack(context: Context, private val api: ChronologyApi, val cameraId: Long) {
@@ -21,7 +22,8 @@ class TimelineTrack(context: Context, private val api: ChronologyApi, val camera
     private var state = TimelinePhase.RESOLVING
     private var unsupported = false
     private var suspended = false
-    val player = ExoPlayer.Builder(context.applicationContext).build().apply {
+    private val loadControl=ArchiveLoadControl()
+    val player = ExoPlayer.Builder(context.applicationContext).setLoadControl(loadControl).build().apply {
         volume = 0f
         setSeekParameters(SeekParameters.EXACT)
         addListener(object : Player.Listener {
@@ -45,11 +47,13 @@ class TimelineTrack(context: Context, private val api: ChronologyApi, val camera
     fun ended() = player.playbackState == Player.STATE_ENDED && source() != null
     fun canServe(position: Long) = source()?.let { position >= it.start - 500 && position < it.end } == true
     fun hasQueuedNext() = player.hasNextMediaItem()
+    fun bufferBudget(bytes:Int){loadControl.budgetBytes=bytes}
 
     fun sample(): TimelineSample {
         val slot = slot()
         val position = slot?.let { it.source.start + it.clipOffset + player.currentPosition.coerceAtLeast(0) }
-        return TimelineSample(cameraId, state, position)
+        val remaining=if(position!=null && slot!=null)(slot.source.end-position).coerceAtLeast(0) else Long.MAX_VALUE
+        return TimelineSample(cameraId, state, position,player.totalBufferedDuration.coerceAtLeast(0),remaining,loadControl.capacityMillis)
     }
 
     fun resolving() { state = TimelinePhase.RESOLVING; player.pause() }
@@ -94,7 +98,9 @@ class TimelineTrack(context: Context, private val api: ChronologyApi, val camera
         val slot = slot() ?: return
         if (!canServe(position)) return
         player.pause()
-        player.seekTo((position - slot.source.start - slot.clipOffset).coerceAtLeast(0))
+        val offset=(position-slot.source.start-slot.clipOffset).coerceAtLeast(0)
+        // A common buffer hold is not a new source/seek. Keep healthy buffers.
+        if(abs(player.currentPosition-offset)>50)player.seekTo(offset)
         if (player.playbackState == Player.STATE_READY) state = TimelinePhase.READY
     }
 

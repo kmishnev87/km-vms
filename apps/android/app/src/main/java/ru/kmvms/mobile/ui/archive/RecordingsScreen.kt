@@ -3,6 +3,7 @@ package ru.kmvms.mobile.ui.archive
 import android.app.DatePickerDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,9 +32,12 @@ import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.ui.Muted
 import ru.kmvms.mobile.ui.Outline
 import java.time.LocalDate
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 @UnstableApi
-@Composable fun RecordingsScreen(api: NasApi, canExport: Boolean, onImmersive: (Boolean) -> Unit,
+@Composable fun RecordingsScreen(api: NasApi, canExport: Boolean, canDelete: Boolean, onImmersive: (Boolean) -> Unit,
                                  message: (String) -> Unit) {
     val archiveApi = remember(api) { ArchiveApi(api) }
     val browser = remember(archiveApi) { ArchiveBrowser(archiveApi) }
@@ -41,6 +46,10 @@ import java.time.LocalDate
     var date by rememberSaveable { mutableStateOf<String?>(null) }
     var cameraMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Recording?>(null) }
+    var deletion by remember { mutableStateOf<Pair<Recording, String>?>(null) }
+    var deleting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val deleteFailure = stringResource(R.string.recording_delete_failed)
     var clips by rememberSaveable { mutableStateOf(false) }
     val positions = remember { mutableMapOf<String, Long>() }
     val context = LocalContext.current
@@ -98,22 +107,44 @@ import java.time.LocalDate
             LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(16.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
                 if (state.items.isEmpty() && !state.loading) item { Text(stringResource(R.string.no_recordings), color=Muted) }
                 items(state.items, key={it.identityKey}) { recording ->
-                    Surface(onClick = { selected=recording }, enabled=recording.canPlay && !state.loading,
-                        modifier=Modifier.fillMaxWidth().testTag("recording-${recording.id}"), shape=RoundedCornerShape(14.dp),
+                    Surface(modifier=Modifier.fillMaxWidth().testTag("recording-${recording.id}"), shape=RoundedCornerShape(14.dp),
                         color=Color.White, border=androidx.compose.foundation.BorderStroke(1.dp, Outline)) {
                         Row(Modifier.padding(14.dp), verticalAlignment=Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f), verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                            Column(Modifier.weight(1f).clickable(enabled=recording.canPlay && !state.loading) { selected=recording }, verticalArrangement=Arrangement.spacedBy(5.dp)) {
                                 Text(recording.camera, fontWeight=FontWeight.SemiBold, maxLines=1, overflow=TextOverflow.Ellipsis)
                                 Text(recording.displayTime, style=MaterialTheme.typography.bodyMedium)
                                 Text(recording.size, color=Muted, style=MaterialTheme.typography.labelMedium)
                                 if (!recording.canPlay) Text(stringResource(R.string.video_unavailable), color=MaterialTheme.colorScheme.error, style=MaterialTheme.typography.labelMedium)
                             }
-                            Icon(Icons.Default.PlayArrow, stringResource(R.string.play))
+                            IconButton(onClick={selected=recording},enabled=recording.canPlay && !state.loading) {
+                                Icon(Icons.Default.PlayArrow, stringResource(R.string.play))
+                            }
+                            if(canDelete) IconButton(onClick={deletion=recording to UUID.randomUUID().toString()},
+                                enabled=!deleting,modifier=Modifier.testTag("recording-delete-${recording.id}")) {
+                                Icon(painterResource(R.drawable.ic_camera_trash),stringResource(R.string.remove),
+                                    tint=Color(0xFFD85C63),modifier=Modifier.size(21.dp))
+                            }
                         }
                     }
                 }
                 if (state.more) item { OutlinedButton(onClick=browser::more, enabled=!state.loading, modifier=Modifier.fillMaxWidth()) { Text(stringResource(R.string.load_more)) } }
             }
         }
+    }
+    deletion?.let { pending ->
+        AlertDialog(onDismissRequest={if(!deleting)deletion=null},
+            title={Text(stringResource(R.string.recording_delete_title))},
+            text={Text(stringResource(R.string.recording_delete_confirmation,pending.first.camera,pending.first.displayTime))},
+            confirmButton={TextButton(enabled=!deleting && canDelete,onClick={
+                if(!canDelete || deleting)return@TextButton
+                deleting=true
+                scope.launch {
+                    try { archiveApi.deleteRecording(pending.first,pending.second);deletion=null;browser.refresh() }
+                    catch(cancelled:CancellationException){throw cancelled}
+                    catch(_:Exception){message(deleteFailure)}
+                    finally{deleting=false}
+                }
+            },modifier=Modifier.testTag("recording-delete-confirm")){Text(stringResource(R.string.remove))}},
+            dismissButton={TextButton(enabled=!deleting,onClick={deletion=null}){Text(stringResource(R.string.cancel))}})
     }
 }

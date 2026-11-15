@@ -73,6 +73,11 @@ class ArchiveApi(val api: NasApi) {
         val value = api.json("api/recordings/media-token", "POST", recording.identity().put("action", "stream")) as JSONObject
         return MediaLease(value.getString("media_token"), value.getLong("expires_in"))
     }
+    suspend fun deleteRecording(recording: Recording, operationId: String) {
+        require(java.util.UUID.fromString(operationId).toString() == operationId)
+        val result = api.json("api/recordings?${recording.query()}&operation_id=$operationId", "DELETE") as JSONObject
+        check(result.optBoolean("ok"))
+    }
     suspend fun clips(offset: Int = 0): Pair<List<Clip>, Boolean> {
         val value = api.json("api/archive/exports?limit=30&offset=$offset") as JSONObject
         val items = value.getJSONArray("items")

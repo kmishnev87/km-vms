@@ -75,6 +75,8 @@ class ChronologyController(private val context: Context, private val api: Chrono
             tracks.remove(id)?.close(); prefetchAttempted.remove(id); emptyProbeAfter.remove(id)
         }
         selected.forEach { id -> tracks.getOrPut(id) { TimelineTrack(context, api, id) } }
+        val bufferBudget=(96*1024*1024/selected.size.coerceAtLeast(1)).coerceIn(4*1024*1024,32*1024*1024)
+        tracks.values.forEach{it.bufferBudget(bufferBudget)}
         mutable.update { it.copy(selected = selected) }
         seek(clock.positionMillis)
         refreshRanges()
@@ -88,14 +90,14 @@ class ChronologyController(private val context: Context, private val api: Chrono
         refreshRanges()
     }
 
-    fun seek(position: Long) {
+    fun seek(position: Long, resetBuffer: Boolean = true) {
         val day = Instant.ofEpochMilli(position).atZone(mutable.value.zone).toLocalDate()
         val dayChanged = day != mutable.value.day
         if (dayChanged) mutable.update { it.copy(day = day) }
         epoch++
         lookups.values.forEach(Job::cancel); lookups.clear()
         prefetches.values.forEach(Job::cancel); prefetches.clear(); prefetchAttempted.clear()
-        clock.prepare(position, tracks.keys.toSet())
+        clock.prepare(position, tracks.keys.toSet(),resetBuffer=resetBuffer)
         tracks.values.forEach { track ->
             track.playback(false, mutable.value.speed)
             if (canReuseTimelineSource(track.phase(), track.canServe(position), track.ended())) track.seek(position)
@@ -180,7 +182,7 @@ class ChronologyController(private val context: Context, private val api: Chrono
             it.phase() in setOf(TimelinePhase.READY, TimelinePhase.BUFFERING) }
             .mapNotNull { it.source()?.end }.minOrNull()
         if (clock.wantsPlayback && boundary != null) {
-            seek(maxOf(clock.positionMillis, boundary))
+            seek(maxOf(clock.positionMillis, boundary),resetBuffer=false)
         }
         for ((id, track) in tracks) {
             val source = track.source()
@@ -188,7 +190,8 @@ class ChronologyController(private val context: Context, private val api: Chrono
                 val ranges = mutable.value.ranges[id]
                 if (ranges == null || ranges.any { it.contains(clock.positionMillis) }) resolve(id, clock.positionMillis)
             }
-            if (source != null && track.phase() in setOf(TimelinePhase.READY, TimelinePhase.BUFFERING) && source.end - clock.positionMillis < 5000) {
+            val lookAhead=maxOf(5000L,(clock.bufferReserveMillis*mutable.value.speed).toLong()+1000)
+            if (source != null && track.phase() in setOf(TimelinePhase.READY, TimelinePhase.BUFFERING) && source.end - clock.positionMillis < lookAhead) {
                 prefetch(track, source)
             }
         }

@@ -1,6 +1,6 @@
 "use client";
 import { isArchiveRecoveryHealthy } from "../lib/archivePlaybackRecovery";
-import { archivePositionMs, archiveSourceCovers, archiveTargetOffset, archiveTargetReady, confirmedArchiveEmpty } from "../lib/archiveGroupPlayback";
+import { archivePositionMs, archiveSourceCovers, archiveTargetOffset, archiveTargetReady, archiveBufferedAhead, confirmedArchiveEmpty } from "../lib/archiveGroupPlayback";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import CompactVideoCanvas from "./CompactVideoCanvas";
@@ -114,6 +114,9 @@ export default function ArchiveTilePlayer({
         readyState: videoRef.current?.readyState || 0,
         currentTime: Number(videoRef.current?.currentTime || 0),
         positionMs: archivePositionMs(latestPlaybackRef.current, videoRef.current?.currentTime),
+        bufferedAheadSeconds: archiveBufferedAhead(videoRef.current),
+        remainingSeconds: Number.isFinite(videoRef.current?.duration) ? Math.max(0,videoRef.current.duration-videoRef.current.currentTime) : Infinity,
+        speed: playbackRateRef.current,
         ...facts,
       });
     },
@@ -247,6 +250,9 @@ export default function ArchiveTilePlayer({
     const target = safeTargetTimeForVideo(video, targetTime);
     let done = false;
     let timer = null;
+    let poll = null;
+    let previousAhead = -1, lastGrowth = Date.now();
+    let bufferCapacity = Infinity;
 
     const cleanup = () => {
       video.removeEventListener("seeked", complete);
@@ -256,6 +262,7 @@ export default function ArchiveTilePlayer({
       video.removeEventListener("progress", complete);
       video.removeEventListener("error", fail);
       if (timer) clearTimeout(timer);
+      if (poll) clearInterval(poll);
       timer = null;
       if (prepareCancelRef.current === cancel) prepareCancelRef.current = null;
     };
@@ -269,11 +276,17 @@ export default function ArchiveTilePlayer({
 
     const readyEnough = () => archiveTargetReady(video, target, {
       resume: Boolean(coordinationRef.current?.releaseState === "holding" ? coordinationRef.current.shouldResume : playIntentRef.current), speed: playbackRateRef.current,
+      reserve: coordinationRef.current?.bufferReserveSeconds || 0.5, capacity: bufferCapacity,
     });
 
     function complete() {
       if (done) return;
       if (!currentOperationMatches()) { cancel(); return; }
+      const ahead=archiveBufferedAhead(video,target);
+      if(ahead>previousAhead+0.05){previousAhead=ahead;lastGrowth=Date.now();bufferCapacity=Infinity;}
+      // Browsers own native-file buffer limits. A stopped loader (not a slow
+      // FETCHING loader) must not make a larger group target impossible.
+      if(video.networkState===1 && ahead>=1 && Date.now()-lastGrowth>=1500) bufferCapacity=Math.max(0.5,ahead-0.1);
       if (!readyEnough()) return;
       done = true;
       cleanup();
@@ -291,7 +304,7 @@ export default function ArchiveTilePlayer({
         } catch (_) {}
         setStatus("ready");
       }
-      reportTileState("ready", { reason, targetTime: target });
+      reportTileState("ready", { reason, targetTime: target,bufferCapacitySeconds:bufferCapacity });
     }
 
     function fail() {
@@ -316,6 +329,7 @@ export default function ArchiveTilePlayer({
     video.addEventListener("canplaythrough", complete);
     video.addEventListener("progress", complete);
     video.addEventListener("error", fail);
+    poll=setInterval(complete,250);
 
     try {
       // Seek inside the readiness tolerance too; otherwise a paused delta in
@@ -691,7 +705,7 @@ export default function ArchiveTilePlayer({
       playIntent: false,
       reason: "same-source-seek",
     });
-  }, [coordination?.operationId, coordination?.releaseState, coordination?.targetMs, playback?.cameraId, playback?.hasVideo, playback?.lookupState, playback?.offsetSec, playback?.playbackKey, playback?.relPath, reportTileState]);
+  }, [coordination?.operationId, coordination?.releaseState, coordination?.targetMs, coordination?.bufferReserveSeconds, speed, playback?.cameraId, playback?.hasVideo, playback?.lookupState, playback?.offsetSec, playback?.playbackKey, playback?.relPath, reportTileState]);
 
   return (
     <div
@@ -737,6 +751,7 @@ export default function ArchiveTilePlayer({
           autoPlay={false}
           playsInline
           controls={false}
+          preload="auto"
         />
         <canvas ref={heldFrameRef} className={`archiveHeldFrame${heldFrame ? " is-visible" : ""}`} aria-hidden="true" />
         <CompactVideoCanvas
