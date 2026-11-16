@@ -14,7 +14,7 @@ import java.time.ZoneId
 import java.util.UUID
 
 data class MobileVideoRequest(val cameraId: Long, val cameraName: String, val archiveTime: Long? = null,
-                              val key: String = UUID.randomUUID().toString())
+                              val key: String = UUID.randomUUID().toString(), val singleCamera: Boolean = false)
 data class EventVideoResult(val request: MobileVideoRequest?, val liveFallback: Boolean = false)
 
 /** Navigation uses typed NAS identities, never a server-provided arbitrary URL. */

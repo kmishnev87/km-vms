@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.19](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.19)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.20](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.20)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.19/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.19
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.20/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.20
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -108,7 +108,9 @@ A fixed panoramic lens does not gain PTZ because another lens in the same device
 
 - Record to your NAS/server, inspect Recorder state, and recover after temporary camera or network failures.
 - Choose MKV or MP4 recording behavior to suit your installation.
-- Check fragments saved before an interruption: readable footage can be finalized without rewriting video; unconfirmed files remain available for review.
+- Verify saved fragments before calling them complete: duration, decodable video, and the MKV seek index are checked.
+- Recover interrupted containers without re-encoding the video. After an abrupt Recorder/NAS restart, recover owned unfinished recordings in the background while new recording continues.
+- Keep the original until a repaired file is verified and its catalog update commits; recover an interrupted repair on the next start. Missing or physically damaged footage cannot be recreated, and unconfirmed files remain available for review.
 - Search and filter recordings, play them, download source files, and confirm deletion explicitly.
 - Keep retained footage from removed cameras accessible under their original names, clearly marked as removed.
 
@@ -183,6 +185,8 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - English, Simplified Chinese, and Russian.
 - Multiple saved NAS connections with independent sessions.
 - A live camera feed list, fullscreen viewing, main/sub selection, audio, and pinch/pan image gestures.
+- Tap a camera-card preview to watch only that camera. Rotation and fullscreen keep the single-camera session until you leave Live.
+- Choose a subset of live cameras in a compact, dismissible panel. Selection numbers and drag-to-reorder control the viewing order; each saved NAS/account connection keeps its normal set independently of temporary single-camera viewing.
 - Supported PTZ with low-latency viewing during control.
 - Recordings, clips, synchronized chronology, camera management, events, storage, server health, and NAS maintenance.
 - A notification setup offer after the first NAS login, with a separately remembered choice for each server.

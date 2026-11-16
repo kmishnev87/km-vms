@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -46,10 +47,12 @@ import ru.kmvms.mobile.R
 import ru.kmvms.mobile.core.Stream
 import ru.kmvms.mobile.core.VisibleTile
 import ru.kmvms.mobile.core.visibleCameraIds
+import ru.kmvms.mobile.core.LiveCameraOrder
 import ru.kmvms.mobile.data.Camera
 import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.events.MobileVideoRequest
 import ru.kmvms.mobile.media.LiveController
+import ru.kmvms.mobile.media.LiveViewPreferences
 import ru.kmvms.mobile.ui.Muted
 import ru.kmvms.mobile.ui.PageBackground
 import ru.kmvms.mobile.ptz.PtzCapabilities
@@ -57,7 +60,7 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
 @UnstableApi
 @Composable fun LiveScreen(api: NasApi, cameras: List<Camera>, capabilities: Map<Long, PtzCapabilities>,
                            onMessage: (String) -> Unit, onImmersive: (Boolean) -> Unit, initial: MobileVideoRequest? = null,
-                           profileId: String) {
+                           profileId: String, onExit: () -> Unit = {}) {
     val context = LocalContext.current
     val controller = remember(api) { LiveController(context.applicationContext, api) }
     val sessions by controller.sessions.collectAsStateWithLifecycle()
@@ -81,15 +84,26 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
     }
     DisposableEffect(attentionOwner) { onDispose { localLiveAttention.clear(attentionOwner) } }
     val list = rememberLazyListState()
+    val preferences = remember(context) { LiveViewPreferences(context.applicationContext) }
+    var savedOrder by remember(profileId) { mutableStateOf(preferences.load(profileId)) }
+    var choosing by rememberSaveable { mutableStateOf(false) }
+    val singleId = initial?.cameraId?.takeIf { initial.singleCamera }
+    val viewingIds = LiveCameraOrder.viewing(savedOrder, cameras.map { it.id }, singleId)
+    val viewingCameras = viewingIds.mapNotNull { id -> cameras.find { it.id == id } }
     var selectedId by rememberSaveable { mutableStateOf(initial?.cameraId) }
     LaunchedEffect(initial?.key) { initial?.let { selectedId = it.cameraId } }
     var requestedFullscreen by rememberSaveable { mutableStateOf(false) }
+    var dismissedLandscapeFullscreen by rememberSaveable { mutableStateOf(false) }
     val selected = cameras.find { it.id == selectedId }
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val immersive = selected != null && (landscape || requestedFullscreen)
-    SideEffect { controller.cameras(cameras) }
+    LaunchedEffect(landscape) { dismissedLandscapeFullscreen = false }
+    val immersive = selected != null && ((landscape && !dismissedLandscapeFullscreen) || requestedFullscreen)
+    // Event navigation may focus a camera outside the normal saved set. A preview
+    // launch is stricter: the controller never even receives the other cameras.
+    SideEffect { controller.cameras(if (singleId != null) viewingCameras else
+        viewingCameras + listOfNotNull(selected?.takeIf { it.id !in viewingIds })) }
     LaunchedEffect(selectedId) { controller.focus(selectedId) }
-    LaunchedEffect(controller, list, cameras) {
+    LaunchedEffect(controller, list, viewingIds) {
         snapshotFlow { list.layoutInfo.let { layout ->
             visibleCameraIds(layout.visibleItemsInfo.mapNotNull { item ->
                 (item.key as? Long)?.let { VisibleTile(it, item.offset, item.size) }
@@ -113,13 +127,20 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
         }
         onDispose { bars?.show(WindowInsetsCompat.Type.systemBars()) }
     }
-    BackHandler(selected != null) { selectedId = null; requestedFullscreen = false }
+    val closeDetail: () -> Unit = {
+        if (singleId != null && immersive) {
+            requestedFullscreen = false; dismissedLandscapeFullscreen = true
+        } else if (singleId != null) onExit()
+        else { selectedId = null; requestedFullscreen = false }
+    }
+    BackHandler(selected != null) { closeDetail() }
     if (selected == null) {
-        if (cameras.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(stringResource(R.string.no_cameras), color = Muted)
-        } else LazyColumn(state = list, modifier = Modifier.fillMaxSize().background(PageBackground),
+        Box(Modifier.fillMaxSize()) {
+        if (viewingCameras.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(stringResource(if (cameras.isEmpty()) R.string.no_cameras else R.string.live_no_selected_cameras), color = Muted)
+        } else LazyColumn(state = list, modifier = Modifier.fillMaxSize().background(PageBackground).testTag("live-camera-list"),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(cameras, key = { it.id }) { camera ->
+            items(viewingCameras, key = { it.id }) { camera ->
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).testTag("live-tile-${camera.id}")) {
                     CameraVideo(sessions[camera.id], Modifier.fillMaxSize(), crop = true, onTap = { selectedId = camera.id })
                     Text(camera.name, color=Color.White.copy(alpha=.82f), maxLines=2, overflow=TextOverflow.Ellipsis,
@@ -128,8 +149,20 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
                 }
             }
         }
+        if (singleId == null && cameras.isNotEmpty()) FilledTonalButton(onClick = { choosing = true },
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 16.dp, end = 20.dp).height(44.dp).testTag("live-camera-selector"),
+            contentPadding = PaddingValues(horizontal = 10.dp), shape = RoundedCornerShape(12.dp)) {
+            Icon(painterResource(R.drawable.kmvms_camera), stringResource(R.string.live_choose_cameras),
+                tint = Color.Unspecified, modifier = Modifier.size(24.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("${viewingIds.size}/${cameras.size}", style = MaterialTheme.typography.labelMedium)
+        }
+        }
     } else {
         key(selected.id) { LiveCameraDetail(selected, capabilities[selected.id], controller, immersive,
-            { requestedFullscreen = true }, { selectedId = null; requestedFullscreen = false }, onMessage) }
+            { dismissedLandscapeFullscreen = false; requestedFullscreen = true }, closeDetail, onMessage) }
+    }
+    if (choosing && singleId == null) LiveCameraPicker(cameras, viewingIds, { choosing = false }) { ids ->
+        savedOrder = ids; preferences.save(profileId, ids); choosing = false
     }
 }

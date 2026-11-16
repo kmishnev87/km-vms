@@ -4,6 +4,7 @@ import android.app.UiAutomation
 import android.content.res.Configuration
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Test
@@ -13,6 +14,8 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class LocaleConfigurationTest {
     @Test fun explicitLanguagesFollowRotationWithoutFreezingScreenDimensions() {
+        // Rotation of the portrait-only launcher is not an application test.
+        ActivityScenario.launch(MainActivity::class.java).use {
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         val context=instrumentation.targetContext
         val automation=instrumentation.uiAutomation
@@ -40,5 +43,6 @@ class LocaleConfigurationTest {
             awaitOrientation(Configuration.ORIENTATION_PORTRAIT)
             localized.values.forEach{assertEquals(Configuration.ORIENTATION_PORTRAIT,it.resources.configuration.orientation)}
         } finally { automation.setRotation(UiAutomation.ROTATION_UNFREEZE) }
+        }
     }
 }

@@ -368,4 +368,12 @@
     <string name="nas_status_checking">Проверяем…</string>
     <string name="nas_status_received">Статус получен в %1$s</string>
     <string name="nas_status_failed">Не удалось получить свежий статус. Выше показан последний известный этап.</string>
+    <string name="live_choose_cameras">Камеры и порядок</string>
+    <string name="live_open_camera">Открыть онлайн этой камеры</string>
+    <string name="live_clear_selection">Снять выбор</string>
+    <string name="live_apply_selection">Применить</string>
+    <string name="live_reorder_camera">Удерживайте и перетащите для перестановки</string>
+    <string name="live_move_up">Переместить выше</string>
+    <string name="live_move_down">Переместить ниже</string>
+    <string name="live_no_selected_cameras">Выберите камеры для просмотра</string>
 </resources>

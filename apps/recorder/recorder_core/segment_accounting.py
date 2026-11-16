@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from contextlib import nullcontext
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,7 +19,8 @@ from .contracts import (
     RETENTION_SIGNAL_TYPE, SEGMENT_STATUS_FAILED, SEGMENT_STATUS_FINALIZED,
     SEGMENT_STATUS_WRITING, STORAGE_NAMESPACE,
 )
-from .segment_recovery import same_file_version
+from .segment_recovery import inspect_closed_segment, same_file_version
+from .segment_repair import ReplacementPublication
 
 def bounded_file_fingerprint(file_path: Path, stat_result: os.stat_result) -> str:
     digest = hashlib.sha256()
@@ -334,7 +337,83 @@ class SegmentAccounting:
         job.current_media_relative_path = rel_path
         return True
 
-    def finalize_segment_path(self, job: Any, file_path: Path, *, verified_stat: os.stat_result | None = None) -> bool:
+    def finalize_segment_path(self, job: Any, file_path: Path, *, verified_stat: os.stat_result | None = None,
+                              replacement_path: Path | None = None, interrupted_instance: str | None = None) -> bool:
+        if not job.db_job_id or not job.archive_root_id:
+            return False
+        rel_path = self.storage_relative_path(file_path, root=job.archive_root_path)
+        if not rel_path or rel_path in job.segment_baseline_paths or rel_path not in job.known_segment_paths:
+            return False
+        try:
+            original = file_path.lstat()
+            if verified_stat is not None and not same_file_version(verified_stat, original):
+                return False
+            media, reason = inspect_closed_segment(replacement_path or file_path)
+            if media is None:
+                self.log_event("warning", "segment_finalization_unconfirmed", camera_id=job.camera_id, reason=reason)
+                return False
+            if replacement_path is None and not same_file_version(original, media.stat):
+                return False
+            if replacement_path is not None and not same_file_version(media.stat, replacement_path.lstat()):
+                return False
+            with ReplacementPublication(file_path, replacement_path, original, root=job.archive_root_path) as publication:
+                with self.engine.begin() as conn:
+                    if replacement_path is not None or interrupted_instance is not None:
+                        # Lock the SAME original object/catalog receipt before any rename.
+                        owned = conn.execute(text("""
+                            SELECT s.id FROM recording_segments s
+                            JOIN recorder_file_receipts r ON r.segment_id = s.id
+                            JOIN archive_roots a ON a.id = s.archive_root_id
+                            WHERE s.job_id = :job AND s.relative_path = :path
+                              AND s.archive_root_id = :root AND s.ownership = :ownership
+                              AND s.source = :source AND s.deleted_at IS NULL
+                              AND (s.status = 'writing' OR
+                                   (:restarting AND s.status = 'stale_writing'))
+                              AND (NOT :restarting OR EXISTS (
+                                  SELECT 1 FROM recording_jobs j WHERE j.id = s.job_id
+                                  AND j.recorder_instance_id IS DISTINCT FROM :instance
+                                  AND j.state IN ('stopped', 'error', 'disabled')))
+                              AND r.state = 'writing' AND r.contract_version = :contract
+                              AND r.root_id = :root AND r.relative_path = :path
+                              AND r.physical_identity IS NOT DISTINCT FROM a.physical_identity
+                              AND r.object_identity = :identity
+                              AND r.device_id = :device AND r.inode = :inode
+                            FOR UPDATE OF s, r, a
+                        """), {"job": job.db_job_id, "path": rel_path, "root": job.archive_root_id,
+                               "ownership": OWNERSHIP_KM_VMS, "source": METADATA_SOURCE_RECORDER,
+                               "contract": RECORDER_RECEIPT_CONTRACT_VERSION,
+                               "identity": receipt_object_identity(job.archive_root_id, rel_path, original),
+                               "device": str(original.st_dev), "inode": str(original.st_ino),
+                               "restarting": interrupted_instance is not None, "instance": interrupted_instance}).first()
+                        if owned is None:
+                            return False
+                        if interrupted_instance is not None:
+                            # Resume only this locked old writer; the transition is
+                            # rolled back with the same transaction on any failure.
+                            conn.execute(text("""UPDATE recording_segments SET status='writing'
+                                WHERE id=:id AND status='stale_writing'"""), {"id": owned.id})
+                        publication.publish()
+                    final_stat = file_path.lstat()
+                    finalized = self._finalize_verified_segment(
+                        job, file_path, verified_stat=final_stat, connection=conn,
+                        media_duration=media.duration_seconds,
+                        replaced_stat=original if replacement_path is not None else None)
+                    if replacement_path is not None and not finalized:
+                        raise RuntimeError("segment_recovery_publication_refused")
+            if finalized:
+                self.remember_processed_segment(job, file_path)
+                self.log_event("info", "segment_finalized", camera_id=job.camera_id,
+                               camera_name=job.camera_name, db_job_id=job.db_job_id,
+                               relative_path=rel_path, size_bytes=final_stat.st_size,
+                               duration_sec=math.ceil(media.duration_seconds),
+                               recovered=replacement_path is not None)
+            return finalized
+        except OSError:
+            return False
+
+    def _finalize_verified_segment(self, job: Any, file_path: Path, *, verified_stat: os.stat_result,
+                                   connection: Any, media_duration: float,
+                                   replaced_stat: os.stat_result | None = None) -> bool:
         if not job.db_job_id:
             return False
         rel_path = self.storage_relative_path(file_path, root=job.archive_root_path)
@@ -356,8 +435,9 @@ class SegmentAccounting:
             return False
 
         started_at = self.parse_segment_start_time(file_path)
-        ended_at = datetime.fromtimestamp(stat.st_mtime)
-        duration_sec = max(int((ended_at - started_at).total_seconds()), 0)
+        file_mtime = datetime.fromtimestamp(stat.st_mtime)
+        ended_at = started_at + timedelta(seconds=media_duration)
+        duration_sec = max(math.ceil(media_duration), 1)
         media_metadata = self.path_format_metadata(file_path)
         try:
             final_fingerprint = bounded_file_fingerprint(file_path, stat)
@@ -369,7 +449,7 @@ class SegmentAccounting:
             ).hexdigest()
         if verified_stat is not None and not same_file_version(verified_stat, file_path.lstat()):
             return False
-        with self.engine.begin() as conn:
+        with nullcontext(connection) as conn:
             result = conn.execute(
                 text(
                     """
@@ -417,7 +497,7 @@ class SegmentAccounting:
                     "size_bytes": int(stat.st_size),
                     "storage_namespace": STORAGE_NAMESPACE,
                     "integrity_status": "ok_owned_finalized",
-                    "file_mtime": ended_at,
+                    "file_mtime": file_mtime,
                     "content_probe_status": "probe_ok" if verified_stat is not None else "stat_ok",
                     "container_format": media_metadata["container_format"],
                     "file_extension": media_metadata["file_extension"],
@@ -450,9 +530,9 @@ class SegmentAccounting:
                           AND root_id = :root_id
                           AND physical_identity IS NOT DISTINCT FROM :physical_identity
                           AND relative_path = :relative_path
-                          AND object_identity = :object_identity
-                          AND device_id IS NOT DISTINCT FROM :device_id
-                          AND inode IS NOT DISTINCT FROM :inode
+                          AND object_identity = :expected_object_identity
+                          AND device_id IS NOT DISTINCT FROM :expected_device_id
+                          AND inode IS NOT DISTINCT FROM :expected_inode
                           AND state = 'writing'
                         """
                     ),
@@ -461,6 +541,9 @@ class SegmentAccounting:
                         "object_identity": receipt_object_identity(job.archive_root_id, rel_path, stat),
                         "device_id": str(int(stat.st_dev)),
                         "inode": str(int(stat.st_ino)),
+                        "expected_object_identity": receipt_object_identity(job.archive_root_id, rel_path, replaced_stat or stat),
+                        "expected_device_id": str(int((replaced_stat or stat).st_dev)),
+                        "expected_inode": str(int((replaced_stat or stat).st_ino)),
                         "size_bytes": int(stat.st_size),
                         "mtime_ns": int(stat.st_mtime_ns),
                         "content_fingerprint": final_fingerprint,
@@ -528,10 +611,8 @@ class SegmentAccounting:
                         "watermark": int(finalized_row.id),
                     },
                 )
-        self.remember_processed_segment(job, file_path)
         if finalized_row is None:
             return False
-        self.log_event("info", "segment_finalized", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size, duration_sec=duration_sec)
         return True
 
     def mark_segment_failed(self, job: Any, rel_path: str, error: str) -> None:

@@ -1,0 +1,136 @@
+package ru.kmvms.mobile.ui.live
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.launch
+import ru.kmvms.mobile.R
+import ru.kmvms.mobile.core.LiveCameraOrder
+import ru.kmvms.mobile.data.Camera
+import ru.kmvms.mobile.ui.Accent
+import ru.kmvms.mobile.ui.Muted
+import ru.kmvms.mobile.ui.SoftAccent
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable internal fun LiveCameraPicker(cameras: List<Camera>, selected: List<Long>,
+                                         dismiss: () -> Unit, apply: (List<Long>) -> Unit) {
+    var draft by rememberSaveable { mutableStateOf(selected) }
+    val available = cameras.map { it.id }
+    val ordered = LiveCameraOrder.resolve(draft, available)
+    val rows = ordered.mapNotNull { id -> cameras.find { it.id == id } } + cameras.filterNot { it.id in ordered }
+    val list = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var dragging by remember { mutableStateOf<Long?>(null) }
+    var dragCenter by remember { mutableFloatStateOf(0f) }
+    val currentOrder by rememberUpdatedState(ordered)
+    val moveUp = stringResource(R.string.live_move_up)
+    val moveDown = stringResource(R.string.live_move_down)
+    val height = (LocalConfiguration.current.screenHeightDp * .72f).dp
+    ModalBottomSheet(onDismissRequest = dismiss, containerColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.testTag("live-camera-picker"), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().heightIn(max = height).navigationBarsPadding()) {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.live_choose_cameras), style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f))
+                Text("${ordered.size}/${cameras.size}", color = Muted, style = MaterialTheme.typography.labelMedium)
+                IconButton(onClick = dismiss, modifier = Modifier.testTag("live-picker-close")) {
+                    Icon(Icons.Default.Close, stringResource(R.string.close))
+                }
+            }
+            LazyColumn(state = list, modifier = Modifier.weight(1f, fill = false).testTag("live-picker-list"),
+                contentPadding = PaddingValues(horizontal = 12.dp)) {
+                items(rows, key = { it.id }) { camera ->
+                    val index = ordered.indexOf(camera.id)
+                    val chosen = index >= 0
+                    val dragged = dragging == camera.id
+                    val currentItem = list.layoutInfo.visibleItemsInfo.find { it.key == camera.id }
+                    Row(Modifier.fillMaxWidth().height(56.dp).zIndex(if (dragged) 1f else 0f)
+                        .graphicsLayer { translationY = if (dragged && currentItem != null)
+                            dragCenter - currentItem.offset - currentItem.size / 2f else 0f }
+                        .background(if (dragged) SoftAccent else MaterialTheme.colorScheme.surface),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.weight(1f).fillMaxHeight().testTag("live-picker-camera-${camera.id}")
+                            .toggleable(chosen, role = Role.Checkbox, onValueChange = { draft = LiveCameraOrder.toggle(currentOrder, camera.id) }),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(chosen, onCheckedChange = null, modifier = Modifier.padding(horizontal = 8.dp))
+                            Box(Modifier.size(26.dp).background(if (chosen) SoftAccent else MaterialTheme.colorScheme.surface, CircleShape)
+                                .testTag("live-picker-order-${camera.id}"), contentAlignment = Alignment.Center) {
+                                if (chosen) Text("${index + 1}", color = Accent, style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold)
+                            }
+                            Text(camera.name, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(start = 10.dp))
+                        }
+                        val drag = if (!chosen) Modifier else Modifier.pointerInput(camera.id) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = {
+                                    list.layoutInfo.visibleItemsInfo.find { it.key == camera.id }?.let {
+                                        dragging = camera.id; dragCenter = it.offset + it.size / 2f
+                                    }
+                                },
+                                onDragEnd = { dragging = null }, onDragCancel = { dragging = null }
+                            ) { change, amount ->
+                                change.consume()
+                                dragCenter += amount.y
+                                val target = list.layoutInfo.visibleItemsInfo.find {
+                                    dragCenter >= it.offset && dragCenter < it.offset + it.size
+                                }?.key as? Long
+                                val destination = currentOrder.indexOf(target)
+                                if (destination >= 0) draft = LiveCameraOrder.move(currentOrder, camera.id, destination)
+                                val layout = list.layoutInfo
+                                if (dragCenter < layout.viewportStartOffset + 40 || dragCenter > layout.viewportEndOffset - 40)
+                                    scope.launch { list.scrollBy(amount.y) }
+                            }
+                        }
+                        Box(Modifier.size(48.dp).then(drag).testTag("live-picker-drag-${camera.id}")
+                            .semantics {
+                                customActions = if (!chosen) emptyList() else listOf(
+                                    CustomAccessibilityAction(moveUp) { draft = LiveCameraOrder.move(currentOrder, camera.id, index - 1); true },
+                                    CustomAccessibilityAction(moveDown) { draft = LiveCameraOrder.move(currentOrder, camera.id, index + 1); true })
+                            }, contentAlignment = Alignment.Center) {
+                            if (chosen) Icon(Icons.Default.Menu, stringResource(R.string.live_reorder_camera), tint = Muted,
+                                modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { draft = available }, modifier = Modifier.testTag("live-picker-all")) { Text(stringResource(R.string.all_cameras)) }
+                TextButton(onClick = { draft = emptyList() }, modifier = Modifier.testTag("live-picker-clear")) { Text(stringResource(R.string.live_clear_selection)) }
+                Spacer(Modifier.weight(1f))
+                FilledTonalButton(onClick = { apply(ordered) }, modifier = Modifier.testTag("live-picker-apply")) {
+                    Text(stringResource(R.string.live_apply_selection))
+                }
+            }
+        }
+    }
+}

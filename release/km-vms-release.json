@@ -1,75 +1,66 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.19",
-  "tag": "v0.9.19",
-  "title": "Android fullscreen, continuous timeline and clear update progress",
-  "summary": "Signed Android 0.8.3 fixes localized fullscreen rotation, enables timeline navigation across days and shows clear NAS and APK update progress. The English product guide includes current installation instructions and real web and Android screenshots. NAS updater behavior is unchanged.",
-  "title_i18n": {
-    "en": "Android fullscreen, continuous timeline and clear update progress",
-    "ru": "Полный экран Android, непрерывная хронология и понятный прогресс обновлений",
-    "zh-CN": "Android 全屏、连续时间轴与清晰更新进度"
-  },
-  "summary_i18n": {
-    "en": "Signed Android 0.8.3 fixes localized fullscreen rotation, enables timeline navigation across days and shows clear NAS and APK update progress. The English product guide includes current installation instructions and real web and Android screenshots. NAS updater behavior is unchanged.",
-    "ru": "Подписанный Android 0.8.3 исправляет fullscreen после выбора языка, листает хронологию через границы суток и понятно показывает обновление NAS и скачивание APK. Английский README дополнен возможностями, актуальной установкой и настоящими снимками web и Android. Механизм обновления NAS не менялся.",
-    "zh-CN": "签名 Android 0.8.3 修复切换语言后的全屏旋转，支持跨日期浏览时间轴，并清晰显示 NAS 和 APK 更新进度。英文产品指南包含当前安装说明及真实网页和 Android 截图。NAS 更新执行机制保持不变。"
-  },
+  "version": "0.9.20",
+  "tag": "v0.9.20",
+  "title": "KM VMS 0.9.20 — Resilient recordings and flexible Android Live",
+  "summary": "Interrupted recordings are checked for usable duration and seeking, repaired in the background when possible, and recovered after an unclean NAS shutdown. Android 0.8.4 adds single-camera viewing from camera previews and an ordered Live camera picker. Existing archive ownership and file identity safeguards remain in place.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.19",
+  "source_ref": "v0.9.20",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
   "requires_migration": false,
-  "schema_update": { "mode": "managed", "target_version": 11 },
+  "schema_update": {
+    "mode": "managed",
+    "target_version": 11
+  },
   "changelog": [
-    "Publish signed Android 0.8.3 (803) with the existing package and official certificate for in-place updates.",
-    "Check NAS releases once on entering Android maintenance, while giving a saved in-flight update precedence.",
-    "Show server-reported NAS stages, current operation and elapsed time in Android; retain a green final result only after installed-commit verification.",
-    "Make Check status visibly acknowledge a fresh response or failure without starting another release check or losing known progress.",
-    "Display actual APK bytes, total size and percentage with a filled bar, followed by a distinct verification step before Android installation.",
-    "Keep an accepted automatic APK update offer visible during download; allow hiding it without interrupting the transfer.",
-    "Refresh the English product guide, feature map, compatibility notes and 0.9.19 quick start, with real web and Android home screenshots.",
-    "Preserve live fullscreen after rotation with explicit English, Chinese or Russian on pre-13 Android by overriding language, not screen configuration.",
-    "Pan the Android timeline across calendar days and fetch visible archive ranges on both sides of midnight, respecting the NAS timezone."
+    "Validate interrupted recordings for real media duration, readable video and a Matroska seek index before marking them finalized.",
+    "Repair recoverable containers without video re-encoding in a bounded background queue; do not block new camera recording.",
+    "Recover owned pending recordings after an unclean NAS shutdown, including interrupted repair publication, with transactional file identity checks.",
+    "Android 0.8.4: tap a camera preview to watch only that camera, preserving the session across fullscreen and rotation.",
+    "Android Live: choose cameras in numbered order, reorder them by dragging, and keep the normal selection separately for each saved NAS/account.",
+    "Update README and installation instructions for the matching NAS and officially signed Android release."
   ],
+  "title_i18n": {
+    "en": "KM VMS 0.9.20 — Resilient recordings and flexible Android Live",
+    "ru": "KM VMS 0.9.20 — Восстановление записей и удобный онлайн в Android",
+    "zh-CN": "KM VMS 0.9.20 — 录像恢复与灵活的 Android 实时查看"
+  },
+  "summary_i18n": {
+    "en": "Interrupted recordings are checked for usable duration and seeking, repaired in the background when possible, and recovered after an unclean NAS shutdown. Android 0.8.4 adds single-camera viewing from camera previews and an ordered Live camera picker. Existing archive ownership and file identity safeguards remain in place.",
+    "ru": "После обрыва проверяются длительность, читаемость и перемотка записи; пригодные файлы восстанавливаются в фоне, в том числе после внезапного выключения NAS. Android 0.8.4 позволяет открыть одну камеру из превью и выбрать порядок камер в онлайне. Проверки принадлежности архива и идентичности файлов сохранены.",
+    "zh-CN": "中断的录像会先检查有效时长、可读画面和定位索引；可恢复的文件在后台修复，并在 NAS 异常关机后自动恢复。Android 0.8.4 支持从预览进入单摄像头查看，以及按所选顺序排列实时画面。保留录像归属与文件身份校验。"
+  },
   "changelog_i18n": {
     "en": [
-      "Publish signed Android 0.8.3 (803) with the existing package and official certificate for in-place updates.",
-      "Check NAS releases once on entering Android maintenance, while giving a saved in-flight update precedence.",
-      "Show server-reported NAS stages, current operation and elapsed time in Android; retain a green final result only after installed-commit verification.",
-      "Make Check status visibly acknowledge a fresh response or failure without starting another release check or losing known progress.",
-      "Display actual APK bytes, total size and percentage with a filled bar, followed by a distinct verification step before Android installation.",
-      "Keep an accepted automatic APK update offer visible during download; allow hiding it without interrupting the transfer.",
-      "Refresh the English product guide, feature map, compatibility notes and 0.9.19 quick start, with real web and Android home screenshots.",
-      "Preserve live fullscreen after rotation with explicit English, Chinese or Russian on pre-13 Android by overriding language, not screen configuration.",
-      "Pan the Android timeline across calendar days and fetch visible archive ranges on both sides of midnight, respecting the NAS timezone."
+      "Validate interrupted recordings for real media duration, readable video and a Matroska seek index before marking them finalized.",
+      "Repair recoverable containers without video re-encoding in a bounded background queue; do not block new camera recording.",
+      "Recover owned pending recordings after an unclean NAS shutdown, including interrupted repair publication, with transactional file identity checks.",
+      "Android 0.8.4: tap a camera preview to watch only that camera, preserving the session across fullscreen and rotation.",
+      "Android Live: choose cameras in numbered order, reorder them by dragging, and keep the normal selection separately for each saved NAS/account.",
+      "Update README and installation instructions for the matching NAS and officially signed Android release."
     ],
     "ru": [
-      "Подписанный Android 0.8.3 (803) сохраняет идентификатор приложения и официальный сертификат для обновления поверх установленной версии.",
-      "При входе в обслуживание Android однократно проверяет выпуски NAS; сохранённая незавершённая операция имеет приоритет.",
-      "В APK видны серверные этапы NAS, текущая операция и время; зелёный финал остаётся только после подтверждения установленного commit.",
-      "Проверка статуса явно показывает получение ответа или ошибку, не запускает лишнюю проверку выпусков и сохраняет известный прогресс.",
-      "Скачивание APK показывает реальные байты, общий размер, проценты и заполнение полосы; проверка перед установкой выделена отдельным этапом.",
-      "Принятое предложение обновить APK остаётся видимым при скачивании; его можно скрыть без прерывания передачи.",
-      "Английский README содержит полную карту возможностей, ограничения, установку 0.9.19 и настоящие снимки web и главной Android.",
-      "На Android до 13 выбранный язык больше не фиксирует размеры и ориентацию: поворот сохраняет полноценный fullscreen без нижней навигации.",
-      "Хронология Android листается через границы суток и загружает архив видимых дней с учётом часового пояса NAS."
+      "Проверка реальной длительности, читаемого видео и индекса перемотки MKV перед финализацией прерванной записи.",
+      "Фоновое восстановление пригодного контейнера без перекодирования видео; очередь ограничена и не задерживает новую запись.",
+      "Автовосстановление собственных незавершённых записей после аварийного выключения NAS и прерывания публикации восстановленного файла.",
+      "Android 0.8.4: нажатие на превью открывает только эту камеру; fullscreen и поворот не сбрасывают режим.",
+      "Выбор камер в онлайне с номерами порядка и перетаскиванием; обычный набор сохраняется отдельно для каждого подключения к NAS.",
+      "Актуализированы README и установка соответствующих выпусков NAS и официально подписанного APK."
     ],
     "zh-CN": [
-      "发布签名 Android 0.8.3（803），保留包名与官方证书，支持覆盖更新。",
-      "进入 Android 维护页面时检查一次 NAS 新版本，并优先恢复已保存的进行中更新。",
-      "Android 显示服务器报告的 NAS 阶段、当前操作和耗时；仅在确认已安装提交后保留绿色完成状态。",
-      "检查状态后明确显示收到新响应或失败，不额外检查版本，也不丢失已知进度。",
-      "APK 下载显示实际字节、总大小、百分比和填充进度条，安装前单独显示验证阶段。",
-      "接受自动 APK 更新后，下载期间保留进度对话框；隐藏对话框不会中断下载。",
-      "更新英文产品指南、完整功能与兼容性说明、0.9.19 安装命令，并加入真实网页及 Android 主页截图。",
-      "Android 13 之前仅覆盖语言，不冻结屏幕配置，修复选择英文、中文或俄文后旋转导致的全屏问题。",
-      "Android 时间轴可跨日期拖动，并按 NAS 时区获取午夜两侧可见日期的录像范围。"
+      "中断录像标记为已完成前，检查实际时长、可解码画面和 MKV 定位索引。",
+      "使用有界后台队列修复可恢复的容器，不重新编码视频，也不阻塞新的摄像头录像。",
+      "NAS 异常关机后恢复属于本系统的未完成录像，并处理修复文件发布过程中再次中断的情况。",
+      "Android 0.8.4：点击摄像头预览仅查看该摄像头，全屏和屏幕旋转保持此会话。",
+      "实时查看支持按编号选择、拖动排序，并为每个已保存的 NAS 连接分别保留常用摄像头顺序。",
+      "更新 README 及 NAS 与官方签名 Android 安装包的安装说明。"
     ]
   }
 }

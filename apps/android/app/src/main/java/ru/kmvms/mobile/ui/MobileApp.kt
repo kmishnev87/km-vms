@@ -96,11 +96,15 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     var signOutConfirmation by remember { mutableStateOf(false) }
     var removeConfirmation by remember { mutableStateOf<ServerProfile?>(null) }
     var immersive by remember { mutableStateOf(false) }
-    var videoRequest by remember(state.active?.id) { mutableStateOf<MobileVideoRequest?>(null) }
-    LaunchedEffect(section) { if (section !in setOf(Section.LIVE, Section.CHRONOLOGY)) videoRequest = null }
+    var videoRequest by rememberSaveable(state.active?.id, stateSaver = videoRequestSaver) { mutableStateOf<MobileVideoRequest?>(null) }
     val snackbars = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
     val screenState = rememberSaveableStateHolder()
+    LaunchedEffect(section, state.active?.id) {
+        if (section !in setOf(Section.LIVE, Section.CHRONOLOGY)) videoRequest = null
+        // A viewing session ends on navigation away, not on rotation/fullscreen.
+        if (section != Section.LIVE) screenState.removeState("${state.active?.id ?: "connection"}:${Section.LIVE.name}")
+    }
     val configuration=LocalConfiguration.current
     val compactNavigation=configuration.screenWidthDp>configuration.screenHeightDp&&configuration.screenHeightDp<500
     val navigationVisible=!state.showConnection&&state.user!=null&&!immersive
@@ -193,7 +197,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                     section == Section.LIVE -> model.api()?.let { api ->
                         key(state.active?.id, videoRequest?.key) { LiveScreen(api, state.cameras, state.ptz,
                             onMessage = { text -> uiScope.launch { snackbars.showSnackbar(text) } }, onImmersive = { immersive = it }, initial = videoRequest,
-                            profileId = state.active!!.id) }
+                            profileId = state.active!!.id, onExit = { videoRequest = null; section = Section.CAMERAS }) }
                     }
                     section == Section.RECORDINGS -> model.api()?.let { api -> RecordingsScreen(api,
                         state.user?.can("export_recordings") == true, state.user?.can("delete_recordings") == true, { immersive=it },
@@ -204,7 +208,10 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                         state.user?.can("view_timeline") == true, { request -> videoRequest = request; section = if (request.archiveTime == null) Section.LIVE else Section.CHRONOLOGY },
                         { text -> uiScope.launch { snackbars.showSnackbar(text) } }, profileId = state.active?.id) }
                     section == Section.CAMERAS && Section.CAMERAS in allowed -> model.api()?.let { api -> CameraManagementScreen(api,state,model,
-                        { text -> uiScope.launch { snackbars.showSnackbar(text) } }) }
+                        { text -> uiScope.launch { snackbars.showSnackbar(text) } },
+                        openLive = if (Section.LIVE in allowed) { camera ->
+                            videoRequest = MobileVideoRequest(camera.id, camera.name, singleCamera = true); section = Section.LIVE
+                        } else null) }
                     section == Section.STORAGE -> model.api()?.let{api->StorageScreen(api,state.active!!.id,state.user?.can("run_diagnostics")==true){text->uiScope.launch{snackbars.showSnackbar(text)}}}
                     section == Section.SYSTEM -> model.api()?.let{api->SystemScreen(api){text->uiScope.launch{snackbars.showSnackbar(text)}}}
                     section == Section.SERVER_SETTINGS -> model.api()?.let{api->ServerSettingsScreen(api,state.active!!.id,{section=Section.SETTINGS}){text->uiScope.launch{snackbars.showSnackbar(text)}}}

@@ -61,7 +61,7 @@ class ProfileVault(context: Context) {
         val remaining = profiles().filterNot { it.id == id }
         val array = JSONArray()
         remaining.forEach { array.put(JSONObject().put("id", it.id).put("name", it.name).put("address", it.address).put("username", it.username)) }
-        val edit = preferences.edit().putString("profiles", array.toString()).remove("signin.$id").remove("push.$id").remove("push_setup.$id")
+        val edit = preferences.edit().putString("profiles", array.toString()).remove("signin.$id").remove("push.$id").remove("push_setup.$id").remove("live_order.$id")
         if (selectedId() == id) edit.putString("selected", remaining.firstOrNull()?.id)
         edit.apply()
     }

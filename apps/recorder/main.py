@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import copy
 import json
 import os
 import re
@@ -49,6 +50,8 @@ from recorder_core.job_store import RecordingJobStore
 from recorder_core.storage_activation import recording_start_allowed
 from recorder_core.segment_accounting import SegmentAccounting, bounded_file_fingerprint, receipt_object_identity
 from recorder_core.segment_recovery import probe_interrupted_segment
+from recorder_core.segment_repair import SegmentRepairQueue
+from recorder_core.startup_recovery import StartupSegmentRecovery
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "/storage/archive"))
@@ -93,6 +96,7 @@ ERROR_MEDIA_STALLED = "recording_media_stalled"
 
 running = True
 jobs: dict[int, "RecordingJob"] = {}
+segment_repairs = SegmentRepairQueue()
 last_runtime_mapping_log_key: tuple[str, str, str] | None = None
 
 
@@ -856,6 +860,9 @@ def update_writing_segment_progress(job: RecordingJob, file_path: Path) -> bool:
 
 
 def finalize_segment_path(job: RecordingJob, file_path: Path, *, verified_stat: os.stat_result | None = None) -> bool:
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
+    if segment_repairs.contains(job.db_job_id, rel_path):
+        return False
     return segment_accounting().finalize_segment_path(job, file_path, verified_stat=verified_stat)
 
 
@@ -980,6 +987,38 @@ def finalize_segments_for_job(job: RecordingJob) -> None:
         finalize_segment_path(job, file_path)
 
 
+def enqueue_segment_repair(job: RecordingJob, file_path: Path) -> bool:
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
+    if not rel_path or not job.db_job_id or rel_path not in job.known_segment_paths:
+        return False
+    try:
+        original = file_path.lstat()
+    except OSError:
+        return False
+    # Never let a background completion mutate a reused live camera job.
+    snapshot = copy.copy(job)
+    snapshot.process = None
+    snapshot.segment_baseline_paths = set(job.segment_baseline_paths)
+    snapshot.known_segment_paths = {rel_path}
+    snapshot.processed_segment_names = set()
+    snapshot.segment_discovery_cache = {}
+    accounting = segment_accounting()
+
+    def publish(candidate, expected):
+        return accounting.finalize_segment_path(snapshot, file_path, verified_stat=expected,
+                                                replacement_path=candidate)
+
+    def failed(reason):
+        log_event("warning", "segment_recovery_failed", camera_id=snapshot.camera_id, reason=reason)
+        accounting.mark_segment_failed(snapshot, rel_path, reason)
+
+    queued = segment_repairs.submit((job.db_job_id, rel_path), file_path, original, publish, failed)
+    if queued:
+        remember_processed_segment(job, file_path)
+        log_event("info", "segment_recovery_queued", camera_id=job.camera_id)
+    return queued
+
+
 def recover_interrupted_segments(job: RecordingJob) -> None:
     """Finish only this dead writer's pending files, without delaying retries indefinitely."""
     if not job.db_job_id or (job.process is not None and job.process.poll() is None):
@@ -993,12 +1032,17 @@ def recover_interrupted_segments(job: RecordingJob) -> None:
         rel_path = storage_relative_path(file_path, root=job.archive_root_path)
         if not rel_path or rel_path in job.segment_baseline_paths:
             continue
+        if segment_repairs.contains(job.db_job_id, rel_path):
+            continue
         try:
             create_segment_metadata_if_needed(job, file_path)
             if rel_path not in job.known_segment_paths:
                 continue
             verified_stat, reason = probe_interrupted_segment(file_path, timeout=min(3.0, remaining))
             if verified_stat is not None and finalize_segment_path(job, file_path, verified_stat=verified_stat):
+                continue
+            if reason in {"segment_recovery_missing_duration", "segment_recovery_missing_seek_index",
+                          "segment_recovery_probe_failed"} and enqueue_segment_repair(job, file_path):
                 continue
             log_event("warning", "segment_recovery_unconfirmed", camera_id=job.camera_id,
                       reason=reason if verified_stat is None else "segment_recovery_finalization_refused")
@@ -1028,6 +1072,7 @@ def mark_segments_failed_for_job(job: RecordingJob, error: str) -> None:
                   AND ownership = :ownership
                   AND source = :source
                   AND status = :writing
+                  AND NOT (relative_path = ANY(CAST(:recovering_paths AS TEXT[])))
                 """
             ),
             {
@@ -1035,6 +1080,7 @@ def mark_segments_failed_for_job(job: RecordingJob, error: str) -> None:
                 "ownership": OWNERSHIP_KM_VMS,
                 "source": METADATA_SOURCE_RECORDER,
                 "writing": SEGMENT_STATUS_WRITING,
+                "recovering_paths": segment_repairs.paths(job.db_job_id),
                 "status": SEGMENT_STATUS_FAILED,
                 "error_message": truncate_error(redact_text(error)),
                 "integrity_status": "partial_file",
@@ -1180,6 +1226,7 @@ def ffmpeg_cmd(camera, job: RecordingJob) -> tuple[list[str], str] | tuple[None,
         "-nostdin",
         "-loglevel", FFMPEG_LOGLEVEL,
         "-rtsp_transport", (camera.rtsp_transport or "tcp"),
+        *(["-timeout", "15000000"] if input_url.lower().startswith(("rtsp://", "rtsps://")) else []),
         "-i", input_url,
         "-map", "0:v:0",
         "-map", "0:a?",
@@ -1986,6 +2033,8 @@ except Exception as exc:
     log_event("error", "metadata_schema_failed", error=str(exc))
 
 log_event("info", "service_started", storage_root=str(STORAGE_ROOT))
+startup_recovery = StartupSegmentRecovery(engine, RECORDER_INSTANCE_ID, segment_accounting(), segment_repairs, log_event)
+startup_recovery.start()
 write_audit_event(
     event_type="service_started",
     message="Recorder service started",
@@ -2004,6 +2053,7 @@ while running:
     time.sleep(LOOP_INTERVAL_SECONDS)
 
 log_event("info", "shutdown_started", active_jobs=active_jobs_status())
+startup_recovery.stop()
 write_recorder_heartbeat("shutdown")
 
 for camera_id in list(jobs.keys()):

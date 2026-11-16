@@ -69,6 +69,7 @@ import kotlin.math.roundToInt
         }
         Box(if (immersive) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             CameraVideo(session, Modifier.fillMaxSize(), zoomable = true, mode = mode,
+                onTap = { if (!immersive) fullscreen() },
                 aspect = if (playback?.stream == Stream.MAIN) camera.mainAspect else camera.subAspect,
                 onPoint = { x, y -> if (ready) handle?.point(x, y) },
                 onArea = { left, top, right, bottom -> if (ready) handle?.area(left, top, right, bottom) })

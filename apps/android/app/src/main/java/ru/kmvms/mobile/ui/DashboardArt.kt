@@ -4,6 +4,7 @@ import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.FilterQuality
@@ -51,7 +52,7 @@ import kotlin.math.max
     val image = ImageBitmap.imageResource(resource)
     // Keep the original full-resolution PNG. Hint GPU minification to use mipmaps
     // instead of throwing away source pixels with a single bilinear sample.
-    remember(image) { image.asAndroidBitmap().setHasMipMap(true) }
+    SideEffect { image.asAndroidBitmap().setHasMipMap(true) }
     Image(bitmap = image, contentDescription = null, modifier = modifier, filterQuality = FilterQuality.Medium)
 }
 

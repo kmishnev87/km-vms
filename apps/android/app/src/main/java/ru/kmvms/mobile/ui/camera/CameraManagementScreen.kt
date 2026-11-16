@@ -2,6 +2,7 @@ package ru.kmvms.mobile.ui.camera
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,7 +50,8 @@ import ru.kmvms.mobile.ui.Muted
 import ru.kmvms.mobile.ui.Outline
 import java.util.UUID
 
-@Composable fun CameraManagementScreen(api:NasApi,state:MobileState,model:MobileViewModel,message:(String)->Unit) {
+@Composable fun CameraManagementScreen(api:NasApi,state:MobileState,model:MobileViewModel,message:(String)->Unit,
+                                      openLive: ((Camera) -> Unit)? = null) {
     var editing by remember(api){mutableStateOf(false)}
     var editedId by remember(api){mutableStateOf<Long?>(null)}
     var removed by remember(api){mutableStateOf<Camera?>(null)}
@@ -109,7 +111,9 @@ import java.util.UUID
                             camera.retentionDays?.let{Text(stringResource(R.string.retention_days,it),style=MaterialTheme.typography.bodySmall)}
                             camera.quotaGb?.let{Text(stringResource(R.string.quota_gb,it),style=MaterialTheme.typography.bodySmall)}
                         }
-                        key(previewRevision) { CameraCardPreview(previews,camera.id,Modifier.width(previewWidth).aspectRatio(16f/9f)) }
+                        val previewAction = if (openLive != null) Modifier.clickable(
+                            onClickLabel = stringResource(R.string.live_open_camera)) { openLive(camera) } else Modifier
+                        key(previewRevision) { CameraCardPreview(previews,camera.id,Modifier.width(previewWidth).aspectRatio(16f/9f).then(previewAction)) }
                     }
                     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.End) {
                         IconButton(onClick={removed=camera},modifier=Modifier.testTag("delete-camera-${camera.id}")) {

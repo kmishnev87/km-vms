@@ -14,7 +14,7 @@ from test_stage14_history_large_totals_postgres import history_database
 
 
 @pytest.mark.parametrize("payload,code,reason", [
-    ({"frames": [{"media_type": "video"}]}, 0, "probe_ok"),
+    ({"frames": [{"media_type": "video"}], "format": {"duration": "1.0"}}, 0, "probe_ok"),
     ({"frames": [{"media_type": "audio"}]}, 0, "segment_recovery_no_video"),
     ({"frames": []}, 0, "segment_recovery_no_video"),
     ({"frames": "video"}, 0, "segment_recovery_no_video"),
@@ -26,6 +26,7 @@ def test_probe_requires_a_video_frame_and_success(tmp_path, monkeypatch, payload
     path.write_bytes(b"own video fixture")
     run = Mock(return_value=SimpleNamespace(returncode=code, stdout=json.dumps(payload)))
     monkeypatch.setattr(recovery.subprocess, "run", run)
+    monkeypatch.setattr(recovery, "matroska_has_seek_index", lambda *args: True)
     verified, actual = recovery.probe_interrupted_segment(path, timeout=0.5)
     assert actual == reason
     assert (verified is not None) == (reason == "probe_ok")
@@ -123,6 +124,7 @@ def test_real_exit_updates_segment_and_receipt_and_still_retries(worker, monkeyp
     other = worker.RecordingJob(job.camera_id + 1000, "Other", "other", "always", True, process=Process())
     worker.jobs[other.camera_id] = other
     worker.check_children()
+    worker.segment_repairs._queue.join()
     with history_database.connect() as conn:
         segment = conn.execute(text("SELECT * FROM recording_segments")).mappings().one()
         receipt = conn.execute(text("SELECT * FROM recorder_file_receipts")).mappings().one()
@@ -137,6 +139,7 @@ def test_real_exit_updates_segment_and_receipt_and_still_retries(worker, monkeyp
     assert other.process.poll() is None
     first_retries = job.retry_count
     worker.check_children()
+    worker.segment_repairs._queue.join()
     assert job.retry_count == first_retries, "the same exited process cannot be handled twice"
 
 

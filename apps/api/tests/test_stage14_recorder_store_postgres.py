@@ -1,6 +1,7 @@
 """Execute Recorder SQL against owned PostgreSQL, not a permissive fake connection."""
 import os
 from datetime import datetime, timedelta
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -101,11 +102,16 @@ def test_real_postgres_segments_receipts_progress_and_retention_signal(history_d
         log_event=lambda *a, **kw: None, write_audit_event=lambda **kw: None,
     )
     path = tmp_path / 'recording.mkv'
-    path.write_bytes(b'owned test bytes')
+    def write_media(seconds):
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                        'testsrc=size=160x90:rate=5', '-t', str(seconds),
+                        '-c:v', 'mpeg4', '-threads', '1', '-an', '-y', str(path)],
+                       check=True, capture_output=True, timeout=15)
+    write_media(1)
     accounting.create_segment_metadata_if_needed(job, path)
     accounting.create_segment_metadata_if_needed(job, path)
     assert job.known_segment_paths == {'recording.mkv'}
-    path.write_bytes(b'owned test bytes with progress')
+    write_media(2)
     assert accounting.update_writing_segment_progress(job, path)
     assert accounting.finalize_segment_path(job, path)
     assert not accounting.finalize_segment_path(job, path)

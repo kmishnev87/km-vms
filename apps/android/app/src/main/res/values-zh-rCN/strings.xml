@@ -368,4 +368,12 @@
     <string name="nas_status_checking">正在检查…</string>
     <string name="nas_status_received">状态接收时间：%1$s</string>
     <string name="nas_status_failed">无法获取最新状态。上方显示最后已知的步骤。</string>
+    <string name="live_choose_cameras">摄像机和顺序</string>
+    <string name="live_open_camera">打开此摄像机的实时画面</string>
+    <string name="live_clear_selection">清除</string>
+    <string name="live_apply_selection">应用</string>
+    <string name="live_reorder_camera">长按并拖动以调整顺序</string>
+    <string name="live_move_up">向上移动</string>
+    <string name="live_move_down">向下移动</string>
+    <string name="live_no_selected_cameras">选择要观看的摄像机</string>
 </resources>
