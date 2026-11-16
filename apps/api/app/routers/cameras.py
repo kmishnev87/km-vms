@@ -62,6 +62,8 @@ from app.routers.camera_onvif_routes import (
     update_onvif_profile_route,
 )
 from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
+from app.routers.camera_discovery_routes import router as discovery_router
+from app.routers.camera_archive_rules import router as archive_rules_router
 from app.schemas.camera import (
     CameraCreate,
     CameraResponse,
@@ -96,6 +98,8 @@ from app.routers.camera_connection_helpers import persist_verified_stream_dimens
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
 router.include_router(onvif_router)
+router.include_router(discovery_router)
+router.include_router(archive_rules_router)
 
 CAMERA_DELETE_FILES_REASON = "camera_delete_with_files"
 CAMERA_DELETE_NO_FILES_BLOCK_REASON = "recordings_exist_delete_files_false_requires_safe_policy"

@@ -1,12 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { mergeEventPreferenceDraft, toggleEventPreference, changeCameraNotificationTime } from "../lib/cameraEventPreferences.js";
+import { mergeEventPreferenceDraft, toggleEventPreference, changeCameraNotificationTime, notificationCameraGroups } from "../lib/cameraEventPreferences.js";
 import { cameraPreviewId, cameraPreviewLiveUrl } from "../lib/cameraPreviewLive.js";
 import { enDictionary } from "../lib/i18n/en.js";
 import { ruDictionary } from "../lib/i18n/ru.js";
 import { zhCNDictionary } from "../lib/i18n/zhCN.js";
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
+
+test("camera lists keep top-to-bottom groups of five in both schedule modes", () => {
+  const cameras = Object.freeze(Array.from({ length: 16 }, (_, id) => Object.freeze({ id: id + 1, name: `Camera ${id + 1}` })));
+  const groups = notificationCameraGroups(cameras);
+  assert.deepEqual(groups.map(group => group.map(camera => camera.id)), [[1,2,3,4,5],[6,7,8,9,10],[11,12,13,14,15],[16]]);
+  assert.deepEqual(notificationCameraGroups([]), []);
+  assert.equal(notificationCameraGroups(cameras.slice(0, 5)).length, 1);
+  assert.deepEqual(notificationCameraGroups(Array.from({ length: 31 }, (_, id) => ({ id }))).map(group => group.length), [5,5,5,5,5,5,1]);
+  const form = read("../components/CameraEventPreferences.js"), css = read("../app/styles/35-camera-events.css");
+  assert.match(form, /notificationCameraGroups\(cameras\)\.map/);
+  assert.match(css, /\.cameraEventsCameraPreferences\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.doesNotMatch(css, /\.cameraEventsCameraPreferences\.hasSchedules\s*\{/);
+  assert.match(css, /\.cameraEventsPreferenceIntro\s*\{[^}]*align-items: center;/);
+  assert.match(form, /className="cameraEventsTimeSeparator" aria-hidden="true"/);
+});
 
 test("a saved remote preference refreshes a pristine form, never erases a draft", () => {
   const previous = { notifications: true }, saved = { notifications: false };

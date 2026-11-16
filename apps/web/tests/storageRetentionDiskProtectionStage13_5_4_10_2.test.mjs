@@ -105,7 +105,7 @@ assert.match(page, /await apiFetch\("\/settings"/);
 assert.match(page, /await loadStatus\(\{ silent: true \}\)/);
 assert.match(
   page,
-  /href="\/cameras"[\s\S]*title=\{copy\.configureCameras\}[\s\S]*aria-label=\{copy\.configureCameras\}[\s\S]*\/assets\/icons\/ui\/camera\.png/,
+  /onClick=\{\(\) => setArchiveRulesOpen\(true\)\}[\s\S]*title=\{copy\.configureCameras\}[\s\S]*aria-label=\{copy\.configureCameras\}[\s\S]*\/assets\/icons\/ui\/camera\.png/,
 );
 assert.match(page, /actionPermissionState\(currentUser, "manage_cameras", language\)/);
 assert.match(page, /disabled[\s\S]*title=\{manageCamerasPermission\.reason\}/);

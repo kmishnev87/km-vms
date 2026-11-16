@@ -38,7 +38,7 @@ export const FRONTEND_ROUTE_ACCESS = Object.freeze({
   "/cameras": Object.freeze({
     access: ROUTE_ACCESS_PERMISSION,
     permission: "manage_cameras",
-    backend: Object.freeze(["/cameras", "/cameras/test", "/cameras/onvif/discover"]),
+    backend: Object.freeze(["/cameras", "/cameras/test", "/cameras/onvif/discover", "/cameras/discovery/networks", "/cameras/discovery/jobs"]),
   }),
   "/settings": Object.freeze({
     access: ROUTE_ACCESS_PERMISSION,
@@ -87,6 +87,8 @@ export const FRONTEND_ROUTE_ACCESS = Object.freeze({
       "/recordings/retention/run",
     ]),
     backendEndpoints: Object.freeze([
+      Object.freeze({ method: "GET", path: "/cameras/archive-rules", permission: "manage_cameras" }),
+      Object.freeze({ method: "PUT", path: "/cameras/archive-rules", permission: "manage_cameras" }),
       Object.freeze({ method: "GET", path: "/storage/status", permission: "manage_settings" }),
       Object.freeze({ method: "GET", path: "/storage/operations/history", permission: "manage_settings" }),
       Object.freeze({ method: "GET", path: "/settings", permission: "manage_settings" }),

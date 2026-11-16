@@ -12,3 +12,8 @@ export function changeCameraNotificationTime(preference, cameraId, key, minute) 
     [cameraId]: { start_minute: preference.start_minute, end_minute: preference.end_minute,
       ...preference.camera_schedules?.[cameraId], [key]: minute } } };
 }
+
+// The same top-to-bottom groups are used with common and individual hours.
+export function notificationCameraGroups(cameras) {
+  return Array.from({ length: Math.ceil(cameras.length / 5) }, (_, index) => cameras.slice(index * 5, index * 5 + 5));
+}

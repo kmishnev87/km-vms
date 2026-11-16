@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../../lib/api";
 import { onvifConfigFromResult } from "../../lib/cameraOnvifConfig";
+import { discoveryConnection } from "../../lib/cameraDiscovery";
 import {
   CAMERA_CONNECTION_FIELDS, CAMERA_MANAGEMENT_FIELDS, assignCameraProfile, assignCameraPurposeProfile, cameraPreviewIdentity,
   cameraProfileHasMetadata, cameraProfilePath, cameraSelectedSource,
@@ -34,7 +35,6 @@ export default function useCameraEditor(camera, copy, onSaved) {
   const checksRef = useRef({});
   const [device, setDeviceState] = useState(null);
   const deviceRef = useRef(null);
-  const [discovery, setDiscovery] = useState(null);
   const [preview, setPreview] = useState(null);
   const previewRef = useRef(null);
   const previewCache = useRef(new Map());
@@ -42,7 +42,6 @@ export default function useCameraEditor(camera, copy, onSaved) {
   const queuedCheck = useRef(null);
   const [streamErrors, setStreamErrors] = useState({});
   const [operation, setOperation] = useState("");
-  const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -50,7 +49,6 @@ export default function useCameraEditor(camera, copy, onSaved) {
   const alive = useRef(true);
   const revision = useRef(0);
   const checking = useRef(false);
-  const discoveryRequest = useRef(0);
   const temporaryFrames = useRef(new Set());
   const metadataRequested = useRef(false);
   const metadataRun = useRef(null);
@@ -83,7 +81,7 @@ export default function useCameraEditor(camera, copy, onSaved) {
   useEffect(() => {
     alive.current = true;
     return () => {
-      alive.current = false; revision.current += 1; discoveryRequest.current += 1;
+      alive.current = false; revision.current += 1;
       queuedCheck.current?.resolve(false); queuedCheck.current = null;
       discardFrames([...temporaryFrames.current]); temporaryFrames.current.clear();
     };
@@ -168,27 +166,10 @@ export default function useCameraEditor(camera, copy, onSaved) {
   function selectCandidate(candidate) {
     revision.current += 1;
     let next = formRef.current;
-    for (const [key, value] of Object.entries({
-      protocol: "onvif", host: candidate.host, port: candidate.port || 80,
-      rtsp_host: candidate.host, rtsp_port: 554, onvif_path: candidate.xaddr_path || "",
-      rtsp_main_url: "", rtsp_sub_url: "", onvif_profile_token: "", onvif_sub_profile_token: "",
-    })) next = patchCameraEditor(next, key, value);
+    for (const [key, value] of Object.entries(discoveryConnection(candidate, formRef.current.protocol))) next = patchCameraEditor(next, key, value);
     replaceForm(next);
     setDevice(null); showPreview(null); setSettingsDirty(false); setError(""); setNotice(copy.editorCandidateSelected);
     invalidateMetadata();
-  }
-
-  async function discover() {
-    const request = ++discoveryRequest.current;
-    setSearching(true); setError("");
-    try {
-      const result = await post("/cameras/onvif/discover", { timeout_seconds: 5 });
-      if (alive.current && request === discoveryRequest.current) setDiscovery(result);
-    } catch (err) {
-      if (alive.current && request === discoveryRequest.current) setError(cameraEditorError(err, copy));
-    } finally {
-      if (alive.current && request === discoveryRequest.current) setSearching(false);
-    }
   }
 
   function stillCurrent(request) { return alive.current && revision.current === request; }
@@ -470,10 +451,10 @@ export default function useCameraEditor(camera, copy, onSaved) {
   return {
     form, patch, section, setSection, baseline: baseline.current,
     dirty: Object.keys(cameraEditorChanges(form, baseline.current)).length > 0 || settingsDirty,
-    checks, device, discovery, preview, operation, searching, error, notice, streamErrors,
+    checks, device, preview, operation, error, notice, streamErrors,
     eventCapability: eventCapability?.key === eventManagementKey ? eventCapability : null,
     refreshEventCapability: () => setEventCapabilityRevision(n => n + 1),
-    setError, settingsDirty, setSettingsDirty, selectProfile, selectPurpose, selectSource, selectCandidate, discover, check, next, save,
+    setError, settingsDirty, setSettingsDirty, selectProfile, selectPurpose, selectSource, selectCandidate, check, next, save,
     invalidateVideo, refreshProfile, requestProfileMetadata, prepareProfileMetadata, metadataPreparing, connectionChanged, verified: cameraChecksReady(form, checks),
     connectionReady: cameraStreamRoles(form).some((role) => cameraCheckIsCurrent(checks[role], cameraStreamKey(form, role)))
       && (form.protocol !== "onvif" || cameraCheckIsCurrent(checks.management, cameraManagementKey(form))),

@@ -60,6 +60,7 @@ LEGACY_REQUIRED_IMAGE_SERVICES = (
 OPTIONAL_PERSISTENT_IMAGE_SERVICES = (
     "update-status-reader",
     "update-retry-admission",
+    "camera-discovery",
 )
 
 TARGET_BUILD_SERVICES = (
@@ -80,6 +81,7 @@ TARGET_EVIDENCE_SERVICES = (
 ACTIVATION_RUNTIME_SERVICES = (
     "update-retry-admission",
     "update-status-reader",
+    "camera-discovery",
     "api",
     "recorder",
     "web",

@@ -7,6 +7,7 @@ import { CAMERA_MANAGEMENT_FIELDS, MAX_RETENTION_DAYS, cameraAssignedProfile, ca
 import { useLocaleText } from "../../lib/i18n";
 import CameraDeviceSettings from "./CameraDeviceSettings";
 import useCameraEditor from "./useCameraEditor";
+import CameraDiscoveryDialog, { CameraSearchIcon } from "./CameraDiscoveryDialog";
 
 function StreamChoice({ label, value, disabled, onChange, name, metadata, children }) {
   const id = useId();
@@ -49,7 +50,6 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   const childWasOpenRef = useRef(false);
   const [confirm, setConfirm] = useState(null);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
-  useEffect(() => { if (editor.discovery) setDiscoveryOpen(true); }, [editor.discovery]);
   const [deviceBusy, setDeviceBusy] = useState(false);
   const dialogRef = useRef(null);
   const pendingAction = useRef(null);
@@ -235,7 +235,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   function renderConnection() {
     return <section>
       <div className="cameraFlowSectionHead"><h3>{copy.editorConnectCamera}</h3>
-        {form.protocol === "onvif" ? <button type="button" className="cameraFlowTextButton" onClick={(event) => { childReturnFocusRef.current = event.currentTarget; editor.discover(); }} disabled={editor.searching || busy}>{editor.searching ? copy.searching : copy.editorSearch}</button> : null}
+        <button type="button" className="button secondary small cameraNetworkSearchButton" onClick={(event) => { childReturnFocusRef.current = event.currentTarget; setDiscoveryOpen(true); }} disabled={busy}><CameraSearchIcon />{copy.editorSearch}</button>
       </div>
       {!camera ? <div className="cameraFlowMethods" aria-label={copy.protocol}>
         {[["onvif", copy.editorOnvifHelp], ["rtsp", copy.editorRtspHelp]].map(([protocol, description]) => <button key={protocol} type="button" aria-pressed={form.protocol === protocol} disabled={busy} onClick={() => change("protocol", protocol)}>
@@ -358,12 +358,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
         <button type="button" className="button" disabled={busy || preparing} onClick={primaryAction}>{primaryLabel}</button>
       </div></footer>
     </div>
-    <OperationDialog dialog={discoveryOpen ? {
-      id: "camera-discovery", title: copy.editorSearch, closeLabel: copy.close, tone: "neutral",
-      content: <div className="cameraFlowDiscovery"><p>{editor.discovery?.candidates?.length ? copy.editorChooseDiscovered : copy.editorDiscoveryEmpty}</p>
-        {(editor.discovery?.candidates || []).map((candidate) => <button type="button" key={candidate.id || `${candidate.host}:${candidate.port}`} disabled={busy} onClick={() => { setDiscoveryOpen(false); guardDeviceDraft(() => editor.selectCandidate(candidate)); }}>{candidate.host}:{candidate.port || 80}</button>)}
-      </div>,
-    } : null} onClose={() => setDiscoveryOpen(false)} />
+    {discoveryOpen ? <CameraDiscoveryDialog protocol={form.protocol} onClose={() => setDiscoveryOpen(false)} onSelect={candidate => { setDiscoveryOpen(false); guardDeviceDraft(() => editor.selectCandidate(candidate)); }} /> : null}
     <OperationDialog dialog={confirm ? {
       id: "camera-editor-discard", presentation: "compact-confirmation", tone: "warning",
       title: confirm === "device" ? copy.editorDeviceUnsaved : copy.editorUnsavedTitle,

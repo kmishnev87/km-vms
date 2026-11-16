@@ -93,8 +93,8 @@ assert.equal(layout.includes("topUserChip"), false);
 assert.equal(layout.includes("username"), false);
 assert.equal(layout.includes('href="/storage"'), true);
 assert.equal(layout.includes("<SystemHealthIndicator"), true);
-assert.equal(layout.indexOf('href="/storage"') < layout.indexOf("<SystemHealthIndicator"), true);
-assert.equal(layout.indexOf("<SystemHealthIndicator") < layout.indexOf('href="/settings"'), true);
+assert.equal(layout.indexOf("<SystemHealthIndicator") < layout.indexOf('href="/storage"'), true);
+assert.equal(layout.indexOf('href="/storage"') < layout.indexOf('href="/settings"'), true);
 assert.equal(layout.indexOf('href="/settings"') < layout.indexOf("topNavButton"), true);
 
 assert.equal(indicator.includes("getSystemRuntimeStatus({ force })"), true);

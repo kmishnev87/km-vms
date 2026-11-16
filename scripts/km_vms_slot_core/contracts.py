@@ -112,6 +112,7 @@ TARGET_REQUIRED_IMAGE_SERVICES = ADOPTED_REQUIRED_IMAGE_SERVICES | frozenset(
 
 TARGET_BUILT_IMAGE_SERVICES = frozenset(
     {
+        "camera-discovery",
         "schema-update",
         "api",
         "recorder",
@@ -136,6 +137,7 @@ KNOWN_COMPOSE_SERVICES = frozenset(
         "schema-update",
         "api",
         "setup-helper",
+        "camera-discovery",
         "update-helper",
         "recorder",
         "web",

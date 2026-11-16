@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.9.25](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.25)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.9.26](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.26)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.25/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.25
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.26/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.26
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.25 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.26 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.25 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.26 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -101,6 +101,14 @@ In **Cameras**, add a camera using its RTSP or ONVIF connection details. Verify 
 
 ONVIF Media1/Media2 configuration is available when the camera exposes the required services and options. RTSP, H.265/browser playback, and hardware acceleration are not universal across all devices and clients.
 
+**Find on network** is available for both connection methods. Local ONVIF WS-Discovery runs on the NAS host network, not inside the API's isolated Docker network. A separate restricted helper exposes no public control port and runs searches only on request; normal operation does not poll cameras in the background.
+
+For a routed LAN or VPN, select a detected route or enter specific private IPv4 addresses/CIDRs. A search is limited to 1,024 addresses and twelve ports per protocol; the default ports include ONVIF 2020 for compatible devices and RTSP 554/8554. Advanced ports can be entered explicitly. Progress counts checked addresses; a time-limited or interrupted search is reported as partial rather than as a complete empty result. Existing cameras remain visible in discovery, and selecting a result does not modify or delete an existing camera.
+
+Discovery does not configure a VPN, forward multicast through routers, guess camera passwords, or prove that every device in a subnet is reachable. A device must answer ONVIF discovery, the anonymous ONVIF device request, or RTSP OPTIONS on a tested port. Some cameras require a different port, manual address/path, or a protocol enabled in their own settings. RTSP-only discovery identifies a server, not its authenticated stream path; the normal connection check still applies. IPv6-only discovery is not included.
+
+In **Storage → Recording and retention → Configure cameras**, edit segment minutes, retention days, and archive limits without leaving Storage. Use shared values for selected cameras or edit rows individually. Saving validates and commits the changed rules together; conflicting external edits require a reload. Lowering retention or limits can make older footage eligible for the existing automatic cleanup. Connection details, event reception and recording enablement are not changed by this editor.
+
 Use **Settings → Language** to choose **English**, **简体中文**, or **Русский**.
 
 ## Camera events
@@ -121,7 +129,7 @@ With camera-management permission, the adjacent trash icon deletes selected even
 
 ## Native Android client
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.9.apk** from the [0.9.25 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.25). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.10.apk** from the [0.9.26 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.26). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.

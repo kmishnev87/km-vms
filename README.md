@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.25](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.25)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.26](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.26)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.25/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.25
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.26/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.26
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -78,6 +78,7 @@ The wizard guides storage selection and owner-account creation. There is no ship
 ### Cameras and ONVIF video profiles
 
 - Connect IP cameras through **RTSP and ONVIF**.
+- Find compatible cameras on the NAS's physical LAN, or search selected reachable private subnets across existing routes/VPNs. Confirm ONVIF/RTSP responses, see progress, stop a search, and choose the connection method without retyping an address.
 - Check connections and select the appropriate lens/video source and main/sub streams.
 - Discover **ONVIF Media1 and Media2** services and the device's available video profiles.
 - Read and change exposed encoder settings: codec, resolution, frame rate, bitrate, and related camera-provided options.
@@ -156,6 +157,7 @@ Detection is performed by the camera. Receiving its events is not a claim that K
 ### Storage and System Health
 
 - Configure archive retention and size limits.
+- Edit segment length, retention days, and archive limits for several cameras in one compact Storage dialog. Apply shared values to selected cameras and save the changed rules together, with conflict checks before any are committed.
 - Inspect free space, archive roots, and recorded volume by camera.
 - Filter archive-integrity findings by camera, cause, time, and state.
 - Confirm individual or bulk actions.

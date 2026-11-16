@@ -42,8 +42,13 @@ class EventPreferencesUiTest {
         val row = compose.onNodeWithTag("events-pref-row-1").getUnclippedBoundsInRoot()
         val from = compose.onNodeWithTag("events-camera-from-1").getUnclippedBoundsInRoot()
         val to = compose.onNodeWithTag("events-camera-to-1").getUnclippedBoundsInRoot()
+        val arrow = compose.onNodeWithTag("events-camera-separator-1").getUnclippedBoundsInRoot()
         assertTrue(from.left >= row.left && to.right <= row.right)
         assertEquals(from.top, to.top)
+        assertTrue(from.right - from.left <= 64.dp && to.right - to.left <= 64.dp)
+        assertTrue(arrow.left >= from.right && arrow.right <= to.left)
+        assertEquals((from.top + (from.bottom - from.top) / 2).value, (arrow.top + (arrow.bottom - arrow.top) / 2).value, .01f)
+        assertTrue(row.bottom - row.top <= 48.dp)
         compose.onNodeWithTag("events-pref-camera-1").performClick()
         compose.onNodeWithTag("events-camera-from-1").assertIsNotEnabled()
         compose.runOnIdle { assertEquals(setOf(2L), value.value.cameraIds); assertTrue(value.value.perCameraHours) }
@@ -55,6 +60,22 @@ class EventPreferencesUiTest {
     @Test fun russianScheduleFitsCompactRows() = settings("ru")
     @Test fun englishScheduleFitsCompactRows() = settings("en")
     @Test fun chineseScheduleFitsCompactRows() = settings("zh-CN")
+
+    @Test fun compactTimeStillOpensNativePickerWithoutChangingTheScheduleOnCancel() {
+        val value = mutableStateOf(EventPreferences(startMinute = 1140, endMinute = 420))
+        compose.setContent { KMVMSTheme { Column { EventPersonalSettings(value.value, cameras, false) { value.value = it } } } }
+        compose.onNodeWithTag("events-hours-from").performClick()
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        fun hasPicker(node: android.view.accessibility.AccessibilityNodeInfo?): Boolean {
+            if (node == null) return false
+            if (node.className?.toString() == "android.widget.TimePicker") return true
+            return (0 until node.childCount).any { hasPicker(node.getChild(it)) }
+        }
+        compose.waitUntil(5_000) { hasPicker(instrumentation.uiAutomation.rootInActiveWindow) }
+        instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1140, value.value.startMinute); assertEquals(420, value.value.endMinute); assertFalse(value.value.hoursEnabled) }
+    }
 
     @Test fun receivingUsesSavedChoiceAndDisablesUnsupportedProtocol() {
         var changed: Pair<Long, Boolean>? = null

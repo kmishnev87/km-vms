@@ -296,7 +296,9 @@ def validate_manifest(value: Any, *, expected_slot_id: str | None = None) -> dic
             "Adopted snapshot lacks its stable-root runtime override evidence.",
         )
     images = validate_image_evidence(value.get("image_evidence"))
-    if not required_images.issubset(images["services"]):
+    if not required_images.issubset(images["services"]) or (
+        "camera-discovery" in compose["services"] and "camera-discovery" not in images["services"]
+    ):
         raise SlotError(
             "slot_manifest_invalid",
             "Release slot lacks required immutable image evidence.",

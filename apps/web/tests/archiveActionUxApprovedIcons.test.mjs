@@ -123,7 +123,7 @@ assert.match(center, /operation-history\.png/);
 assert.doesNotMatch(center, /historyCount/);
 assert.doesNotMatch(center, /aria-hidden="true">\{historyCount\}/);
 
-assert.match(storagePage, /href="\/cameras"[\s\S]*\/assets\/icons\/ui\/camera\.png/);
+assert.match(storagePage, /onClick=\{\(\) => setArchiveRulesOpen\(true\)\}[\s\S]*\/assets\/icons\/ui\/camera\.png/);
 assert.match(storagePage, /archiveManagementAddLocation[\s\S]*add-storage-location\.png/);
 assert.match(storagePage, /storageOpsRootAddButton[\s\S]*add-storage-location\.png/);
 assert.match(storagePage, /className="storageOpsTopMetricValueButton"[\s\S]*onValueClick=\{\(\) => openIntegrityDialog\(\)\}/);

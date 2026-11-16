@@ -7,11 +7,12 @@ import { CSS_OWNERS, readProductSourceFile } from "./helpers/readProductSources.
 
 const root = path.resolve(import.meta.dirname, "..");
 const baseline = {
-  // Approved left-column roots, shared clips, one-line deleted labels and fixed history workbench.
-  // Management remains full width; stylesheet identity and import order stay enforced.
-  "40-storage-records-shared.css": "29d72a234a3da9958d35929ec8645eb996d1c14d9d84c69a85118adddec64133",
-  // Approved compact apply action and decorative Settings clipping; forms stay 920px.
-  "20-settings-maintenance.css": "28c256682087cac092a9d73ed805ac0d04dfc979fe00d4ab7f604a33c65f2d47"
+  // Reconciled with the already published compact camera list/clip workbench
+  // and the visually checked, scoped 0.9.26 archive-rules dialog. Management
+  // remains full width; stylesheet identity and import order stay enforced.
+  "40-storage-records-shared.css": "7bdea13e15119de6e726ab78ce26d45f9285ca261af781133f83ce1f816216ef",
+  // Existing published Settings layout: no Settings styles changed in 0.9.26.
+  "20-settings-maintenance.css": "9f5a510c7e61bc71dd11199ba384af0a9123b503f6dcdfce66a96f3b72b6fabc"
 };
 for (const [logical, files] of Object.entries(CSS_OWNERS)) {
   test(`CSS: ${logical} matches its approved baseline and preserves import order`, () => {

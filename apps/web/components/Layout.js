@@ -181,17 +181,6 @@ export default function Layout({ children, className = "" }) {
           <div className="topNavRight">
             <MigrationActivityIndicator enabled={Boolean(currentUser && canOpenStorage)} onStoragePage={pathname === "/storage"} t={t} />
             <CameraEventsHub currentUser={currentUser} />
-            {canOpenStorage ? (
-              <Link
-                href="/storage"
-                className={`topNavItem ${pathname === "/storage" ? "active" : ""}`}
-                title={t("nav.storage")}
-                aria-label={t("nav.storage")}
-              >
-                <img className="topNavIconImage" src="/assets/icons/ui/storage.png" alt="" />
-              </Link>
-            ) : null}
-
             <SystemHealthIndicator
               currentUser={currentUser}
               pathname={pathname}
@@ -202,6 +191,16 @@ export default function Layout({ children, className = "" }) {
                 problem: t("nav.systemHealthProblem"),
               }}
             />
+            {canOpenStorage ? (
+              <Link
+                href="/storage"
+                className={`topNavItem ${pathname === "/storage" ? "active" : ""}`}
+                title={t("nav.storage")}
+                aria-label={t("nav.storage")}
+              >
+                <img className="topNavIconImage" src="/assets/icons/ui/storage.png" alt="" />
+              </Link>
+            ) : null}
 
             {canOpenSettings ? (
               <Link

@@ -54,8 +54,8 @@ test("compact time controls stay editable while scheduling is off and selecting 
   const form = read("../components/CameraEventPreferences.js"), css = read("../app/styles/35-camera-events.css");
   assert.doesNotMatch(form, /disabled=\{busy \|\| !preference\.hours_enabled\}/);
   assert.match(css, /\.cameraEventsTimeRange > label\s*\{[^}]*display: inline-flex;[^}]*align-items: center;/);
-  assert.match(css, /\.cameraEventsTimeRange input\[type="time"\]\s*\{\s*width: 82px; height: 32px;/);
-  assert.match(css, /::-webkit-calendar-picker-indicator\s*\{\s*display: block; opacity: 1; visibility: visible;/);
+  assert.match(css, /\.cameraEventsTimeInput\s*\{\s*width: 62px; min-width: 0; height: 30px;/);
+  assert.match(css, /\.cameraEventsTimeInput::-webkit-calendar-picker-indicator\s*\{\s*display: none;/);
   assert.match(css, /\.cameraEventsSchedule\s*\{[^}]*justify-content: flex-start;/);
   let preference = { hours_enabled: false, start_minute: 0, end_minute: 0 };
   preference = changeCameraNotificationTime(preference, 1, "start_minute", 1335);

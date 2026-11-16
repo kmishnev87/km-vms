@@ -9,6 +9,7 @@ cryptography==50.0.2
 passlib[bcrypt]==1.7.4
 PyJWT==2.15.1
 onvif-zeep==0.2.12
+WSDiscovery==2.1.2
 zeep==4.3.3
 requests==2.34.2
 pywebpush==2.5.0

@@ -665,92 +665,25 @@ def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_po
 
 
 def discover_onvif_devices(timeout_seconds: int = 5) -> dict:
+    """Compatibility endpoint; LAN I/O belongs to the host-network worker."""
+    import time
+    from app.services.camera_discovery_client import discovery_request, DiscoveryUnavailable, DiscoveryRequestError
+
     timeout = max(1, min(int(timeout_seconds or 5), 10))
     try:
-        from wsdiscovery.discovery import ThreadedWSDiscovery as WSDiscovery
-    except Exception:
-        return {
-            "ok": True,
-            "discovery_supported": False,
-            "code": "discovery_not_supported",
-            "message": "ONVIF WS-Discovery is not available in this runtime.",
-            "candidates": [],
-            "warnings": [],
-            "limitations": ["manual_onvif_probe_available", "no_broad_subnet_scan"],
-            "timeout_seconds": timeout,
-        }
-
-    candidates = []
-    warnings = []
-    wsd = None
-    try:
-        wsd = WSDiscovery()
-        wsd.start()
-        services = wsd.searchServices(timeout=timeout) or []
-        seen = set()
-        for service in services[:20]:
-            xaddrs = list(getattr(service, "getXAddrs", lambda: [])() or [])
-            scopes = list(getattr(service, "getScopes", lambda: [])() or [])
-            types = list(getattr(service, "getTypes", lambda: [])() or [])
-            for xaddr in xaddrs[:3]:
-                parsed = urlparse(str(xaddr))
-                host = parsed.hostname
-                port = parsed.port or (443 if parsed.scheme == "https" else 80)
-                key = (host, port, parsed.path)
-                if not host or key in seen:
-                    continue
-                seen.add(key)
-                candidates.append(
-                    {
-                        "id": _candidate_id(host, port, "ws_discovery"),
-                        "source": "ws_discovery",
-                        "host": _safe_text(host, 120),
-                        "port": int(port),
-                        "xaddr_path": _safe_text(parsed.path or "/onvif/device_service", 160),
-                        "scopes": [_safe_text(item, 120) for item in scopes[:10] if _safe_text(item, 120)],
-                        "types": [_safe_text(item, 120) for item in types[:10] if _safe_text(item, 120)],
-                        "warnings": [],
-                    }
-                )
-    except TimeoutError:
-        return {
-            "ok": False,
-            "discovery_supported": True,
-            "code": "timeout",
-            "message": "ONVIF discovery timed out.",
-            "candidates": [],
-            "warnings": [],
-            "limitations": ["manual_onvif_probe_available", "no_broad_subnet_scan"],
-            "timeout_seconds": timeout,
-        }
-    except Exception:
-        return {
-            "ok": False,
-            "discovery_supported": True,
-            "code": "runtime_network_limited",
-            "message": "ONVIF discovery is unavailable in the current network/runtime.",
-            "candidates": [],
-            "warnings": ["manual_onvif_probe_available"],
-            "limitations": ["no_broad_subnet_scan"],
-            "timeout_seconds": timeout,
-        }
-    finally:
-        if wsd is not None:
-            try:
-                wsd.stop()
-            except Exception:
-                pass
-
-    return {
-        "ok": True,
-        "discovery_supported": True,
-        "code": "ok" if candidates else "no_devices_found",
-        "message": "ONVIF discovery completed." if candidates else "No ONVIF devices were found.",
-        "candidates": candidates,
-        "warnings": warnings,
-        "limitations": ["no_broad_subnet_scan"],
-        "timeout_seconds": timeout,
-    }
+        result = discovery_request("/jobs", {"owner": "0", "local": True, "networks": [], "protocols": ["onvif"]})
+        deadline = time.monotonic() + timeout + 5
+        while result["status"] == "running" and time.monotonic() < deadline:
+            time.sleep(.2)
+            result = discovery_request("/status", {"owner": "0", "job_id": result["job_id"]})
+        if result["status"] == "running":
+            discovery_request("/cancel", {"owner": "0", "job_id": result["job_id"]})
+        return {**result, "message": "ONVIF discovery completed.", "timeout_seconds": timeout,
+                "limitations": ["local_multicast_only", "address_search_available"]}
+    except (DiscoveryUnavailable, DiscoveryRequestError):
+        return {"ok": False, "discovery_supported": False, "code": "discovery_unavailable",
+                "message": "The NAS discovery worker is unavailable.", "candidates": [], "warnings": [],
+                "limitations": ["manual_onvif_probe_available"], "timeout_seconds": timeout}
 
 
 def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=None, rtsp_port=None, timeout_seconds=5, onvif_path=None) -> dict:

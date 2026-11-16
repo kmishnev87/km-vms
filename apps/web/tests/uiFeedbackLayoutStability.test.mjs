@@ -51,7 +51,7 @@ const requestIdRef = { current: 0 };
 const queryKey = camera => JSON.stringify([camera, "", 1, 20, "created_at", "desc"]);
 const currentQueryKeyRef = { current: queryKey("__all__") };
 const load = new Function("apiFetch", "requestIdRef", "currentQueryKeyRef", "setRecordingsLoadState", "setItems", "setSelectedPaths", "setRecordingsSummary", "setRecordingsPagination", "setProductTimezone", "setError", "setLoadedQueryKey", "showRecordingActionError", "normalizeRecordingError", "productDateFilterParam", `
- const selectedDate = "", currentPage = 1, pageSize = 20, sortBy = "created_at", sortDir = "desc", loadedQueryKey = "old";
+ const selectedDate = "", currentPage = 1, pageSize = 20, sortBy = "created_at", sortDir = "desc", loadedQueryKey = "old", cameraItems = [];
  ${loadSource}; return loadRecordings;
 `)(
   () => new Promise((resolve, reject) => pending.push({ resolve, reject })), requestIdRef, currentQueryKeyRef,
@@ -120,7 +120,8 @@ assert.equal(userDraft.error, "", "editing a normal field clears obsolete genera
 assert.doesNotMatch(read("components/OperatorProblemBanners.js"), /className=\{`operatorStatus /);
 assert.match(read("app/storage/page.js"), /if \(statusRef\.current\)/);
 assert.doesNotMatch(read("app/storage/page.js"), /refreshWarning \? <div className="storageOpsState/);
-assert.match(read("components/cameras/CameraEditor.js"), /id: "camera-discovery"/);
+assert.match(read("components/cameras/CameraEditor.js"), /<CameraDiscoveryDialog/);
+assert.match(read("components/cameras/CameraDiscoveryDialog.js"), /id: "camera-network-discovery"/);
 assert.match(read("components/cameras/CameraEditor.js"), /inert=\{discoveryOpen \|\| confirm \? true : undefined\}/);
 assert.match(read("components/cameras/CameraEditor.js"), /childWasOpenRef\.current && !childOpen/);
 assert.match(read("components/cameras/CameraEditor.js"), /target\?\.focus\(\{ preventScroll: true \}\)/);

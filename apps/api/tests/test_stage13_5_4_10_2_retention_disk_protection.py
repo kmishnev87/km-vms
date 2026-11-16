@@ -1109,7 +1109,10 @@ def test_recorder_finalization_source_advances_signal_in_same_transaction():
     assert "conn.execute" in function
     assert "receipt_result.rowcount != 1" in function
     assert "recorder_finalization_receipt_mismatch" in function
-    assert "AND object_identity = :object_identity" in function
+    # Recovered/remuxed files have a new stat identity. The receipt is still
+    # fenced by the expected ORIGINAL identity before it can be advanced.
+    assert "AND object_identity = :expected_object_identity" in function
+    assert '"expected_object_identity": receipt_object_identity(job.archive_root_id, rel_path, replaced_stat or stat)' in function
     assert "AND physical_identity IS NOT DISTINCT FROM :physical_identity" in function
 
 

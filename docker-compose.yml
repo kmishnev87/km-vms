@@ -194,6 +194,23 @@ services:
     networks:
       - vms-net
 
+  camera-discovery:
+    # Reuses the exact API image but has no DB, archive, Docker or public API access.
+    image: ${COMPOSE_PROJECT_NAME:-tnas-vms}-api:${KM_VMS_RELEASE_IMAGE_TAG:-latest}
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-camera-discovery
+    command: ["python", "-m", "app.services.camera_discovery_worker"]
+    restart: always
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 192m
+    volumes:
+      - camera-discovery-runtime:/run/km-vms-discovery
+    environment:
+      CAMERA_DISCOVERY_SOCKET: /run/km-vms-discovery/control.sock
+
   api:
     image: ${COMPOSE_PROJECT_NAME:-tnas-vms}-api:${KM_VMS_RELEASE_IMAGE_TAG:-latest}
     build:
@@ -202,6 +219,8 @@ services:
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-api
     restart: always
     depends_on:
+      camera-discovery:
+        condition: service_started
       postgres:
         condition: service_healthy
       redis:
@@ -220,6 +239,7 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       STORAGE_ROOT: /storage/archive
       KMVMS_APP_ROOT: /app
+      CAMERA_DISCOVERY_SOCKET: /run/km-vms-discovery/control.sock
       UPDATE_CONTROL_ROOT: /update-control
       RESTORE_CONTROL_ROOT: /restore-control
       RESTORE_PUBLIC_ROOT: /restore-public
@@ -264,6 +284,7 @@ services:
       - ./.km-vms-source.json:/app/.km-vms-source.json:ro
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/previews:/storage/previews
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/exports:/storage/exports
+      - camera-discovery-runtime:/run/km-vms-discovery:ro
     group_add:
       - video
       - render
@@ -448,3 +469,6 @@ services:
 networks:
   vms-net:
     driver: bridge
+
+volumes:
+  camera-discovery-runtime:

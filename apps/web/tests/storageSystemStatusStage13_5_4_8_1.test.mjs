@@ -73,8 +73,8 @@ assert.match(indicator, /systemHealthIndicatorModel/);
 assert.match(indicator, /data-health-state=\{status\.state\}/);
 assert.match(indicator, /aria-busy=\{status\.loading \|\| undefined\}/);
 assert.match(navCss, /\.systemHealthNavItem-unknown/);
-assert.equal(layout.indexOf('href="/storage"') < layout.indexOf("<SystemHealthIndicator"), true);
-assert.equal(layout.indexOf("<SystemHealthIndicator") < layout.indexOf('href="/settings"'), true);
+assert.equal(layout.indexOf("<SystemHealthIndicator") < layout.indexOf('href="/storage"'), true);
+assert.equal(layout.indexOf('href="/storage"') < layout.indexOf('href="/settings"'), true);
 
 const storagePage = read("app/storage/page.js");
 const storageCss = read("app/styles/40-storage-records-shared.css");

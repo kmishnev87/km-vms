@@ -222,12 +222,20 @@ function renderRecordingsTableDateTime(value, timezone) {
 function ScissorsIcon() {
   return (
     <svg className="recordingsUiIcon recordingsToolbarSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <circle cx="5.5" cy="6.5" r="3"></circle>
-      <circle cx="5.5" cy="17.5" r="3"></circle>
-      <path d="M8.3 8.3 20.5 19.2"></path>
-      <path d="M8.3 15.7 20.5 4.8"></path>
+      <circle cx="6" cy="6" r="2.7"></circle>
+      <circle cx="6" cy="18" r="2.7"></circle>
+      <path d="m8 8 4 4m3 3 5.5 5.5"></path>
+      <path d="M20.5 3.5 8 16"></path>
     </svg>
   );
+}
+
+function FilmstripClipIcon() {
+  return <svg className="recordingsUiIcon recordingsToolbarSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="3" y="4.5" width="18" height="15" rx="1.8" />
+    <path d="M3 8h18M3 16h18M8 4.5V8m8-3.5V8M8 16v3.5m8-3.5v3.5" />
+    <path d="m10 10 4 2-4 2z" />
+  </svg>;
 }
 
 function RefreshIcon() {
@@ -528,7 +536,7 @@ function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
 
 export default function RecordingsPage() {
   const exportSession = useAuthSession();
-  const { text, t: dictionary } = useI18n();
+  const { text, t: dictionary, locale } = useI18n();
   const t = useMemo(
     () => Object.fromEntries(Object.entries(TEXT).map(([key, value]) => [key, text(value)])),
     [text]
@@ -1404,6 +1412,15 @@ export default function RecordingsPage() {
                 aria-label={t.createClip}
               >
                 <ScissorsIcon />
+              </button>
+            ) : null}
+            {canExport ? (
+              <button type="button"
+                className="button secondary small recordingsActionButton recordingsToolbarIconButton recordingsCreateClipButton recordingsCreateClipFilmButton"
+                onClick={openExportModal} disabled={exportBusy}
+                title={`${t.createClipTooltip} — ${locale === "ru" ? "Видеоплёнка" : locale === "zh-CN" ? "胶片" : "Filmstrip"}`}
+                aria-label={`${t.createClip} — ${locale === "ru" ? "Видеоплёнка" : locale === "zh-CN" ? "胶片" : "Filmstrip"}`}>
+                <FilmstripClipIcon />
               </button>
             ) : null}
           </div>

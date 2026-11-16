@@ -57,8 +57,12 @@ assert.match(operations, /integrityManagementDescription/);
 assert.match(operations, /migrationManagementDescription/);
 assert.match(storagePage, /<OperationDialog dialog=\{historyDialog\}/);
 
-assert.match(storagePage, /storageOpsCameraCards/);
-assert.match(responsiveCss, /storageOpsCameraTable[\s\S]*display:\s*none/);
+// The approved compact list replaced the duplicate mobile cards. Its scoped
+// selector must override the older generic mobile-table hiding rule.
+assert.match(storagePage, /storageOpsCompactCameras/);
+assert.match(storagePage, /storageOpsCameraTable/);
+assert.doesNotMatch(storagePage, /storageOpsCameraCards/);
+assert.match(storageCss, /\.storageOpsCompactCameras \.storageOpsCameraTable\s*\{\s*display:\s*block/);
 assert.match(storageCss, /storageOpsDashboard/);
 assert.match(storageCss, /storageOpsRootList/);
 

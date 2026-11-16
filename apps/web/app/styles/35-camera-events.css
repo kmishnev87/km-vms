@@ -58,19 +58,25 @@
 .cameraEventsPreferences .cameraEventsCheck:has(input:focus-visible) { outline: 2px solid #456f94; outline-offset: 2px; border-radius: 3px; }
 .cameraEventsPreferences fieldset:disabled .cameraEventsCheck { cursor: default; }
 .cameraEventsPreferenceMaster { font-weight: 600; }
+.cameraEventsPreferenceIntro { display: grid; grid-template-columns: 160px minmax(0, 1fr); align-items: center; gap: 16px; }
+.cameraEventsPreferenceIntro p { margin: 0; max-width: none; color: #526377; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .cameraEventsSchedule { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px 14px; padding-top: 10px; border-top: 1px solid #dce5ee; }
-.cameraEventsTimeRange { display: inline-flex; align-items: center; gap: 10px; }
+.cameraEventsTimeRange { display: inline-flex; align-items: center; gap: 6px; }
+.cameraEventsTimeRange.isPlaceholder { visibility: hidden; }
 .cameraEventsTimeRange > label { display: inline-flex; align-items: center; gap: 6px; color: #64748b; font-size: 13px; }
-.cameraEventsTimeRange input[type="time"] { width: 82px; height: 32px; padding: 4px 6px; font-variant-numeric: tabular-nums; }
-.cameraEventsTimeInput { width: 90px; min-width: 0; height: 32px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 4px 6px; background: #fff; color: #172238; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; }
+.cameraEventsTimeRange input[type="time"], .cameraEventsTimeInput { width: 62px; min-width: 0; height: 30px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 3px 4px; background: #fff; color: #172238; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; text-align: center; }
 .cameraEventsTimeInput:disabled { background: #f4f7fa; color: #8190a2; }
-.cameraEventsTimeInput::-webkit-calendar-picker-indicator { display: block; opacity: 1; visibility: visible; width: 14px; height: 14px; margin: 0; padding: 0; cursor: pointer; }
+.cameraEventsTimeInput::-webkit-calendar-picker-indicator { display: none; }
+.cameraEventsTimeInput::-webkit-datetime-edit { padding: 0; }
+.cameraEventsTimeSeparator { color: #a0aebe; text-align: center; font-size: 12px; font-weight: 400; line-height: 1; }
 .cameraEventsScheduleMode { width: auto; max-width: 220px; min-width: 0; height: 32px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 4px 6px; background: #fff; color: #334155; font: inherit; font-size: 13px; }
-.cameraEventsCameraPreferences { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
-.cameraEventsCameraPreferences.hasSchedules { grid-template-columns: minmax(0, 1fr); }
-.cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { min-width: 0; display: grid; align-items: center; gap: 12px; padding: 4px 0; }
-.hasSchedules .cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { grid-template-columns: minmax(0, 1fr) 90px 90px; }
-.cameraEventsCameraPreferenceHead { color: #64748b; font-size: 12px; border-bottom: 1px solid #e8eef4; padding: 0 0 6px; }
+.cameraEventsCameraPreferences { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 20px; align-items: start; }
+.cameraEventsCameraPreferenceGroup { min-width: 0; }
+.cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { min-width: 0; display: grid; align-items: center; gap: 4px; padding: 4px 0; }
+.hasSchedules .cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { grid-template-columns: minmax(0, 1fr) 62px 8px 62px; }
+.cameraEventsCameraPreferenceHead { min-height: 27px; line-height: 20px; color: #64748b; font-size: 12px; border-bottom: 1px solid #e8eef4; padding: 0 0 6px; }
+.cameraEventsCameraPreferenceHead > strong { color: #172238; font-size: 13px; font-weight: 600; }
+.cameraEventsCameraPreferences:not(.hasSchedules) .cameraEventsCameraPreferenceHead > span { visibility: hidden; }
 .cameraEventsCameraPreferenceHead > span:not(:first-child) { text-align: center; }
 .cameraEventsPreferences .cameraEventsCameraPreference .cameraEventsCheck span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cameraEventsCameraPreference:has(input:focus-visible) { border-radius: 3px; }
@@ -82,7 +88,6 @@
 .cameraEventsReceivingRow .cameraEventsCheck { min-width: 0; }
 .cameraEventsReceivingRow .cameraEventsCheck span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .cameraEventsReceivingRow > span { color: #64748b; font-size: 12px; text-align: right; }
-.cameraEventsTimeRange input[type="time"]::-webkit-calendar-picker-indicator { display: block; opacity: 1; visibility: visible; width: 14px; height: 14px; margin: 0; padding: 0; cursor: pointer; }
 .cameraEventsPreferenceScroll > small { color: #64748b; font-size: 12px; line-height: 1.5; }
 .cameraEventsPreferenceFooter { flex-shrink: 0; display: flex; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #dce5ee; background: #fff; }
 .cameraEventsPreferenceFooter > .button { min-width: 140px; }
@@ -107,7 +112,12 @@
 .cameraEventsTimelineNav button { width: 30px; height: 28px; border: 1px solid #cbd7e4; background: #f8fbfe; color: #3d688f; border-radius: 6px; cursor: pointer; }
 .cameraEventsTimelineNav button:disabled { opacity: .4; cursor: default; }
 .cameraEventsTimelineNav span { color: #64748b; font-size: 11px; }
+@media (max-width: 1000px) {
+  .cameraEventsCameraPreferences { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 760px) {
+  .cameraEventsCameraPreferences { grid-template-columns: minmax(0, 1fr); }
+  .cameraEventsPreferenceIntro { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .cameraEventsChoices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cameraEventsPreferenceScroll { padding: 14px; }
   .cameraEventsPreferenceFooter { padding: 12px 14px; }
@@ -141,8 +151,6 @@
   .cameraEventsChoices { grid-template-columns: minmax(0, 1fr); }
   .cameraEventsSchedule > .cameraEventsCheck { flex-basis: 100%; justify-content: flex-start; }
   .cameraEventsCameraPreferences { grid-template-columns: minmax(0, 1fr); }
-  .hasSchedules .cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { grid-template-columns: minmax(0, 1fr) 82px 82px; gap: 6px; }
-  .cameraEventsCameraPreference .cameraEventsTimeInput { width: 82px; padding: 4px; }
   .cameraEventsReceiving { padding: 14px; }
   .cameraEventsReceivingRow { grid-template-columns: minmax(0, 1fr) 80px; gap: 10px; }
 }

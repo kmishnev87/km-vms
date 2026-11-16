@@ -76,6 +76,7 @@ def camera(**overrides):
         "name": "Existing",
         "storage_folder_name": "existing",
         "enabled": True,
+        "events_enabled": False,
         "protocol": "onvif",
         "host": "onvif.example.test",
         "port": 20003,

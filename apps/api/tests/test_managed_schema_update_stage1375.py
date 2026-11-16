@@ -88,13 +88,14 @@ def test_next_release_registers_actual_tagged_schema_not_previous_family(tmp_pat
     schema_source.write_text('TARGET_SCHEMA_VERSION = 10\nTARGET_SHAPE_FINGERPRINT = "' + 'c' * 64 + '"\nTARGET_SHAPE_FINGERPRINT_ALTERNATES = frozenset({"' + 'd' * 64 + '"})\n')
     lineage = {"schema_version": 1, "product": "KM VMS", "tag_commits": {"0.8.22": "a" * 40}, "schema_versions": {"0.8.22": 9}, "shape_fingerprints": {"0.8.22": "b" * 64}, "shape_alternates": {}}
     (release / "km-vms-update-lineage.json").write_text(json.dumps(lineage))
+    (release / "km-vms-release.json").write_text(json.dumps({"version": "0.8.23", "schema_update": {"mode": "managed", "target_version": 10}}))
     for args in (["init", "-q"], ["config", "user.email", "test@example.invalid"], ["config", "user.name", "KM VMS test"], ["add", "."], ["commit", "-qm", "isolated tagged fixture"], ["tag", "v0.8.23"]):
         subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
     # Load the real helper's pure Python definitions, without running its CLI.
     script = (ROOT / "scripts/km-vms-release-cycle.sh").read_text(encoding="utf-8")
     python = script.split("<<'PY'\n", 1)[1].split("\nif prepare_version:", 1)[0]
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["release-helper-test", "0", "0", "", "0", "1", ""])
+    monkeypatch.setattr(sys, "argv", ["release-helper-test", "0", "0", "", "0", "1", "", "0"])
     namespace = {}
     exec(compile(python, "release_helper_definitions", "exec"), namespace)
     descriptor = {"requires_migration": False, "schema_update": {"mode": "managed", "target_version": 10}}

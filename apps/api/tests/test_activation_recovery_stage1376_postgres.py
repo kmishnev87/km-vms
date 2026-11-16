@@ -37,7 +37,9 @@ def recovery_database(monkeypatch):
         admin.dispose()
 
 
-def run_probe(monkeypatch, source=10, target=10):
+def run_probe(monkeypatch, source=None, target=None):
+    source = control.TARGET_SCHEMA_VERSION if source is None else source
+    target = control.TARGET_SCHEMA_VERSION if target is None else target
     binding = _journal()
     binding['schema'].update(source_version=source, target_version=target)
     monkeypatch.setattr(sys, 'argv', ['rollback-proof', json.dumps(binding)])
@@ -69,12 +71,14 @@ def test_unknown_and_partial_mutation_stays_blocked(recovery_database, monkeypat
 
 
 def test_completed_signed_forward_schema_allows_previous_prepared_runtime(recovery_database, monkeypatch, capsys):
-    monkeypatch.setattr(schema_versioning, 'CURRENT_SCHEMA_VERSION', 9)
-    monkeypatch.setattr(schema_migrations, 'CURRENT_SCHEMA_VERSION', 9)
-    monkeypatch.setattr(control, 'TARGET_SCHEMA_VERSION', 9)
-    run_probe(monkeypatch, source=9, target=10)
+    target = control.TARGET_SCHEMA_VERSION
+    previous = target - 1
+    monkeypatch.setattr(schema_versioning, 'CURRENT_SCHEMA_VERSION', previous)
+    monkeypatch.setattr(schema_migrations, 'CURRENT_SCHEMA_VERSION', previous)
+    monkeypatch.setattr(control, 'TARGET_SCHEMA_VERSION', previous)
+    run_probe(monkeypatch, source=previous, target=target)
     proof = json.loads(capsys.readouterr().out)
-    assert proof['mode'] == 'verified_forward_compatible' and proof['schema_version'] == 10
+    assert proof['mode'] == 'verified_forward_compatible' and proof['schema_version'] == target
 
 
 def test_concurrent_schema_owner_is_not_interrupted_or_waited_forever(recovery_database, monkeypatch):

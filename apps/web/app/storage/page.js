@@ -8,6 +8,7 @@ import { partitionArchiveCameras } from "../../lib/archiveCameraGroups";
 import useStorageMigrationController from "../../lib/useStorageMigrationController";
 import useStorageIntegrityController from "../../lib/useStorageIntegrityController";
 import ArchiveIntegrityDialog from "../../components/storage/ArchiveIntegrityDialog";
+import ArchiveRulesDialog from "../../components/storage/ArchiveRulesDialog";
 import useStorageActivationController from "../../lib/useStorageActivationController";
 import { newStorageOperationId, blockerText, errorDetailText, archiveRootPath, activationProgressTone, activationProgressStatusText, activationProgressReasonText, activationProgressItems, ACTIVATION_ACK_KEY } from "../../lib/storagePagePresentation";
 import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
@@ -598,6 +599,7 @@ function StorageOperationsPageContent() {
   const [archiveRootDialog, setArchiveRootDialog] = useState(null);
   const [operationToast, setOperationToast] = useState(null);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [archiveRulesOpen, setArchiveRulesOpen] = useState(false);
   const [rootAction, setRootAction] = useState("");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
@@ -1173,14 +1175,15 @@ function StorageOperationsPageContent() {
           ],
           action: manageCamerasPermission.allowed
             ? (
-              <a
+              <button
                 className="button secondary small appIllustratedAction"
-                href="/cameras"
+                type="button"
+                onClick={() => setArchiveRulesOpen(true)}
                 title={copy.configureCameras}
                 aria-label={copy.configureCameras}
               >
                 <img src="/assets/icons/ui/camera.png" alt="" aria-hidden="true" />
-              </a>
+              </button>
             )
             : (
               <button
@@ -1618,6 +1621,7 @@ function StorageOperationsPageContent() {
           onReset={resetMigrationDraft}
         />
         <OperationDialog dialog={historyDialog} onClose={() => setHistoryDialogOpen(false)} />
+        {archiveRulesOpen ? <ArchiveRulesDialog onClose={() => setArchiveRulesOpen(false)} onSaved={() => loadStatus({ silent: true })} /> : null}
         <OperationDialog dialog={archiveRootDialog} onClose={closeArchiveRootDialog} />
         <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>
