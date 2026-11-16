@@ -1,7 +1,7 @@
 import base64
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -18,6 +18,17 @@ from app.routers.deps import get_current_user
 from app.routers import mobile_push as routes
 from app.services import camera_events as events, mobile_push as push, mobile_push_store as store
 from app.services import mobile_push_transport as transport
+
+
+@pytest.mark.parametrize("value", ["2026-11-16T04:25:38+00:00", "2026-11-16T04:25:38Z", "2026-11-16T09:25:38+05:00", datetime(2026, 11, 16, 4, 25, 38)])
+def test_push_time_is_android_8_compatible_utc_z(value):
+    assert push.push_timestamp(value) == "2026-11-16T04:25:38Z"
+    encoded = json.loads(push.event_payload({"id": str(uuid.uuid4()), "kind": "intrusion", "occurred_at": value}))
+    assert encoded["occurred_at"] == "2026-11-16T04:25:38Z"
+
+
+def test_push_fractional_seconds_are_preserved():
+    assert push.push_timestamp("2026-11-16T09:25:38.123456+05:00") == "2026-11-16T04:25:38.123456Z"
 
 
 @pytest.fixture

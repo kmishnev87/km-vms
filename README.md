@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.20](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.20)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.21](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.21)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.20/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.20
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.21/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.21
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -189,12 +189,18 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - Choose a subset of live cameras in a compact, dismissible panel. Selection numbers and drag-to-reorder control the viewing order; each saved NAS/account connection keeps its normal set independently of temporary single-camera viewing.
 - Supported PTZ with low-latency viewing during control.
 - Recordings, clips, synchronized chronology, camera management, events, storage, server health, and NAS maintenance.
+- Select timeline cameras in the order you need, then drag to reorder them; retained archives of deleted cameras remain available for manual selection.
+- Access camera presets in fullscreen PTZ control. Swipe a recording to reveal deletion, with confirmation before removal.
+- Add, edit, enable, disable and delete NAS user accounts and assign supported roles from the phone, under the same server-enforced permissions and owner protections as the browser.
 - A notification setup offer after the first NAS login, with a separately remembered choice for each server.
 - Notifications that open the corresponding server, camera, and event.
+- Built-in app diagnostics: add a comment and send a client report directly to KM VMS support from Settings. No ZIP needs to be created, saved, or shared on the phone; the support server confirms acceptance with a report number.
 - APK checks on the first foreground opening in a new day, plus manual checks. Before installation, the client checks size, hash, package, version, and signing certificate. Android asks for installation confirmation.
 - NAS update checks start when you enter the Android maintenance screen. Follow server-reported stages and the current operation; APK downloads show transferred bytes and a measured percentage, followed by a separate verification step.
 
 Background alerts use a compatible **UnifiedPush provider**, not continuous NAS polling. Delivery can use supported Google-service infrastructure or a separately installed distributor such as ntfy. Android notification permission, an available delivery service, network access, and suitable device battery settings are required. Video and archive viewing do not depend on push being enabled.
+
+The private, bounded app journal distinguishes receipt, parsing, Android posting, and intentional suppression of a notification. Diagnostics exclude passwords, tokens, camera images, video, and raw push packets. Sending is explicit, not automatic telemetry. For NAS/server problems, send the separate server report from the web interface.
 
 Download the APK from **Settings → Download APK** in the NAS web interface or [GitHub Releases](https://github.com/kmishnev87/km-vms/releases). APK information is bundled with the NAS release. NAS and Android version numbers are independent; use the official signed APK to update an installed client.
 

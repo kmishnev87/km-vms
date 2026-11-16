@@ -21,6 +21,7 @@ import ru.kmvms.mobile.core.ServerAddress
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
+import ru.kmvms.mobile.diagnostics.*
 
 private class InstallationCookies : CookieJar {
     private val cookies = mutableListOf<Cookie>()
@@ -149,9 +150,23 @@ class NasApi(val address: ServerAddress) {
                 val text = source.readUtf8().trim()
                 when { text.startsWith('[') -> JSONArray(text); text.startsWith('{') -> JSONObject(text); else -> throw NasException(ApiProblem.SERVER) }
             }
-        } catch (error: NasException) { throw error }
-        catch (_: IOException) { throw NasException(ApiProblem.CONNECTION) }
-        catch (_: org.json.JSONException) { throw NasException(ApiProblem.SERVER) }
+        } catch (error: NasException) { diagnosticFailure(path, error.httpStatus ?: 0); throw error }
+        catch (_: IOException) { diagnosticFailure(path, 0); throw NasException(ApiProblem.CONNECTION) }
+        catch (_: org.json.JSONException) { diagnosticFailure(path, -1); throw NasException(ApiProblem.SERVER) }
+    }
+
+    private fun diagnosticFailure(path: String, status: Int) {
+        val area = when {
+            path.startsWith("api/auth/") -> DiagnosticArea.AUTH
+            path.startsWith("api/mobile/push/") -> DiagnosticArea.PUSH
+            path.startsWith("api/camera-events") -> DiagnosticArea.EVENTS
+            path.startsWith("api/recordings") || path.startsWith("api/archive/") || path.startsWith("api/chronology") -> DiagnosticArea.ARCHIVE
+            path.startsWith("api/live/") -> DiagnosticArea.LIVE
+            path.startsWith("api/cameras") -> DiagnosticArea.CAMERAS
+            path.startsWith("api/settings") || path.startsWith("api/system") -> DiagnosticArea.SETTINGS
+            else -> DiagnosticArea.OTHER
+        }
+        AppDiagnostics.record(DiagnosticCode.API_FAILED, area, number = status)
     }
 
     private suspend fun renewSession(expected: String) = renewalLock.withLock {

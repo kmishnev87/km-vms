@@ -6,6 +6,7 @@ import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
 import ru.kmvms.mobile.data.ProfileVault
+import ru.kmvms.mobile.diagnostics.*
 
 class MobilePushService : PushService() {
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
@@ -19,13 +20,20 @@ class MobilePushService : PushService() {
         PushUploadWorker.enqueue(this, binding.profileId)
     }
     override fun onMessage(message: PushMessage, instance: String) {
-        if (!message.decrypted) return
-        val binding = PushStore(this).byInstance(instance)?.takeIf { it.enabled } ?: return
+        AppDiagnostics.record(DiagnosticCode.PUSH_RECEIVED, DiagnosticArea.PUSH)
+        if (!message.decrypted) { AppDiagnostics.record(DiagnosticCode.PUSH_NOT_DECRYPTED, DiagnosticArea.PUSH); return }
+        val binding = PushStore(this).byInstance(instance)
+        if (binding == null) { AppDiagnostics.record(DiagnosticCode.PUSH_NO_BINDING, DiagnosticArea.PUSH); return }
+        fun log(code: DiagnosticCode) = AppDiagnostics.record(code, DiagnosticArea.PUSH, profile = binding.profileId)
+        if (!binding.enabled) { log(DiagnosticCode.PUSH_DISABLED); return }
         val vault = ProfileVault(this)
-        val profile = vault.profiles().find { it.id == binding.profileId } ?: return
-        if (runCatching { vault.signIn(profile.id) }.getOrNull() == null) return
-        val envelope = runCatching { PushEnvelope.parse(message.content) }.getOrNull() ?: return
-        MobileNotifications.show(this, profile, envelope)
+        val profile = vault.profiles().find { it.id == binding.profileId }
+        if (profile == null) { log(DiagnosticCode.PUSH_NO_PROFILE); return }
+        if (runCatching { vault.signIn(profile.id) }.getOrNull() == null) { log(DiagnosticCode.PUSH_NO_SESSION); return }
+        val envelope = runCatching { PushEnvelope.parse(message.content) }.getOrNull()
+        if (envelope == null) { log(DiagnosticCode.PUSH_PARSE_FAILED); return }
+        AppDiagnostics.record(DiagnosticCode.PUSH_PARSED, DiagnosticArea.PUSH, profile.id, envelope.eventId, envelope.cameraId)
+        runCatching { MobileNotifications.show(this, profile, envelope) }.onFailure { log(DiagnosticCode.PUSH_POST_FAILED) }
     }
     override fun onRegistrationFailed(reason: FailedReason, instance: String) {
         val state = when (reason) {

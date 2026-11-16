@@ -149,14 +149,8 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
                 }
             }
         }
-        if (singleId == null && cameras.isNotEmpty()) FilledTonalButton(onClick = { choosing = true },
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = 16.dp, end = 20.dp).height(44.dp).testTag("live-camera-selector"),
-            contentPadding = PaddingValues(horizontal = 10.dp), shape = RoundedCornerShape(12.dp)) {
-            Icon(painterResource(R.drawable.kmvms_camera), stringResource(R.string.live_choose_cameras),
-                tint = Color.Unspecified, modifier = Modifier.size(24.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("${viewingIds.size}/${cameras.size}", style = MaterialTheme.typography.labelMedium)
-        }
+        if (singleId == null && cameras.isNotEmpty()) CameraSelectionButton(viewingIds.size, cameras.size, { choosing = true },
+            Modifier.align(Alignment.TopEnd).padding(top = 16.dp, end = 20.dp).testTag("live-camera-selector"))
         }
     } else {
         key(selected.id) { LiveCameraDetail(selected, capabilities[selected.id], controller, immersive,

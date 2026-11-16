@@ -53,6 +53,10 @@ class MobileNotificationTest {
             val retained = (0 until prior.length()).map { prior.getString(it) }.filterNot { it.startsWith(profile.id + ":") }
             history.edit().putString("delivered_v1", JSONArray(retained).toString()).remove("last_received.${profile.id}").commit()
         }
+        // NotificationManager.cancel is asynchronous across the system-service boundary.
+        val cancelDeadline = SystemClock.elapsedRealtime() + 2_000
+        while (manager.activeNotifications.any { it.tag?.startsWith(profile.id + ":") == true } && SystemClock.elapsedRealtime() < cancelDeadline)
+            SystemClock.sleep(25)
         assertFalse(manager.activeNotifications.any { it.tag?.startsWith(profile.id + ":") == true })
     }
 }

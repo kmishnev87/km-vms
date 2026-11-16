@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.9.20](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.20)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.9.21](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.21)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.20/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.20
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.21/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.21
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.20 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.21 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.20 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.21 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -119,7 +119,7 @@ With camera-management permission, the adjacent trash icon deletes selected even
 
 ## Native Android client
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.4.apk** from the [0.9.20 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.20). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.5.apk** from the [0.9.21 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.21). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.
@@ -128,6 +128,10 @@ With camera-management permission, the adjacent trash icon deletes selected even
 The app checks the official APK metadata on the first foreground opening in a new day and on manual request. It checks size, hash, package/version and signing certificate before offering the system installer. Download and Android installation confirmation are explicit; the update keeps app data and NAS profiles. The NAS and mobile version numbers are independent. Use only the official signed asset for subsequent updates.
 
 Live view, low-latency PTZ where supported, recordings, clips, synchronized chronology, camera management, storage, status, backups and NAS updates use the server's existing permissions and protected operations. Missing footage, an offline camera or unsupported PTZ capability is not silently replaced with another camera's video.
+
+For mobile-client problems, open **Settings → Android app diagnostics → Send an app report**, add an optional comment and approximate time, then send. The APK uploads bounded diagnostics directly to the HTTPS support receiver; no ZIP file is created or saved on the phone. Success requires a matching report number from the receiver. A retry of the same in-memory report does not create a duplicate. Nothing is uploaded automatically.
+
+The private journal is capped at 5 MiB and seven days; a report includes the latest 2,000 typed entries plus app/Android versions, notification permission/channel state, provider and registration state, and available process-exit reasons. It does not include passwords, access tokens, NAS addresses, camera images, video or raw notification packets. Do not put passwords in the comment. If the problem is with the NAS/server rather than the APK, send a server report from the **web interface** instead. APK diagnostics can be sent without contacting the NAS; internet access to the support receiver is still required.
 
 ## Updating an existing installation
 

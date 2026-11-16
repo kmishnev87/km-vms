@@ -1,9 +1,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$SigningConfig,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [string]$ReleaseTag = 'v0.9.20',
-    [string]$VersionName = '0.8.4',
-    [int]$VersionCode = 804,
+    [string]$ReleaseTag = 'v0.9.21',
+    [string]$VersionName = '0.8.5',
+    [int]$VersionCode = 805,
     [string]$Gradle = 'gradle',
     [string]$AndroidSdk = $env:ANDROID_SDK_ROOT
 )

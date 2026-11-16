@@ -8,6 +8,7 @@ import org.json.JSONObject
 import ru.kmvms.mobile.core.ServerAddress
 import ru.kmvms.mobile.data.*
 import java.util.concurrent.TimeUnit
+import ru.kmvms.mobile.diagnostics.*
 
 /** One-time registration retry; never a periodic event-polling job. */
 class PushUploadWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
@@ -31,6 +32,7 @@ class PushUploadWorker(context: Context, parameters: WorkerParameters) : Corouti
             val retry = (code == null || code == 429 || code >= 500) && runAttemptCount < 10
             PushStore(applicationContext).status(id, if (retry) PushStatus.UPLOADING else if (code == 404) PushStatus.SERVER_UNSUPPORTED else PushStatus.SERVER_REJECTED, binding.revision)
             android.util.Log.w("KMVMS-Push", "registration_upload_http_${code ?: 0}")
+            AppDiagnostics.record(DiagnosticCode.PUSH_UPLOAD_FAILED, DiagnosticArea.PUSH, id, number = code ?: 0)
             return if (retry) Result.retry() else Result.failure()
         }
     }

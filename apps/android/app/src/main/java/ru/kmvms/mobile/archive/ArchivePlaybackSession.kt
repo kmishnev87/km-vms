@@ -14,6 +14,7 @@ import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.media.RecordingDataSource
 import ru.kmvms.mobile.media.VideoState
 import ru.kmvms.mobile.media.VideoStatus
+import ru.kmvms.mobile.diagnostics.*
 
 data class ArchivePosition(val position: Long = 0, val duration: Long = 0, val playing: Boolean = false)
 
@@ -48,6 +49,7 @@ class ArchivePlaybackSession(context: Context, api: NasApi, recording: Recording
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
+                AppDiagnostics.record(DiagnosticCode.ARCHIVE_FAILED, DiagnosticArea.ARCHIVE, number = error.errorCode)
                 mutableVideo.value = VideoState(VideoStatus.FAILED, unsupportedCodec = error.errorCode in setOf(
                     PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
                     PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES))

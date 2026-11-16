@@ -20,9 +20,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
@@ -31,6 +31,7 @@ import ru.kmvms.mobile.archive.*
 import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.ui.Muted
 import ru.kmvms.mobile.ui.Outline
+import ru.kmvms.mobile.ui.DashboardImage
 import java.time.LocalDate
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -65,15 +66,23 @@ import kotlinx.coroutines.launch
         else -> Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(start=16.dp, end=8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.recordings), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                if (canExport) TextButton(onClick = { clips = true }, modifier = Modifier.testTag("open-clips")) { Text(stringResource(R.string.clips)) }
+                if (canExport) OutlinedButton(onClick = { clips = true }, modifier = Modifier.height(36.dp).testTag("open-clips"),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+                    DashboardImage(R.drawable.kmvms_menu_recordings, Modifier.size(24.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.clips), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
+                }
                 IconButton(onClick = browser::refresh, enabled = !state.loading) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal=16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.weight(1f)) {
                     OutlinedButton(onClick = { cameraMenu = true }, Modifier.fillMaxWidth().height(48.dp).testTag("recording-camera-picker")) {
                         val chosen = state.cameras.find { it.value == camera }
-                        Text(chosen?.name ?: stringResource(R.string.all_cameras), maxLines=1, overflow=TextOverflow.Ellipsis, modifier=Modifier.weight(1f))
-                        if(chosen?.deleted == true) Text(" (${stringResource(R.string.deleted_camera)})", color=Muted, style=MaterialTheme.typography.labelSmall)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                            Text(chosen?.name ?: stringResource(R.string.all_cameras), maxLines=1, overflow=TextOverflow.Ellipsis,
+                                modifier=Modifier.weight(1f, fill=false), textAlign=TextAlign.Center)
+                            if(chosen?.deleted == true) Text(" (${stringResource(R.string.deleted_camera)})", color=Muted, style=MaterialTheme.typography.labelSmall)
+                        }
                     }
                     DropdownMenu(cameraMenu, { cameraMenu = false }, modifier=Modifier.heightIn(max=360.dp).widthIn(min=224.dp,max=360.dp).testTag("recording-camera-menu")) {
                         DropdownMenuItem(text = { Text(stringResource(R.string.all_cameras),style=MaterialTheme.typography.bodySmall) }, modifier=Modifier.height(44.dp), onClick = { camera=null; cameraMenu=false })
@@ -97,7 +106,9 @@ import kotlinx.coroutines.launch
                         day.year, day.monthValue-1, day.dayOfMonth).apply {
                         setButton(android.content.DialogInterface.BUTTON_NEUTRAL, context.getString(R.string.all_dates)) { _, _ -> date=null }
                     }.show()
-                }, Modifier.weight(1f).height(48.dp)) { Text(date ?: stringResource(R.string.all_dates), maxLines=1) }
+                }, Modifier.weight(1f).height(48.dp).testTag("recording-date-picker")) {
+                    Text(date ?: stringResource(R.string.all_dates), maxLines=1, modifier=Modifier.fillMaxWidth(), textAlign=TextAlign.Center)
+                }
             }
             Box(Modifier.fillMaxWidth().height(28.dp).padding(horizontal=16.dp), contentAlignment = Alignment.CenterStart) {
                 if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -107,6 +118,8 @@ import kotlinx.coroutines.launch
             LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(16.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
                 if (state.items.isEmpty() && !state.loading) item { Text(stringResource(R.string.no_recordings), color=Muted) }
                 items(state.items, key={it.identityKey}) { recording ->
+                    RecordingSwipeCard(recording.id.toString(), canDelete, deleting,
+                        requestDelete = { deletion = recording to UUID.randomUUID().toString() }) {
                     Surface(modifier=Modifier.fillMaxWidth().testTag("recording-${recording.id}"), shape=RoundedCornerShape(14.dp),
                         color=Color.White, border=androidx.compose.foundation.BorderStroke(1.dp, Outline)) {
                         Row(Modifier.padding(14.dp), verticalAlignment=Alignment.CenterVertically) {
@@ -119,12 +132,8 @@ import kotlinx.coroutines.launch
                             IconButton(onClick={selected=recording},enabled=recording.canPlay && !state.loading) {
                                 Icon(Icons.Default.PlayArrow, stringResource(R.string.play))
                             }
-                            if(canDelete) IconButton(onClick={deletion=recording to UUID.randomUUID().toString()},
-                                enabled=!deleting,modifier=Modifier.testTag("recording-delete-${recording.id}")) {
-                                Icon(painterResource(R.drawable.ic_camera_trash),stringResource(R.string.remove),
-                                    tint=Color(0xFFD85C63),modifier=Modifier.size(21.dp))
-                            }
                         }
+                    }
                     }
                 }
                 if (state.more) item { OutlinedButton(onClick=browser::more, enabled=!state.loading, modifier=Modifier.fillMaxWidth()) { Text(stringResource(R.string.load_more)) } }

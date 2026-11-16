@@ -45,7 +45,7 @@ import ru.kmvms.mobile.ui.Muted
                     Text(Formatter.formatShortFileSize(context,snapshot.archiveBytes),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.SemiBold)
                     Text(stringResource(R.string.archive_used),color=Muted,style=MaterialTheme.typography.labelMedium)
                     if(snapshot.available&&snapshot.total!=null&&snapshot.free!=null&&snapshot.total>0) {
-                        LinearProgressIndicator(progress={((snapshot.total-snapshot.free).toDouble()/snapshot.total).toFloat().coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth())
+                        LinearProgressIndicator(progress={((snapshot.total-snapshot.free).toDouble()/snapshot.total).toFloat().coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth(),drawStopIndicator={})
                         Text(stringResource(R.string.disk_space,Formatter.formatShortFileSize(context,snapshot.free),Formatter.formatShortFileSize(context,snapshot.total)),color=Muted,style=MaterialTheme.typography.bodySmall)
                     }else Text(stringResource(if(snapshot.available)R.string.capacity_unavailable else R.string.storage_unavailable),color=if(snapshot.available)Muted else MaterialTheme.colorScheme.error)
                     if(snapshot.problems>0)Text(stringResource(R.string.archive_problem_count,snapshot.problems),color=MaterialTheme.colorScheme.error)
@@ -70,16 +70,22 @@ import ru.kmvms.mobile.ui.Muted
                     }
                 }}
                 item{Text(stringResource(R.string.archive_roots),style=MaterialTheme.typography.titleMedium)}
-                items(snapshot.roots,key={it.id}){root->Panel{
-                    Row(verticalAlignment=Alignment.CenterVertically){
-                        Text(root.label.ifBlank{stringResource(R.string.archive)},modifier=Modifier.weight(1f),fontWeight=FontWeight.Medium)
-                        if(root.active)Text(stringResource(R.string.active_archive),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
-                    }
-                    root.path?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=Muted,maxLines=2,overflow=TextOverflow.Ellipsis)}
-                    Text(Formatter.formatShortFileSize(context,root.bytes),style=MaterialTheme.typography.bodySmall,color=Muted)
-                    if(!root.readable)Text(stringResource(if(root.requiresActivation&&!root.active)R.string.inactive_archive else R.string.storage_unavailable),style=MaterialTheme.typography.bodySmall,color=if(root.requiresActivation&&!root.active)Muted else MaterialTheme.colorScheme.error)
-                }}
+                items(snapshot.roots,key={it.id}){root->ArchiveRootCard(root)}
             }
+        }
+    }
+}
+@Composable internal fun ArchiveRootCard(root:ArchiveRoot) {
+    val context=LocalContext.current
+    Panel {
+        Row(Modifier.fillMaxWidth().testTag("archive-root-${root.id}"),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                Text(root.label.ifBlank{stringResource(R.string.archive)},fontWeight=FontWeight.Medium)
+                root.path?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=Muted,maxLines=2,overflow=TextOverflow.Ellipsis)}
+                Text(Formatter.formatShortFileSize(context,root.bytes),style=MaterialTheme.typography.bodySmall,color=Muted)
+                if(!root.readable)Text(stringResource(if(root.requiresActivation&&!root.active)R.string.inactive_archive else R.string.storage_unavailable),style=MaterialTheme.typography.bodySmall,color=if(root.requiresActivation&&!root.active)Muted else MaterialTheme.colorScheme.error)
+            }
+            if(root.active)Text(stringResource(R.string.active_archive),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary,modifier=Modifier.testTag("archive-root-active-${root.id}"))
         }
     }
 }

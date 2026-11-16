@@ -60,6 +60,8 @@ import ru.kmvms.mobile.ui.archive.ClipTimeDialog
 import ru.kmvms.mobile.archive.zoneLabel
 import ru.kmvms.mobile.ui.live.SpeakerIcon
 import ru.kmvms.mobile.ui.live.VideoSurface
+import ru.kmvms.mobile.ui.live.CameraSelectionButton
+import ru.kmvms.mobile.ui.live.OrderedCameraPicker
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -118,7 +120,7 @@ import java.time.format.DateTimeFormatter
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (!compact) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.chronology), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { chooseCameras = true }, modifier = Modifier.testTag("timeline-cameras")) { Text(stringResource(R.string.cameras)) }
+                    CameraSelectionButton(chosen.size, archiveCameras.size, { chooseCameras = true }, Modifier.testTag("timeline-cameras"))
                     IconButton(onClick = controller::refreshRanges, enabled = !state.loadingRanges) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -131,7 +133,7 @@ import java.time.format.DateTimeFormatter
                     }
                     if (compact) {
                         TimelineControls(controller, state, Modifier.weight(1f))
-                        TextButton(onClick = { chooseCameras = true }, modifier = Modifier.testTag("timeline-cameras")) { Text(stringResource(R.string.cameras)) }
+                        CameraSelectionButton(chosen.size, archiveCameras.size, { chooseCameras = true }, Modifier.testTag("timeline-cameras"))
                         IconButton(onClick = controller::refreshRanges, enabled = !state.loadingRanges) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
                     }
                 }
@@ -156,7 +158,7 @@ import java.time.format.DateTimeFormatter
             }
         }
     }
-    if (chooseCameras) TimelineCameraPicker(archiveCameras, chosen, { chooseCameras = false }) { selected -> chosen = selected; chooseCameras = false }
+    if (chooseCameras) OrderedCameraPicker(archiveCameras, chosen, { chooseCameras = false }, includeRetained = true, tagPrefix = "timeline") { selected -> chosen = selected; chooseCameras = false }
     if (chooseTime) ClipTimeDialog("timeline", moment.toLocalTime(), { chooseTime = false }) { time ->
         controller.seek(state.day.atTime(time).atZone(state.zone).toInstant().toEpochMilli()); chooseTime = false
     }
@@ -204,24 +206,4 @@ import java.time.format.DateTimeFormatter
             phase==TimelinePhase.READY -> VideoStatus.PLAYING
             else -> VideoStatus.BUFFERING }, unsupportedCodec = track?.unsupportedCodec() == true),
         controller::retry, modifier.testTag("timeline-video-$id"), zoomable = true, onTap = expand)
-}
-
-@Composable private fun TimelineCameraPicker(cameras: List<Camera>, current: List<Long>, dismiss: () -> Unit, choose: (List<Long>) -> Unit) {
-    var selected by remember { mutableStateOf(current.toSet()) }
-    val ordered = remember(cameras) { cameras.sortedBy { it.deleted } }
-    AlertDialog(onDismissRequest = dismiss, modifier = Modifier.semantics { testTagsAsResourceId = true }, title = { Text(stringResource(R.string.cameras)) },
-        text = {
-            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                ordered.forEachIndexed { index, camera ->
-                    if(camera.deleted && ordered.getOrNull(index-1)?.deleted != true) {
-                        HorizontalDivider(Modifier.padding(vertical=10.dp))
-                        Text(stringResource(R.string.retained_archive_cameras),style=MaterialTheme.typography.labelMedium,color=Muted,modifier=Modifier.padding(start=12.dp,bottom=6.dp).testTag("timeline-retained-divider"))
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(camera.id in selected, { value -> selected = if (value) selected + camera.id else selected - camera.id }, modifier = Modifier.testTag("timeline-select-${camera.id}"))
-                    Text(camera.name + if(camera.deleted) " (${stringResource(R.string.deleted_camera)})" else "", modifier = Modifier.weight(1f), maxLines = 2)
-                } }
-            }
-        }, confirmButton = { TextButton(onClick = { choose(cameras.map { it.id }.filter { it in selected }) }, modifier = Modifier.testTag("timeline-camera-confirm")) { Text(stringResource(R.string.apply)) } },
-        dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
 }

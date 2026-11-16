@@ -214,7 +214,10 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                         } else null) }
                     section == Section.STORAGE -> model.api()?.let{api->StorageScreen(api,state.active!!.id,state.user?.can("run_diagnostics")==true){text->uiScope.launch{snackbars.showSnackbar(text)}}}
                     section == Section.SYSTEM -> model.api()?.let{api->SystemScreen(api){text->uiScope.launch{snackbars.showSnackbar(text)}}}
-                    section == Section.SERVER_SETTINGS -> model.api()?.let{api->ServerSettingsScreen(api,state.active!!.id,{section=Section.SETTINGS}){text->uiScope.launch{snackbars.showSnackbar(text)}}}
+                    section == Section.SERVER_SETTINGS -> model.api()?.let{api->state.user?.let{actor->
+                        key(api,actor.id) { ServerSettingsScreen(api,state.active!!.id,actor,
+                            {if(model.api()===api)model.signOut()},{section=Section.SETTINGS}){text->uiScope.launch{snackbars.showSnackbar(text)}} }
+                    }}
                     section == Section.SETTINGS -> SettingsScreen(state, model::openConnection,
                         { model.select(it) }, { removeConfirmation = it }, { signOutConfirmation = true }, {section=Section.SERVER_SETTINGS}, updates)
                     else -> Unit
@@ -350,7 +353,10 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
             Icon(Icons.Default.Settings,null);Spacer(Modifier.width(8.dp));Text(stringResource(R.string.server_settings))
         }
         AppUpdatePanel(updates)
-        if (state.user != null) TextButton(onClick = signOut) { Text(stringResource(R.string.sign_out)) }
+        ApkDiagnosticsPanel()
+        if (state.user != null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            OutlinedButton(onClick = signOut, modifier = Modifier.height(44.dp).testTag("sign-out")) { Text(stringResource(R.string.sign_out)) }
+        }
     }
 }
 

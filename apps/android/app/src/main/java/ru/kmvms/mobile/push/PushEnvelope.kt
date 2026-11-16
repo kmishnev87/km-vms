@@ -3,6 +3,7 @@ package ru.kmvms.mobile.push
 import org.json.JSONObject
 import ru.kmvms.mobile.events.CameraEventKind
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.UUID
 
 /** A push can display text, not carry a credential, media address or command. */
@@ -23,7 +24,9 @@ data class PushEnvelope(val eventId: String, val cameraId: Long?, val cameraName
             val objects = if (classes == null) emptySet() else (0 until minOf(3, classes.length())).map {
                 CameraEventKind.parse(classes.optString(it)) }.filter { it in setOf(CameraEventKind.PERSON, CameraEventKind.VEHICLE, CameraEventKind.ANIMAL) }.toSet()
             return PushEnvelope(id, cameraId, name, CameraEventKind.parse(value.optString("kind")),
-                Instant.parse(value.getString("occurred_at")), test, objects)
+                // Android 8–12 Instant.parse rejects offsets accepted by newer
+                // Android/JDKs. Accept both current UTC-Z and older NAS +00:00.
+                OffsetDateTime.parse(value.getString("occurred_at")).toInstant(), test, objects)
         }
     }
 }

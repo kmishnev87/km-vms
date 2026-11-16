@@ -35,7 +35,7 @@ export default function ArchiveCameraSelect({ items, value, onChange, allLabel, 
     <button type="button" ref={trigger} className="select recordingsFilterSelect archiveCameraTrigger" title={label}
       aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={() => setOpen(previous => !previous)} onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); } }}>
-      <span>{label}</span><span aria-hidden="true">⌄</span>
+      <span>{label}</span><svg className="archiveCameraChevron" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
     </button>
     {open ? <div className="archiveCameraMenu" role="listbox" aria-label={allLabel} id={id} ref={menu} onKeyDown={keys}>
       {option({ value: "__all__", name: allLabel })}{groups.active.map(option)}

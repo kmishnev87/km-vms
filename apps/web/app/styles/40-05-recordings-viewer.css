@@ -13,7 +13,7 @@
 
 .recordingsFilterCard {
   margin-bottom: 12px;
-  padding: 14px 16px;
+  padding: 8px 12px;
 }
 
 .recordingsFilterBar {
@@ -34,24 +34,55 @@
   min-width: max-content;
 }
 
-.recordingsFilterSelect {
+.recordingsFilterCard .recordingsFilterSelect {
   width: 280px;
   min-width: 260px;
   max-width: 320px;
-  min-height: 40px;
-  padding: 8px 12px;
-  border-radius: 12px;
+  height: 36px;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: 10px;
   font-size: 14px;
+  line-height: 20px;
 }
 
-.recordingsFilterDate {
+.recordingsFilterCard .recordingsFilterDate {
   width: 170px;
   min-width: 160px;
   max-width: 180px;
-  min-height: 40px;
-  padding: 8px 12px;
-  border-radius: 12px;
+  height: 36px;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: 10px;
   font-size: 14px;
+  line-height: 20px;
+}
+
+.archiveCameraChevron { display: block; flex: 0 0 16px; }
+
+.recordingsFilterCard .button.secondary.small.recordingsActionButton,
+.recordingsFilterCard .button.secondary.small.recordingsDangerTrigger {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+}
+
+@media (pointer: coarse) {
+  .recordingsFilterCard .recordingsFilterSelect,
+  .recordingsFilterCard .recordingsFilterDate,
+  .recordingsFilterCard .button.secondary.small.recordingsActionButton,
+  .recordingsFilterCard .button.secondary.small.recordingsDangerTrigger { height: 44px; min-height: 44px; }
+  .recordingsFilterCard .button.secondary.small.recordingsActionButton,
+  .recordingsFilterCard .button.secondary.small.recordingsDangerTrigger { width: 44px; min-width: 44px; }
+}
+
+@media (max-width: 760px) {
+  .recordingsFilterCard .recordingsFilterSelect,
+  .recordingsFilterCard .recordingsFilterDate { width: 100%; min-width: 0; }
 }
 
 .recordingsToolbarCompact {

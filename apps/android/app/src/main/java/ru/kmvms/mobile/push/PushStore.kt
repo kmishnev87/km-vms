@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONObject
 import ru.kmvms.mobile.data.ProfileVault
 import java.util.UUID
+import ru.kmvms.mobile.diagnostics.*
 
 enum class PushStatus { OFF, REGISTERING, UPLOADING, READY, NO_PROVIDER, SERVER_UNSUPPORTED, FAILED, TEMPORARY, PROVIDER_FAILED, PROVIDER_NETWORK, PROVIDER_ACTION, SERVER_REJECTED }
 data class PushBinding(val profileId: String, val instance: String, val enabled: Boolean, val vapid: String,
@@ -60,6 +61,9 @@ class PushStore(context: Context) {
         val value = old.copy(revision = old.revision + 1, status = PushStatus.UPLOADING)
         save(value); value
     }
-    private fun save(binding: PushBinding) { vault.putPushState(binding.profileId, binding.json()) }
+    private fun save(binding: PushBinding) {
+        vault.putPushState(binding.profileId, binding.json())
+        AppDiagnostics.record(DiagnosticCode.PUSH_STATE, DiagnosticArea.PUSH, binding.profileId, number = binding.status.ordinal)
+    }
     companion object { private val lock = Any() }
 }

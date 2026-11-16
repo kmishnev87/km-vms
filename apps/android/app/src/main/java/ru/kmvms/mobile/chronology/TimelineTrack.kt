@@ -14,6 +14,7 @@ import androidx.media3.exoplayer.source.MediaSource
 import ru.kmvms.mobile.core.TimelinePhase
 import ru.kmvms.mobile.core.TimelineSample
 import kotlin.math.abs
+import ru.kmvms.mobile.diagnostics.*
 
 @UnstableApi
 class TimelineTrack(context: Context, private val api: ChronologyApi, val cameraId: Long) {
@@ -32,6 +33,7 @@ class TimelineTrack(context: Context, private val api: ChronologyApi, val camera
                 state = if (playbackState == Player.STATE_READY) TimelinePhase.READY else TimelinePhase.BUFFERING
             }
             override fun onPlayerError(error: PlaybackException) {
+                AppDiagnostics.record(DiagnosticCode.ARCHIVE_FAILED, DiagnosticArea.ARCHIVE, camera = cameraId, number = error.errorCode)
                 state = TimelinePhase.FAILED
                 unsupported = error.errorCode in setOf(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
                     PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,

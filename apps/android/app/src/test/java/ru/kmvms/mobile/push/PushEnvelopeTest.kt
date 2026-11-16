@@ -23,6 +23,14 @@ class PushEnvelopeTest {
             assertTrue(runCatching { PushEnvelope.parse(bytes) }.isFailure)
         }
     }
+    @Test fun parsesRealNasUtcOffsetAndZIdenticallyIncludingFractionAndOtherOffsets() {
+        for (value in listOf("2026-11-14T10:30:00Z", "2026-11-14T10:30:00+00:00", "2026-11-14T15:30:00+05:00")) {
+            assertEquals(java.time.Instant.parse("2026-11-14T10:30:00Z"), PushEnvelope.parse(body().put("occurred_at", value).toString().toByteArray()).occurred)
+        }
+        assertEquals(123456000, PushEnvelope.parse(body().put("occurred_at", "2026-11-14T10:30:00.123456+00:00").toString().toByteArray()).occurred.nano)
+        for (value in listOf("2026-11-14T10:30:00", "not-a-time", "2026-99-14T10:30:00Z"))
+            assertTrue(runCatching { PushEnvelope.parse(body().put("occurred_at", value).toString().toByteArray()) }.isFailure)
+    }
     @Test fun explicitNotificationRoutesCannotBecomeExternalAddresses() {
         val parsed = NotificationNavigation.parse("kmvms://notification/$profile/$event/archive")
         assertEquals(profile, parsed?.profileId)

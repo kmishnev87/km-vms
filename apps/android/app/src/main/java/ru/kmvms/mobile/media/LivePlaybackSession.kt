@@ -30,6 +30,7 @@ import ru.kmvms.mobile.core.lowLatencyPlaybackRate
 import ru.kmvms.mobile.data.ApiProblem
 import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.data.NasException
+import ru.kmvms.mobile.diagnostics.*
 
 enum class VideoStatus { CONNECTING, BUFFERING, PLAYING, RECONNECTING, FAILED }
 data class VideoState(val status: VideoStatus = VideoStatus.CONNECTING, val audio: Boolean? = null, val accessDenied: Boolean = false,
@@ -68,6 +69,7 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
                     else mutable.update { if (it.status == VideoStatus.PLAYING) it.copy(status = VideoStatus.BUFFERING) else it }
                 }
                 override fun onPlayerError(error: PlaybackException) {
+                    AppDiagnostics.record(DiagnosticCode.LIVE_FAILED, DiagnosticArea.LIVE, camera = selection.cameraId, number = error.errorCode)
                     val http = generateSequence(error.cause) { it.cause }.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.responseCode
                     codecFailure = error.errorCode in setOf(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
                             PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES)

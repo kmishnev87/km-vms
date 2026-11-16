@@ -21,21 +21,26 @@ import ru.kmvms.mobile.events.CameraEventKind
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import org.json.JSONArray
+import ru.kmvms.mobile.diagnostics.*
 
 object MobileNotifications {
-    private const val CHANNEL = "camera-events-v1"
+    const val CHANNEL = "camera-events-v1"
     private val lock = Any()
     fun allowed(context: Context) = (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) && NotificationManagerCompat.from(context).areNotificationsEnabled()
     fun show(original: Context, profile: ServerProfile, event: PushEnvelope) = synchronized(lock) {
-        if (!allowed(original)) return@synchronized
+        fun log(code: DiagnosticCode) = AppDiagnostics.record(code, DiagnosticArea.PUSH, profile.id, event.eventId, event.cameraId)
+        if (!allowed(original)) { log(DiagnosticCode.PUSH_PERMISSION_BLOCKED); return@synchronized }
         val context = AppLocales.wrap(original)
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, context.getString(R.string.push_channel), NotificationManager.IMPORTANCE_HIGH))
+        if (manager.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) {
+            log(DiagnosticCode.PUSH_CHANNEL_BLOCKED); return@synchronized
+        }
         val history = context.getSharedPreferences("push_delivery_ids", Context.MODE_PRIVATE)
         val key = "${profile.id}:${event.eventId}"
         val previous = JSONArray(history.getString("delivered_v1", "[]"))
         val delivered = (0 until previous.length()).map { previous.getString(it) }
-        if (key in delivered) return@synchronized
+        if (key in delivered) { log(DiagnosticCode.PUSH_DUPLICATE); return@synchronized }
         val text = if (event.test) context.getString(R.string.push_test_received) else (listOf(event.kind) + event.objects).distinct().joinToString(" · ") { context.getString(it.label()) } + " · " +
             DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault()).format(event.occurred)
         val builder = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_notification)
@@ -51,8 +56,13 @@ object MobileNotifications {
                 .addAction(0, context.getString(R.string.push_watch_event), open(context, profile.id, event.eventId, "archive"))
         }
         val critical = event.kind in setOf(CameraEventKind.FIRE, CameraEventKind.TAMPER)
-        if (event.test || critical || !localLiveAttention.watching(profile.id, event.cameraId))
-            manager.notify(key, 1, builder.build())
+        if (event.test || critical || !localLiveAttention.watching(profile.id, event.cameraId)) {
+            if (runCatching { manager.notify(key, 1, builder.build()) }.isFailure) {
+                log(DiagnosticCode.PUSH_POST_FAILED); return@synchronized
+            }
+            // Means handed to Android, not proof that the person saw a banner.
+            log(DiagnosticCode.PUSH_POSTED)
+        } else log(DiagnosticCode.PUSH_LIVE_SUPPRESSED)
         history.edit().putString("delivered_v1", JSONArray(delivered.takeLast(255) + key).toString()).apply()
         history.edit().putLong("last_received.${profile.id}", System.currentTimeMillis()).apply()
     }

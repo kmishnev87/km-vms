@@ -1,11 +1,15 @@
 package ru.kmvms.mobile.ui.server
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -34,9 +38,11 @@ import ru.kmvms.mobile.ui.Muted
                 items(snapshot.domains,key={it.key}){domain->
                     var expanded by remember(domain.key){mutableStateOf(false)}
                     Panel{
-                        Text(stringResource(domainLabel(domain.key)),style=MaterialTheme.typography.titleMedium)
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                        Text(stringResource(domainLabel(domain.key)),style=MaterialTheme.typography.titleMedium,modifier=Modifier.weight(1f))
+                        SystemStatusIndicator(domain.severity,Modifier.testTag("system-domain-${domain.key}"),idle=domain.idle)
+                    }
                         if(domain.idle)Text(stringResource(R.string.no_active_live_views),color=Muted,style=MaterialTheme.typography.bodySmall)
-                        else if(domain.severity!="ok")Text(stringResource(severityLabel(domain.severity)),color=severityColor(domain.severity),style=MaterialTheme.typography.bodySmall)
                         if(domain.issues.isNotEmpty()||domain.reasons.isNotEmpty())TextButton(onClick={expanded=!expanded}){Text(stringResource(if(expanded)R.string.hide_details else R.string.details))}
                         if(expanded){
                             domain.issues.forEach{issue->
@@ -66,4 +72,12 @@ import ru.kmvms.mobile.ui.Muted
 }
 private fun domainLabel(key:String)=when(key){"cameras"->R.string.cameras;"live"->R.string.live;"recorder"->R.string.recordings;"storage"->R.string.storage;"retention"->R.string.retention_rules;else->R.string.archive_integrity}
 private fun severityLabel(value:String)=when(value){"ok"->R.string.system_operational;"error"->R.string.needs_attention;"warning"->R.string.system_warning;else->R.string.not_checked}
-@Composable private fun severityColor(value:String)=when(value){"error"->MaterialTheme.colorScheme.error;"warning"->MaterialTheme.colorScheme.tertiary;else->Muted}
+internal fun severityColor(value:String)=when(value){"ok"->Color(0xFF278554);"error"->Color(0xFFBC3545);"warning"->Color(0xFFAD6C12);else->Muted}
+
+@Composable internal fun SystemStatusIndicator(severity:String,modifier:Modifier=Modifier,idle:Boolean=false) {
+    val color=if(idle)Muted else severityColor(severity)
+    Row(modifier.widthIn(max=168.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(9.dp).background(color,CircleShape))
+        Text(stringResource(if(idle)R.string.system_idle else if(severity=="ok")R.string.system_normal else severityLabel(severity)),color=color,style=MaterialTheme.typography.labelMedium)
+    }
+}

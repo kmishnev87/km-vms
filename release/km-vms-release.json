@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.20",
-  "tag": "v0.9.20",
-  "title": "KM VMS 0.9.20 — Resilient recordings and flexible Android Live",
-  "summary": "Interrupted recordings are checked for usable duration and seeking, repaired in the background when possible, and recovered after an unclean NAS shutdown. Android 0.8.4 adds single-camera viewing from camera previews and an ordered Live camera picker. Existing archive ownership and file identity safeguards remain in place.",
+  "version": "0.9.21",
+  "tag": "v0.9.21",
+  "title": "KM VMS 0.9.21 — Android notifications and direct app diagnostics",
+  "summary": "Android 0.8.5 fixes camera-event timestamp compatibility, adds private client diagnostics with direct support delivery, native user and role management, fullscreen PTZ presets, swipe-to-delete recordings and ordered timeline camera selection. Health and storage indicators are clearer, and the web Recordings toolbar is more compact.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.20",
+  "source_ref": "v0.9.21",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,47 +20,63 @@
     "target_version": 11
   },
   "changelog": [
-    "Validate interrupted recordings for real media duration, readable video and a Matroska seek index before marking them finalized.",
-    "Repair recoverable containers without video re-encoding in a bounded background queue; do not block new camera recording.",
-    "Recover owned pending recordings after an unclean NAS shutdown, including interrupted repair publication, with transactional file identity checks.",
-    "Android 0.8.4: tap a camera preview to watch only that camera, preserving the session across fullscreen and rotation.",
-    "Android Live: choose cameras in numbered order, reorder them by dragging, and keep the normal selection separately for each saved NAS/account.",
-    "Update README and installation instructions for the matching NAS and officially signed Android release."
+    "Normalize real camera-event and test notification timestamps to UTC-Z; accept existing offset timestamps in the Android decoder.",
+    "Record typed notification receipt, parsing, Android posting and suppression reasons instead of silently dropping failed packets.",
+    "Android 0.8.5: send client diagnostics and an optional comment directly to support from Settings; require a matching server receipt and keep no ZIP file on the phone.",
+    "Keep diagnostics bounded, private and event-driven, without background polling, passwords, tokens, video or raw notification payloads.",
+    "Distinguish Android/APK reports from NAS reports in support while preserving existing NAS report delivery.",
+    "Compact the web Recordings filter/action bar, align its controls and replace the misaligned text caret with a centered vector icon.",
+    "Android: manage NAS users and assigned roles with the same server-enforced restrictions as the web client.",
+    "Android: access saved PTZ positions from a compact fullscreen controller button and reveal recording deletion by swiping, with explicit confirmation.",
+    "Android: select and reorder timeline cameras using the same numbered picker as Live; retained archives remain manually selectable.",
+    "Android: reuse original product artwork, center recording filters and sign-out, show honest health colors, center active archive labels and remove fixed progress end dots."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.20 — Resilient recordings and flexible Android Live",
-    "ru": "KM VMS 0.9.20 — Восстановление записей и удобный онлайн в Android",
-    "zh-CN": "KM VMS 0.9.20 — 录像恢复与灵活的 Android 实时查看"
+    "en": "KM VMS 0.9.21 — Android notifications and direct app diagnostics",
+    "ru": "KM VMS 0.9.21 — Уведомления Android и отправка диагностики APK",
+    "zh-CN": "KM VMS 0.9.21 — Android 通知与应用诊断报告"
   },
   "summary_i18n": {
-    "en": "Interrupted recordings are checked for usable duration and seeking, repaired in the background when possible, and recovered after an unclean NAS shutdown. Android 0.8.4 adds single-camera viewing from camera previews and an ordered Live camera picker. Existing archive ownership and file identity safeguards remain in place.",
-    "ru": "После обрыва проверяются длительность, читаемость и перемотка записи; пригодные файлы восстанавливаются в фоне, в том числе после внезапного выключения NAS. Android 0.8.4 позволяет открыть одну камеру из превью и выбрать порядок камер в онлайне. Проверки принадлежности архива и идентичности файлов сохранены.",
-    "zh-CN": "中断的录像会先检查有效时长、可读画面和定位索引；可恢复的文件在后台修复，并在 NAS 异常关机后自动恢复。Android 0.8.4 支持从预览进入单摄像头查看，以及按所选顺序排列实时画面。保留录像归属与文件身份校验。"
+    "en": "Android 0.8.5 fixes camera-event timestamp compatibility, adds private client diagnostics with direct support delivery, native user and role management, fullscreen PTZ presets, swipe-to-delete recordings and ordered timeline camera selection. Health and storage indicators are clearer, and the web Recordings toolbar is more compact.",
+    "ru": "APK 0.8.5 исправляет совместимость времени уведомлений, добавляет внутреннюю диагностику с прямой отправкой в поддержку, управление пользователями и ролями NAS, пресеты PTZ в полном экране, удаление записей свайпом и упорядоченный выбор камер хронологии. Улучшены индикаторы состояния и хранилища; веб-панель записей стала компактнее.",
+    "zh-CN": "Android 0.8.5 修复事件通知时间兼容性，新增私有诊断及直接报告发送、NAS 用户角色管理、全屏 PTZ 预置位、滑动删除录像和时间轴摄像头排序。健康与存储状态更清晰，网页版录像工具栏更紧凑。"
   },
   "changelog_i18n": {
     "en": [
-      "Validate interrupted recordings for real media duration, readable video and a Matroska seek index before marking them finalized.",
-      "Repair recoverable containers without video re-encoding in a bounded background queue; do not block new camera recording.",
-      "Recover owned pending recordings after an unclean NAS shutdown, including interrupted repair publication, with transactional file identity checks.",
-      "Android 0.8.4: tap a camera preview to watch only that camera, preserving the session across fullscreen and rotation.",
-      "Android Live: choose cameras in numbered order, reorder them by dragging, and keep the normal selection separately for each saved NAS/account.",
-      "Update README and installation instructions for the matching NAS and officially signed Android release."
+      "Normalize real camera-event and test notification timestamps to UTC-Z; accept existing offset timestamps in the Android decoder.",
+      "Record typed notification receipt, parsing, Android posting and suppression reasons instead of silently dropping failed packets.",
+      "Android 0.8.5: send client diagnostics and an optional comment directly to support from Settings; require a matching server receipt and keep no ZIP file on the phone.",
+      "Keep diagnostics bounded, private and event-driven, without background polling, passwords, tokens, video or raw notification payloads.",
+      "Distinguish Android/APK reports from NAS reports in support while preserving existing NAS report delivery.",
+      "Compact the web Recordings filter/action bar, align its controls and replace the misaligned text caret with a centered vector icon.",
+      "Android: manage NAS users and assigned roles with the same server-enforced restrictions as the web client.",
+      "Android: access saved PTZ positions from a compact fullscreen controller button and reveal recording deletion by swiping, with explicit confirmation.",
+      "Android: select and reorder timeline cameras using the same numbered picker as Live; retained archives remain manually selectable.",
+      "Android: reuse original product artwork, center recording filters and sign-out, show honest health colors, center active archive labels and remove fixed progress end dots."
     ],
     "ru": [
-      "Проверка реальной длительности, читаемого видео и индекса перемотки MKV перед финализацией прерванной записи.",
-      "Фоновое восстановление пригодного контейнера без перекодирования видео; очередь ограничена и не задерживает новую запись.",
-      "Автовосстановление собственных незавершённых записей после аварийного выключения NAS и прерывания публикации восстановленного файла.",
-      "Android 0.8.4: нажатие на превью открывает только эту камеру; fullscreen и поворот не сбрасывают режим.",
-      "Выбор камер в онлайне с номерами порядка и перетаскиванием; обычный набор сохраняется отдельно для каждого подключения к NAS.",
-      "Актуализированы README и установка соответствующих выпусков NAS и официально подписанного APK."
+      "Единый UTC-Z для времени реальных и тестовых уведомлений; APK также принимает прежний формат со смещением часового пояса.",
+      "Вместо молчаливого отбрасывания фиксируются безопасные причины: получение, разбор, передача уведомления Android или намеренное подавление.",
+      "APK 0.8.5: отправка диагностики с необязательным комментарием из настроек прямо в поддержку, с номером принятого обращения и без ZIP на телефоне.",
+      "Ограниченный внутренний журнал без фонового опроса, паролей, токенов, видео и сырых сообщений уведомлений.",
+      "В поддержке отчёты Android/APK явно отделены от NAS; прежняя отправка серверных отчётов сохранена.",
+      "Компактная панель веб-раздела «Записи»: одинаковая высота элементов и отцентрированная векторная стрелка выбора камеры.",
+      "APK: управление пользователями NAS и назначение ролей с теми же серверными ограничениями, что в веб-версии.",
+      "APK: сохранённые позиции PTZ доступны компактной кнопкой в полном экране; удаление записи открывается свайпом и требует подтверждения.",
+      "APK: выбор и изменение порядка камер хронологии через тот же нумерованный список, что в онлайне; удалённые камеры с архивом добавляются вручную.",
+      "APK: штатные картинки, отцентрированные фильтры и кнопка выхода, цвета состояния системы, центрирование активного корня архива и шкалы без неподвижных точек справа."
     ],
     "zh-CN": [
-      "中断录像标记为已完成前，检查实际时长、可解码画面和 MKV 定位索引。",
-      "使用有界后台队列修复可恢复的容器，不重新编码视频，也不阻塞新的摄像头录像。",
-      "NAS 异常关机后恢复属于本系统的未完成录像，并处理修复文件发布过程中再次中断的情况。",
-      "Android 0.8.4：点击摄像头预览仅查看该摄像头，全屏和屏幕旋转保持此会话。",
-      "实时查看支持按编号选择、拖动排序，并为每个已保存的 NAS 连接分别保留常用摄像头顺序。",
-      "更新 README 及 NAS 与官方签名 Android 安装包的安装说明。"
+      "真实事件和测试通知的时间统一为 UTC-Z；Android 同时兼容此前带时区偏移的格式。",
+      "记录通知接收、解析、提交 Android 以及主动抑制的安全原因，不再静默丢弃解析失败的数据包。",
+      "Android 0.8.5：在设置中附备注直接发送应用诊断，以服务器回执确认，手机上不生成 ZIP 文件。",
+      "私有日志限制大小与保留时间，不进行后台轮询，不收集密码、令牌、视频或原始通知数据。",
+      "支持面板明确区分 Android/APK 和 NAS 报告，保留原有 NAS 报告发送流程。",
+      "网页版录像筛选操作栏更紧凑，控件高度一致，摄像头选择箭头改为居中的矢量图标。",
+      "Android：管理 NAS 用户和分配角色，使用与网页版相同的服务器权限限制。",
+      "Android：全屏 PTZ 控制器可选择预置位；滑动显示录像删除按钮，删除仍需确认。",
+      "Android：时间轴使用与实时预览相同的编号排序选择器；保留录像的已删除摄像头仍可手动选择。",
+      "Android：沿用产品原图，居中筛选和退出按钮，清晰显示系统状态颜色，居中活动存储标签，移除进度条末端固定圆点。"
     ]
   }
 }

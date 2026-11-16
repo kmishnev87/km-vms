@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.ptz.PtzHandle
+import ru.kmvms.mobile.ptz.PtzPreset
 import ru.kmvms.mobile.ui.Accent
 import ru.kmvms.mobile.ui.SoftAccent
 import kotlin.math.roundToInt
@@ -41,13 +42,13 @@ import kotlin.math.roundToInt
     val busy by handle.busy.collectAsStateWithLifecycle()
     val presets by handle.presets.collectAsStateWithLifecycle()
     var speed by remember { mutableFloatStateOf(2f) }
-    var menu by remember { mutableStateOf(false) }
     val ink = if (overlay) Color.White else MaterialTheme.colorScheme.onSurface
     val panel = if (overlay) Color(0xBA233044) else Color.White
     Column(modifier.background(panel, RoundedCornerShape(16.dp)).padding(12.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth().then(headerDrag), verticalAlignment = Alignment.CenterVertically) {
             Text("PTZ", color = ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (overlay && presets.isNotEmpty()) PresetPicker(presets, !busy && ready, ink, compact = true, choose = handle::preset)
             if (handle.capability.point) IconButton(onClick = { handle.stop(); setMode(if (mode == VideoGestureMode.POINT) VideoGestureMode.DIGITAL else VideoGestureMode.POINT) },
                 modifier = Modifier.size(40.dp).testTag("ptz-point")) {
                 PlayerGlyph(PlayerGlyph.POINT, if (mode == VideoGestureMode.POINT) Color(0xFF60A5FA) else ink, stringResource(R.string.ptz_point))
@@ -82,14 +83,23 @@ import kotlin.math.roundToInt
             Slider(speed, { speed = it.roundToInt().toFloat() }, valueRange = 1f..5f, steps = 3,
                 modifier = Modifier.weight(1f).testTag("ptz-speed"))
         }
-        if (presets.isNotEmpty()) Box(Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth().testTag("ptz-presets"), enabled = !busy && ready) {
-                Text(stringResource(R.string.ptz_saved_position), color = ink)
+        if (!overlay && presets.isNotEmpty()) PresetPicker(presets, !busy && ready, ink, compact = false, choose = handle::preset)
+    }
+}
+
+@Composable internal fun PresetPicker(presets: List<PtzPreset>, enabled: Boolean, ink: Color, compact: Boolean, choose: (String) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box(if (compact) Modifier else Modifier.fillMaxWidth()) {
+        if (compact) IconButton(onClick = { menu = true }, enabled = enabled, modifier = Modifier.size(40.dp).testTag("ptz-preset-picker")) {
+            PlayerGlyph(PlayerGlyph.PRESETS, ink.copy(alpha = if (enabled) 1f else .4f), stringResource(R.string.ptz_saved_position))
+        } else OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth().testTag("ptz-presets"), enabled = enabled) {
+            Text(stringResource(R.string.ptz_saved_position), color = ink)
+        }
+        DropdownMenu(menu && enabled, { menu = false }, modifier = Modifier.heightIn(max = 280.dp).testTag("ptz-preset-menu")) {
+            presets.forEachIndexed { index, preset ->
+                DropdownMenuItem(text = { Text(preset.name.ifBlank { stringResource(R.string.ptz_position, index + 1) }) },
+                    onClick = { menu = false; choose(preset.token) })
             }
-            DropdownMenu(menu, { menu = false }) { presets.forEachIndexed { index, preset ->
-                DropdownMenuItem(text = { Text(preset.name.ifBlank { stringResource(R.string.ptz_position, index+1) }) },
-                    onClick = { menu = false; handle.preset(preset.token) })
-            } }
         }
     }
 }
@@ -135,7 +145,7 @@ import kotlin.math.roundToInt
     }
 }
 
-enum class PlayerGlyph { PTZ, POINT, AREA }
+enum class PlayerGlyph { PTZ, POINT, AREA, PRESETS }
 
 @Composable fun PlayerGlyph(glyph: PlayerGlyph, color: Color, description: String? = null) {
     Canvas(Modifier.size(24.dp).semantics { if (description != null) contentDescription = description }) {
@@ -144,6 +154,12 @@ enum class PlayerGlyph { PTZ, POINT, AREA }
         val path = Path()
         fun line(x0: Float, y0: Float, x1: Float, y1: Float) { path.moveTo(x0*unit, y0*unit); path.lineTo(x1*unit, y1*unit) }
         when (glyph) {
+            PlayerGlyph.PRESETS -> {
+                path.moveTo(4f*unit,3f*unit); path.lineTo(17f*unit,3f*unit); path.lineTo(21f*unit,7f*unit)
+                path.lineTo(21f*unit,21f*unit); path.lineTo(3f*unit,21f*unit); path.lineTo(3f*unit,4f*unit); path.close()
+                line(7f,3f,7f,10f); line(7f,10f,16f,10f); line(16f,10f,16f,3f)
+                line(7f,21f,7f,14f); line(7f,14f,17f,14f); line(17f,14f,17f,21f)
+            }
             PlayerGlyph.PTZ -> {
                 line(12f,3f,12f,21f); line(3f,12f,21f,12f)
                 line(9f,6f,12f,3f); line(12f,3f,15f,6f); line(9f,18f,12f,21f); line(12f,21f,15f,18f)

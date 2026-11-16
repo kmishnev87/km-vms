@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import DateTime, cast, func, or_, text, type_coerce
 
@@ -84,12 +84,20 @@ def register_device(db, user_id, device_id, revision, label, enabled, subscripti
     return status(row)
 
 
+def push_timestamp(value):
+    """UTC-Z on the wire, including clients with older Android java.time."""
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def event_payload(event):
     """No NAS address, password, access token, media URL, XML or arbitrary command."""
     return json.dumps({"v": 1, "type": "camera_event", "event_id": event["id"],
         "camera_id": event.get("camera_id"), "camera_name": (event.get("camera_name") or "")[:160],
         "kind": event["kind"], "objects": event.get("object_kinds") or [],
-        "occurred_at": event["occurred_at"]}, ensure_ascii=False, separators=(",", ":"))
+        "occurred_at": push_timestamp(event["occurred_at"])}, ensure_ascii=False, separators=(",", ":"))
 
 
 def send_test(db, user_id, device_id, *, sender=send_push):
@@ -108,7 +116,7 @@ def send_test(db, user_id, device_id, *, sender=send_push):
     db.commit()
     identifier = str(uuid.uuid4())
     sender(subscription, json.dumps({"v": 1, "type": "delivery_test", "event_id": identifier,
-        "occurred_at": now.isoformat() + "Z"}))
+        "occurred_at": push_timestamp(now)}))
     return {"status": "service_accepted", "test_id": identifier}
 
 

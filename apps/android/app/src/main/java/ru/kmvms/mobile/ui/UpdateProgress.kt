@@ -22,5 +22,5 @@ import androidx.compose.ui.unit.dp
             color = Ink, modifier = Modifier.testTag("$tag-percent"))
     }
     LinearProgressIndicator(progress = { fraction }, color = Accent, trackColor = Outline,
-        modifier = Modifier.fillMaxWidth().height(6.dp).testTag("$tag-bar"))
+        modifier = Modifier.fillMaxWidth().height(6.dp).testTag("$tag-bar"), drawStopIndicator = {})
 }

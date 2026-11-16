@@ -17,6 +17,7 @@ import ru.kmvms.mobile.BuildConfig
 import ru.kmvms.mobile.core.shouldCheckForUpdate
 import java.io.File
 import java.time.LocalDate
+import ru.kmvms.mobile.diagnostics.*
 
 enum class UpdatePhase { IDLE, CHECKING, CURRENT, UNPUBLISHED, AVAILABLE, DOWNLOADING, VERIFYING, READY, PERMISSION, FAILED, INCOMPATIBLE, DEVELOPMENT }
 data class AppUpdateState(val phase: UpdatePhase = UpdatePhase.IDLE, val release: AndroidRelease? = null, val bytes: Long = 0,
@@ -67,7 +68,7 @@ class AppUpdates(application: Application) : AndroidViewModel(application) {
                 }
                 mutable.value = AppUpdateState(phase, release, offer = phase == UpdatePhase.AVAILABLE)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { mutable.update { it.copy(phase = UpdatePhase.FAILED) } }
+            catch (_: Exception) { AppDiagnostics.record(DiagnosticCode.UPDATE_FAILED, DiagnosticArea.UPDATE, number = 1); mutable.update { it.copy(phase = UpdatePhase.FAILED) } }
             finally { running = false }
         }
     }
@@ -87,7 +88,7 @@ class AppUpdates(application: Application) : AndroidViewModel(application) {
                 mutable.update { it.copy(phase = UpdatePhase.READY, offer = false) }
                 install()
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { apk.delete(); mutable.update { it.copy(phase = UpdatePhase.FAILED) } }
+            catch (_: Exception) { AppDiagnostics.record(DiagnosticCode.UPDATE_FAILED, DiagnosticArea.UPDATE, number = 2); apk.delete(); mutable.update { it.copy(phase = UpdatePhase.FAILED) } }
             finally { running = false }
         }
     }
@@ -101,7 +102,7 @@ class AppUpdates(application: Application) : AndroidViewModel(application) {
                 val launched = launchApkInstaller(context, apk)
                 mutable.update { it.copy(phase = if (launched) UpdatePhase.READY else UpdatePhase.PERMISSION) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { apk.delete(); mutable.update { it.copy(phase = UpdatePhase.FAILED) } }
+            catch (_: Exception) { AppDiagnostics.record(DiagnosticCode.UPDATE_FAILED, DiagnosticArea.UPDATE, number = 3); apk.delete(); mutable.update { it.copy(phase = UpdatePhase.FAILED) } }
         }
     }
 }

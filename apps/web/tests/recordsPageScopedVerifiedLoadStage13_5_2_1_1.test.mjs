@@ -51,7 +51,8 @@ assert.match(recordingsRouter, /verify_files=True/);
 assert.match(recordingsRouter, /availability_status = "missing"/);
 assert.match(recordingsRouter, /availability_status = "error"/);
 assert.match(recordingsRouter, /"file_exists": file_exists/);
-assert.match(recordingsRouter, /"export_items": collect_recording_camera_options\(db, export_query\)/);
+assert.match(recordingsRouter, /retained_options = collect_recording_camera_options\(db, export_query\)/);
+assert.match(recordingsRouter, /"export_items": retained_options/);
 assert.doesNotMatch(
   recordingsRouter.slice(recordingsRouter.indexOf("def list_recordings")),
   /verify_files=False/

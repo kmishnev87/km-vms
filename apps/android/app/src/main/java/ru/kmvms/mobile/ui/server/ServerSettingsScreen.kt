@@ -21,6 +21,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.data.NasApi
+import ru.kmvms.mobile.data.NasUser
 import ru.kmvms.mobile.server.*
 import ru.kmvms.mobile.ui.Muted
 import ru.kmvms.mobile.ui.camera.LabeledChoice
@@ -29,7 +30,7 @@ import java.time.Instant
 import ru.kmvms.mobile.core.gmtTimezones
 import ru.kmvms.mobile.core.gmtTimezoneLabel
 
-@Composable fun ServerSettingsScreen(api:NasApi,namespace:String,close:()->Unit,message:(String)->Unit) {
+@Composable fun ServerSettingsScreen(api:NasApi,namespace:String,actor:NasUser,credentialsChanged:()->Unit,close:()->Unit,message:(String)->Unit) {
     val service=remember(api){ServerApi(api)}
     var baseline by remember(api){mutableStateOf<ServerSettings?>(null)}
     var edited by remember(api){mutableStateOf<ServerSettings?>(null)}
@@ -41,6 +42,7 @@ import ru.kmvms.mobile.core.gmtTimezoneLabel
     var refresh by remember{mutableIntStateOf(0)}
     var backups by rememberSaveable{mutableStateOf(false)}
     var updates by rememberSaveable{mutableStateOf(false)}
+    var usersOpen by remember(api){mutableStateOf(false)}
     val scope=rememberCoroutineScope()
     val failure=stringResource(R.string.server_error)
     val saved=stringResource(R.string.settings_saved)
@@ -54,6 +56,10 @@ import ru.kmvms.mobile.core.gmtTimezoneLabel
     }
     if(backups){BackupsScreen(service,namespace,baseline?.timezone?:"UTC",{backups=false},message);return}
     if(updates){NasUpdatesScreen(api,namespace,{updates=false},message);return}
+    if(usersOpen && UserManagementPolicy.allowed(actor)) {
+        BackHandler { usersOpen=false }
+        UsersScreen(api,actor,{usersOpen=false},credentialsChanged,message);return
+    }
     Column(Modifier.fillMaxSize()){
         Row(verticalAlignment=Alignment.CenterVertically){
             IconButton(onClick=close){Icon(Icons.AutoMirrored.Filled.ArrowBack,stringResource(R.string.back))}
@@ -89,6 +95,7 @@ import ru.kmvms.mobile.core.gmtTimezoneLabel
                         },enabled=!loading&&!saving,modifier=Modifier.testTag("nas-low-disk-cleanup"))
                     }
                 }
+                if(UserManagementPolicy.allowed(actor)) OutlinedButton(onClick={usersOpen=true},enabled=!loading&&!saving,modifier=Modifier.fillMaxWidth().height(48.dp).testTag("open-users")){Text(stringResource(R.string.users_and_roles))}
                 OutlinedButton(onClick={backups=true},enabled=!loading&&!saving,modifier=Modifier.fillMaxWidth().height(48.dp).testTag("open-backups")){Text(stringResource(R.string.backups))}
                 OutlinedButton(onClick={updates=true},enabled=!loading&&!saving,modifier=Modifier.fillMaxWidth().height(48.dp).testTag("open-nas-updates")){Text(stringResource(R.string.nas_updates))}
             }
