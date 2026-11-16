@@ -1,6 +1,7 @@
 package ru.kmvms.mobile.ui.archive
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.runtime.*
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
@@ -21,7 +22,8 @@ class RecordingSwipeCardTest {
     @Test fun swipeRevealsTrashButOnlyItsClickRequestsConfirmation() {
         var requests = 0
         compose.setContent { KMVMSTheme {
-            RecordingSwipeCard("test", true, false, { requests++ }) {
+            var revealed by remember { mutableStateOf(false) }
+            RecordingSwipeCard("test", true, false, revealed, { revealed=it }, { requests++ }) {
                 Surface(Modifier.fillMaxWidth().height(100.dp), color = Color.White) { Text("Recording") }
             }
         } }
@@ -39,11 +41,52 @@ class RecordingSwipeCardTest {
     }
     @Test fun noDeletePermissionMeansNoHiddenDestructiveAction() {
         compose.setContent { KMVMSTheme {
-            RecordingSwipeCard("readonly", false, false, { error("no permission") }) {
+            RecordingSwipeCard("readonly", false, false, false, { error("no permission") }, { error("no permission") }) {
                 Surface(Modifier.fillMaxWidth().height(100.dp)) { Text("Recording") }
             }
         } }
         compose.onNodeWithTag("recording-swipe-readonly").performTouchInput { swipeLeft() }
         compose.onNodeWithTag("recording-delete-readonly").assertDoesNotExist()
+    }
+
+    @Test fun multipleRevealedRowsShowOneAlignedBulkActionAndSwipingBackRemovesIt() {
+        var requests=0
+        var selected=emptySet<Int>()
+        compose.setContent { KMVMSTheme {
+            var revealed by remember { mutableStateOf(emptySet<Int>()) }
+            selected=revealed
+            Column(Modifier.fillMaxWidth()) {
+                RecordingsSelectionBar(3,"UTC",revealed.size,false,true,false,{requests++})
+                Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
+                    (1..3).forEach { id ->
+                        RecordingSwipeCard("$id",true,false,id in revealed,
+                            { open -> revealed=if(open)revealed+id else revealed-id },{requests++}) {
+                            Surface(Modifier.fillMaxWidth().height(100.dp),color=Color.White) { Text("Recording $id") }
+                        }
+                    }
+                }
+            }
+        } }
+        compose.onNodeWithTag("recordings-delete-selected").assertDoesNotExist()
+        compose.onNodeWithTag("recording-swipe-1").performTouchInput { swipeLeft() }
+        compose.onNodeWithTag("recordings-delete-selected").assertDoesNotExist()
+        compose.onNodeWithTag("recording-swipe-2").performTouchInput { swipeLeft() }
+        compose.onNodeWithTag("recordings-delete-selected").assertIsDisplayed()
+        val bulk=compose.onNodeWithTag("recordings-delete-selected").getUnclippedBoundsInRoot()
+        for(id in 1..2) {
+            val row=compose.onNodeWithTag("recording-delete-$id").getUnclippedBoundsInRoot()
+            assertEquals((bulk.left.value+bulk.right.value)/2,(row.left.value+row.right.value)/2,.5f)
+        }
+        compose.runOnIdle { assertEquals(0,requests);assertEquals(setOf(1,2),selected) }
+        compose.onNodeWithTag("recordings-delete-selected").performClick()
+        compose.runOnIdle { assertEquals(1,requests) }
+        compose.onNodeWithTag("recording-swipe-1").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("recordings-delete-selected").assertDoesNotExist()
+        compose.onNodeWithTag("recording-delete-2").assertIsDisplayed()
+    }
+
+    @Test fun aReadOnlyUserNeverGetsTheBulkAction() {
+        compose.setContent { KMVMSTheme { RecordingsSelectionBar(3,"UTC",3,false,false,false,{error("no permission")}) } }
+        compose.onNodeWithTag("recordings-delete-selected").assertDoesNotExist()
     }
 }

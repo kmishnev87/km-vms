@@ -17,6 +17,30 @@ import java.time.ZoneId
 @RunWith(AndroidJUnit4::class)
 class TimelineNavigationTest {
     @get:Rule val compose=createComposeRule()
+    @Test fun minusShortensTheIntervalPlusLengthensItAndTheLabelIsCentred() {
+        val position=Instant.parse("2026-11-15T10:00:00Z").toEpochMilli()
+        var window:Pair<Long,Long>?=null
+        compose.setContent { KMVMSTheme {
+            TimelineRuler(ChronologyState(position),emptyList(),{}, {from,to->window=from to to})
+        } }
+        fun duration()=compose.runOnIdle { window!!.second-window!!.first }
+        val before=duration()
+        compose.onNodeWithTag("timeline-interval-decrease").performClick()
+        assertTrue(duration()<before)
+        compose.onNodeWithTag("timeline-interval-increase").performClick()
+        assertEquals(before,duration())
+        val minus=compose.onNodeWithTag("timeline-interval-decrease").getUnclippedBoundsInRoot()
+        val plus=compose.onNodeWithTag("timeline-interval-increase").getUnclippedBoundsInRoot()
+        val label=compose.onNodeWithTag("timeline-interval").getUnclippedBoundsInRoot()
+        assertEquals((minus.left.value+minus.right.value+plus.left.value+plus.right.value)/4,
+            (label.left.value+label.right.value)/2,.5f)
+        repeat(3) { compose.onNodeWithTag("timeline-interval-increase").performClick() }
+        compose.onNodeWithTag("timeline-interval-increase").assertIsNotEnabled()
+        compose.onNodeWithTag("timeline-interval-decrease").assertIsEnabled()
+        repeat(6) { compose.onNodeWithTag("timeline-interval-decrease").performClick() }
+        compose.onNodeWithTag("timeline-interval-decrease").assertIsNotEnabled()
+        compose.onNodeWithTag("timeline-interval-increase").assertIsEnabled()
+    }
     @Test fun rulerSwipesThroughMidnightInBothDirectionsAndRequestsTheVisibleWindow() {
         val zone=ZoneId.of("Asia/Yekaterinburg")
         val first=Instant.parse("2026-11-14T19:05:00Z").toEpochMilli()

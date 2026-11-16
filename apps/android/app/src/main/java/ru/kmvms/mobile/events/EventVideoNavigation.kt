@@ -14,7 +14,8 @@ import java.time.ZoneId
 import java.util.UUID
 
 data class MobileVideoRequest(val cameraId: Long, val cameraName: String, val archiveTime: Long? = null,
-                              val key: String = UUID.randomUUID().toString(), val singleCamera: Boolean = false)
+                              val key: String = UUID.randomUUID().toString(), val singleCamera: Boolean = false,
+                              val returnToEvents: Boolean = false)
 data class EventVideoResult(val request: MobileVideoRequest?, val liveFallback: Boolean = false)
 
 /** Navigation uses typed NAS identities, never a server-provided arbitrary URL. */
@@ -43,6 +44,6 @@ class EventVideoNavigation(private val api: NasApi) {
     private suspend fun live(event: CameraEvent, cameraId: Long): EventVideoResult {
         val target = api.json("api/camera-events/${event.id}/target?mode=live") as JSONObject
         require(target.getLong("camera_id") == cameraId)
-        return EventVideoResult(MobileVideoRequest(cameraId, event.camera))
+        return EventVideoResult(MobileVideoRequest(cameraId, event.camera, returnToEvents = true))
     }
 }

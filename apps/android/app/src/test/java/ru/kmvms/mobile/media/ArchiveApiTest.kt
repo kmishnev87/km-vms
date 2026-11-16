@@ -12,6 +12,25 @@ import ru.kmvms.mobile.data.NasApi
 import java.time.*
 
 class ArchiveApiTest {
+    @Test fun bulkDeletionUsesTheSameExactPerFileApiAndKeepsDeniedFilesForRetry()=runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            server.enqueue(MockResponse().setResponseCode(403).setBody("{}"))
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            val rows=listOf("root-a", "root-b").map { root ->
+                RecordingDeleteRequest(Recording(12,root,"$root:12",5,"Garden","same.mkv","today",null,null,null,"1 MB",true))
+            }
+            val service=client(server)
+            val first=deleteSelectedRecordings(rows,service::deleteRecording)
+            assertEquals(listOf(rows[0]),first.removed);assertEquals(listOf(rows[1]),first.failed)
+            val second=deleteSelectedRecordings(first.failed,service::deleteRecording)
+            assertTrue(second.failed.isEmpty())
+            val requests=(1..3).map { server.takeRequest() }
+            assertTrue(requests.all { it.method=="DELETE" })
+            assertEquals(listOf("root-a:12","root-b:12","root-b:12"),requests.map { it.requestUrl!!.queryParameter("recording_ref") })
+            assertEquals(requests[1].requestUrl!!.queryParameter("operation_id"),requests[2].requestUrl!!.queryParameter("operation_id"))
+        }
+    }
     @Test fun deletingRecordingUsesExactReferenceAndStableOperationNotFilename()=runBlocking {
         MockWebServer().use{server->
             server.enqueue(MockResponse().setBody("""{"ok":true}"""))

@@ -24,6 +24,7 @@ class EventVideoNavigationTest {
             val result = navigator(server).open(event, EventAction.LIVE, zone, occurred.plusSeconds(10_000))
             assertEquals(3L, result.request!!.cameraId)
             assertNull(result.request!!.archiveTime)
+            assertTrue(result.request!!.returnToEvents)
             assertTrue(server.takeRequest().path!!.endsWith("/target?mode=live"))
         }
     }
@@ -33,6 +34,7 @@ class EventVideoNavigationTest {
             server.enqueue(MockResponse().setBody("""{"camera_id":3,"has_video":true,"segment_id":9,"archive_root_id":"root","offset_sec":5,"duration_sec":60}"""))
             val result = navigator(server).open(event, EventAction.RECORDING, zone, occurred.plusSeconds(10_000))
             assertEquals(occurred.minusSeconds(5).toEpochMilli(), result.request!!.archiveTime)
+            assertFalse(result.request!!.returnToEvents)
             assertEquals("2026-11-14T14:59:55", server.takeRequest().requestUrl!!.queryParameter("ts"))
         }
     }
@@ -54,6 +56,7 @@ class EventVideoNavigationTest {
             assertNotNull(result.request)
             assertTrue(result.liveFallback)
             assertNull(result.request!!.archiveTime)
+            assertTrue(result.request!!.returnToEvents)
             assertEquals(3, server.requestCount)
         }
     }

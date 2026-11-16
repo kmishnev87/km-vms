@@ -197,7 +197,10 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                     section == Section.LIVE -> model.api()?.let { api ->
                         key(state.active?.id, videoRequest?.key) { LiveScreen(api, state.cameras, state.ptz,
                             onMessage = { text -> uiScope.launch { snackbars.showSnackbar(text) } }, onImmersive = { immersive = it }, initial = videoRequest,
-                            profileId = state.active!!.id, onExit = { videoRequest = null; section = Section.CAMERAS }) }
+                            profileId = state.active!!.id, onExit = {
+                                val destination = if (videoRequest?.returnToEvents == true) Section.EVENTS else Section.CAMERAS
+                                videoRequest = null; section = destination
+                            }) }
                     }
                     section == Section.RECORDINGS -> model.api()?.let { api -> RecordingsScreen(api,
                         state.user?.can("export_recordings") == true, state.user?.can("delete_recordings") == true, { immersive=it },

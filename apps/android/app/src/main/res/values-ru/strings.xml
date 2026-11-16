@@ -412,4 +412,7 @@
     <string name="users_credentials_changed">Войдите заново с обновлёнными данными.</string>
     <string name="system_normal">Штатно</string>
     <string name="system_idle">Не используется</string>
+    <string name="recordings_delete_selected">Удалить выбранные записи</string>
+    <string name="recordings_delete_title">Удалить выбранные записи?</string>
+    <string name="recordings_delete_confirmation">Безвозвратно удалить выбранные записи (%1$d)? Остальные записи сохранятся.</string>
 </resources>

@@ -412,4 +412,7 @@
     <string name="users_credentials_changed">请使用更新后的凭据重新登录。</string>
     <string name="system_normal">正常</string>
     <string name="system_idle">未使用</string>
+    <string name="recordings_delete_selected">删除所选录像</string>
+    <string name="recordings_delete_title">删除所选录像？</string>
+    <string name="recordings_delete_confirmation">永久删除所选的 %1$d 个录像？其他录像将保留。</string>
 </resources>

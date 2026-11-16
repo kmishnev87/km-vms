@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.chronology.ChronologyState
@@ -62,12 +63,13 @@ import java.time.format.DateTimeFormatter
         Row(Modifier.fillMaxWidth().height(36.dp),verticalAlignment=Alignment.CenterVertically) {
             Text(Instant.ofEpochMilli(current).atZone(state.zone).format(DateTimeFormatter.ofPattern("dd.MM HH:mm:ss")),
                 color=Muted,style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f).testTag("timeline-ruler-time"))
-            TextButton(onClick={scale=(scale-1).coerceAtLeast(0)},enabled=scale>0,contentPadding=PaddingValues(0.dp),modifier=Modifier.size(40.dp,36.dp).testTag("timeline-zoom-out")){Text("−")}
+            TextButton(onClick={scale=(scale+1).coerceAtMost(TimelineViewport.scales.lastIndex)},enabled=scale<TimelineViewport.scales.lastIndex,
+                contentPadding=PaddingValues(0.dp),modifier=Modifier.size(40.dp,36.dp).testTag("timeline-interval-decrease")){Text("−")}
             val minutes=TimelineViewport.scales[scale]
             Text(stringResource(if(minutes>=60)R.string.timeline_hours else R.string.timeline_minutes,if(minutes>=60)minutes/60 else minutes),
-                color=Muted,style=MaterialTheme.typography.labelMedium,modifier=Modifier.widthIn(min=44.dp))
-            TextButton(onClick={scale=(scale+1).coerceAtMost(TimelineViewport.scales.lastIndex)},enabled=scale<TimelineViewport.scales.lastIndex,
-                contentPadding=PaddingValues(0.dp),modifier=Modifier.size(40.dp,36.dp).testTag("timeline-zoom-in")){Text("+")}
+                color=Muted,style=MaterialTheme.typography.labelMedium,textAlign=TextAlign.Center,modifier=Modifier.width(52.dp).testTag("timeline-interval"))
+            TextButton(onClick={scale=(scale-1).coerceAtLeast(0)},enabled=scale>0,
+                contentPadding=PaddingValues(0.dp),modifier=Modifier.size(40.dp,36.dp).testTag("timeline-interval-increase")){Text("+")}
         }
         Row(Modifier.fillMaxWidth()) {
             Column(Modifier.width(82.dp).padding(top=24.dp)) {

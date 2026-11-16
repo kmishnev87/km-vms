@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -27,7 +28,7 @@ import ru.kmvms.mobile.diagnostics.*
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.apk_report_title), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.apk_report_scope), style = MaterialTheme.typography.bodySmall, color = Muted)
-            OutlinedButton(onClick = { controller.reset(); open = true }, modifier = Modifier.testTag("apk-report-open")) {
+            OutlinedButton(onClick = { controller.reset(); open = true }, modifier = Modifier.align(Alignment.CenterHorizontally).testTag("apk-report-open")) {
                 Icon(Icons.AutoMirrored.Filled.Send, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.apk_report_open))
             }

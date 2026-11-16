@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.21",
-  "tag": "v0.9.21",
-  "title": "KM VMS 0.9.21 — Android notifications and direct app diagnostics",
-  "summary": "Android 0.8.5 fixes camera-event timestamp compatibility, adds private client diagnostics with direct support delivery, native user and role management, fullscreen PTZ presets, swipe-to-delete recordings and ordered timeline camera selection. Health and storage indicators are clearer, and the web Recordings toolbar is more compact.",
+  "version": "0.9.22",
+  "tag": "v0.9.22",
+  "title": "KM VMS 0.9.22 — Android navigation and recording controls",
+  "summary": "Android 0.8.6 returns event-launched live views to Events on Back, adds confirmed bulk deletion for swipe-selected recordings, clarifies timeline interval controls and the initial NAS download status, and centers the app-report action. NAS update execution and event-to-archive navigation remain unchanged.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.21",
+  "source_ref": "v0.9.22",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,63 +20,43 @@
     "target_version": 11
   },
   "changelog": [
-    "Normalize real camera-event and test notification timestamps to UTC-Z; accept existing offset timestamps in the Android decoder.",
-    "Record typed notification receipt, parsing, Android posting and suppression reasons instead of silently dropping failed packets.",
-    "Android 0.8.5: send client diagnostics and an optional comment directly to support from Settings; require a matching server receipt and keep no ZIP file on the phone.",
-    "Keep diagnostics bounded, private and event-driven, without background polling, passwords, tokens, video or raw notification payloads.",
-    "Distinguish Android/APK reports from NAS reports in support while preserving existing NAS report delivery.",
-    "Compact the web Recordings filter/action bar, align its controls and replace the misaligned text caret with a centered vector icon.",
-    "Android: manage NAS users and assigned roles with the same server-enforced restrictions as the web client.",
-    "Android: access saved PTZ positions from a compact fullscreen controller button and reveal recording deletion by swiping, with explicit confirmation.",
-    "Android: select and reorder timeline cameras using the same numbered picker as Live; retained archives remain manually selectable.",
-    "Android: reuse original product artwork, center recording filters and sign-out, show honest health colors, center active archive labels and remove fixed progress end dots."
+    "Android 0.8.6: Back from an event-launched live view returns to Events, including after rotation, without changing normal Live or camera-preview navigation.",
+    "Swipe-select recordings and confirm individual or bulk deletion; aligned trash buttons, server permissions, exact file identities and stable retry receipts are preserved.",
+    "Center the timeline interval between its controls: minus selects a shorter duration, plus a longer duration.",
+    "Show initial NAS file download correctly; preserve server-reported stages, verified completion and existing updater protections.",
+    "Center the Android diagnostic-report button in Settings, retaining the product style and all three languages."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.21 — Android notifications and direct app diagnostics",
-    "ru": "KM VMS 0.9.21 — Уведомления Android и отправка диагностики APK",
-    "zh-CN": "KM VMS 0.9.21 — Android 通知与应用诊断报告"
+    "en": "KM VMS 0.9.22 — Android navigation and recording controls",
+    "ru": "KM VMS 0.9.22 — Навигация Android и управление записями",
+    "zh-CN": "KM VMS 0.9.22 — Android 导航与录像管理"
   },
   "summary_i18n": {
-    "en": "Android 0.8.5 fixes camera-event timestamp compatibility, adds private client diagnostics with direct support delivery, native user and role management, fullscreen PTZ presets, swipe-to-delete recordings and ordered timeline camera selection. Health and storage indicators are clearer, and the web Recordings toolbar is more compact.",
-    "ru": "APK 0.8.5 исправляет совместимость времени уведомлений, добавляет внутреннюю диагностику с прямой отправкой в поддержку, управление пользователями и ролями NAS, пресеты PTZ в полном экране, удаление записей свайпом и упорядоченный выбор камер хронологии. Улучшены индикаторы состояния и хранилища; веб-панель записей стала компактнее.",
-    "zh-CN": "Android 0.8.5 修复事件通知时间兼容性，新增私有诊断及直接报告发送、NAS 用户角色管理、全屏 PTZ 预置位、滑动删除录像和时间轴摄像头排序。健康与存储状态更清晰，网页版录像工具栏更紧凑。"
+    "en": "Android 0.8.6 returns event-launched live views to Events on Back, adds confirmed bulk deletion for swipe-selected recordings, clarifies timeline interval controls and the initial NAS download status, and centers the app-report action. NAS update execution and event-to-archive navigation remain unchanged.",
+    "ru": "APK 0.8.6 возвращает из онлайна события обратно в события, добавляет общее удаление раскрытых свайпом записей с подтверждением, исправляет центровку и логику интервала хронологии, пояснение начала скачивания обновления NAS и расположение кнопки отчёта. Механизм обновления NAS и переход к архиву события не изменены.",
+    "zh-CN": "Android 0.8.6 可从事件实时画面返回事件列表，支持确认后批量删除滑动选中的录像，改进时间轴区间按钮、NAS 更新初始下载状态和诊断报告按钮对齐。NAS 更新执行逻辑与事件录像导航保持不变。"
   },
   "changelog_i18n": {
     "en": [
-      "Normalize real camera-event and test notification timestamps to UTC-Z; accept existing offset timestamps in the Android decoder.",
-      "Record typed notification receipt, parsing, Android posting and suppression reasons instead of silently dropping failed packets.",
-      "Android 0.8.5: send client diagnostics and an optional comment directly to support from Settings; require a matching server receipt and keep no ZIP file on the phone.",
-      "Keep diagnostics bounded, private and event-driven, without background polling, passwords, tokens, video or raw notification payloads.",
-      "Distinguish Android/APK reports from NAS reports in support while preserving existing NAS report delivery.",
-      "Compact the web Recordings filter/action bar, align its controls and replace the misaligned text caret with a centered vector icon.",
-      "Android: manage NAS users and assigned roles with the same server-enforced restrictions as the web client.",
-      "Android: access saved PTZ positions from a compact fullscreen controller button and reveal recording deletion by swiping, with explicit confirmation.",
-      "Android: select and reorder timeline cameras using the same numbered picker as Live; retained archives remain manually selectable.",
-      "Android: reuse original product artwork, center recording filters and sign-out, show honest health colors, center active archive labels and remove fixed progress end dots."
+      "Android 0.8.6: Back from an event-launched live view returns to Events, including after rotation, without changing normal Live or camera-preview navigation.",
+      "Swipe-select recordings and confirm individual or bulk deletion; aligned trash buttons, server permissions, exact file identities and stable retry receipts are preserved.",
+      "Center the timeline interval between its controls: minus selects a shorter duration, plus a longer duration.",
+      "Show initial NAS file download correctly; preserve server-reported stages, verified completion and existing updater protections.",
+      "Center the Android diagnostic-report button in Settings, retaining the product style and all three languages."
     ],
     "ru": [
-      "Единый UTC-Z для времени реальных и тестовых уведомлений; APK также принимает прежний формат со смещением часового пояса.",
-      "Вместо молчаливого отбрасывания фиксируются безопасные причины: получение, разбор, передача уведомления Android или намеренное подавление.",
-      "APK 0.8.5: отправка диагностики с необязательным комментарием из настроек прямо в поддержку, с номером принятого обращения и без ZIP на телефоне.",
-      "Ограниченный внутренний журнал без фонового опроса, паролей, токенов, видео и сырых сообщений уведомлений.",
-      "В поддержке отчёты Android/APK явно отделены от NAS; прежняя отправка серверных отчётов сохранена.",
-      "Компактная панель веб-раздела «Записи»: одинаковая высота элементов и отцентрированная векторная стрелка выбора камеры.",
-      "APK: управление пользователями NAS и назначение ролей с теми же серверными ограничениями, что в веб-версии.",
-      "APK: сохранённые позиции PTZ доступны компактной кнопкой в полном экране; удаление записи открывается свайпом и требует подтверждения.",
-      "APK: выбор и изменение порядка камер хронологии через тот же нумерованный список, что в онлайне; удалённые камеры с архивом добавляются вручную.",
-      "APK: штатные картинки, отцентрированные фильтры и кнопка выхода, цвета состояния системы, центрирование активного корня архива и шкалы без неподвижных точек справа."
+      "APK 0.8.6: возврат из онлайна события ведёт в события, в том числе после поворота. Прежняя навигация обычного онлайна и превью сохранена.",
+      "Общее удаление раскрытых свайпом записей с подтверждением, выровненными корзинами и прежними правами. Неуспешные файлы сохраняют квитанции для повтора.",
+      "Интервал хронологии отцентрирован: минус выбирает меньший промежуток времени, плюс — больший.",
+      "Начальное скачивание обновления NAS отображается как скачивание, а не неподтверждённый результат. Проверка завершения и защиты сохранены.",
+      "Кнопка отправки диагностики APK размещена по центру блока настроек, с прежним оформлением и тремя языками."
     ],
     "zh-CN": [
-      "真实事件和测试通知的时间统一为 UTC-Z；Android 同时兼容此前带时区偏移的格式。",
-      "记录通知接收、解析、提交 Android 以及主动抑制的安全原因，不再静默丢弃解析失败的数据包。",
-      "Android 0.8.5：在设置中附备注直接发送应用诊断，以服务器回执确认，手机上不生成 ZIP 文件。",
-      "私有日志限制大小与保留时间，不进行后台轮询，不收集密码、令牌、视频或原始通知数据。",
-      "支持面板明确区分 Android/APK 和 NAS 报告，保留原有 NAS 报告发送流程。",
-      "网页版录像筛选操作栏更紧凑，控件高度一致，摄像头选择箭头改为居中的矢量图标。",
-      "Android：管理 NAS 用户和分配角色，使用与网页版相同的服务器权限限制。",
-      "Android：全屏 PTZ 控制器可选择预置位；滑动显示录像删除按钮，删除仍需确认。",
-      "Android：时间轴使用与实时预览相同的编号排序选择器；保留录像的已删除摄像头仍可手动选择。",
-      "Android：沿用产品原图，居中筛选和退出按钮，清晰显示系统状态颜色，居中活动存储标签，移除进度条末端固定圆点。"
+      "Android 0.8.6：从事件打开实时画面后，返回操作回到事件列表，旋转屏幕后亦然；保留普通实时预览和摄像头预览的导航方式。",
+      "滑动多条录像后显示与各行对齐的批量删除按钮。删除前确认准确的所选项；保留权限与文件标识校验，失败项重试时沿用原操作凭据。",
+      "时间轴区间居中显示：减号缩短时间范围，加号扩大时间范围。",
+      "NAS 更新初始文件下载显示为正常下载，不再误显示结果尚未确认；保留完成验证与现有更新保护。",
+      "设置中的 Android 诊断报告按钮居中，保留产品样式与三种语言。"
     ]
   }
 }

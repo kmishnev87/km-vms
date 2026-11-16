@@ -128,12 +128,13 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
         onDispose { bars?.show(WindowInsetsCompat.Type.systemBars()) }
     }
     val closeDetail: () -> Unit = {
-        if (singleId != null && immersive) {
-            requestedFullscreen = false; dismissedLandscapeFullscreen = true
-        } else if (singleId != null) onExit()
-        else { selectedId = null; requestedFullscreen = false }
+        when (liveBackAction(initial, immersive)) {
+            LiveBackAction.EXIT_TO_ORIGIN -> onExit()
+            LiveBackAction.LEAVE_FULLSCREEN -> { requestedFullscreen = false; dismissedLandscapeFullscreen = true }
+            LiveBackAction.SHOW_CAMERA_LIST -> { selectedId = null; requestedFullscreen = false }
+        }
     }
-    BackHandler(selected != null) { closeDetail() }
+    BackHandler(selected != null || initial?.returnToEvents == true) { closeDetail() }
     if (selected == null) {
         Box(Modifier.fillMaxSize()) {
         if (viewingCameras.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

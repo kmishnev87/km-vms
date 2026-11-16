@@ -119,7 +119,7 @@ import java.time.format.DateTimeFormatter
                 }
             }
         }
-        if (!success) Text(stringResource(phaseLabel(progress)), style = MaterialTheme.typography.bodyMedium,
+        if (!success) Text(stringResource(if (progress == null && state.posting) R.string.nas_step_request else phaseLabel(progress)), style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.testTag("nas-update-detail"))
         if (progress?.percent != null && progress.current != null && progress.total != null) {
             if (progress.unit == "bytes") MeasuredTransfer(progress.current, progress.total, "nas-transfer")
@@ -167,15 +167,20 @@ private fun stepLabel(name: String?) = when(name) {
 
 private fun phaseLabel(progress: NasUpdateProgress?): Int = when(progress?.phase ?: progress?.step) {
     "queued", "starting_helper" -> R.string.nas_step_request
-    "acquire_source", "downloading" -> R.string.nas_phase_download
-    "extracting", "staging_source", "target_prepared" -> R.string.nas_phase_source
-    "validating_source", "validating_compose", "compose_config", "verifying_images" -> R.string.nas_phase_validation
+    "acquire", "acquire_source", "downloading" -> R.string.nas_phase_download
+    "extract", "extracting", "staging_source", "target_prepared" -> R.string.nas_phase_source
+    "validate_source_tree", "validating_source", "validating_compose", "compose_config", "verifying_images" -> R.string.nas_phase_validation
     "building_images", "rebuilding", "rebuild_recreate" -> R.string.nas_phase_build
     "pulling_images" -> R.string.nas_phase_pull
-    "schema_preflight", "schema_preparing" -> R.string.nas_phase_database
+    "schema_preflight", "schema_preparing", "preparing_database" -> R.string.nas_phase_database
     "overlay", "applying", "activating", "restarting", "reconnecting", "activating_target" -> R.string.nas_step_applying
     "health_check", "verifying_target" -> R.string.nas_step_health
     "commit_verification", "completed" -> R.string.nas_step_verification
     "rolling_back", "failed_rolled_back" -> R.string.nas_phase_rollback
-    else -> stepLabel(progress?.step)
+    // Early helper/control-plane replies can report a detailed phase rather than
+    // a macro current_step. Use their actual running step before claiming that
+    // the outcome is unknown. Genuine unverified terminal states remain unknown.
+    else -> stepLabel(progress?.step?.takeIf { it in nasUpdateStepOrder }
+        ?: progress?.takeUnless { it.terminal }?.steps?.firstOrNull { it.status == "running" }?.name
+        ?: progress?.takeIf { it.status in setOf("queued", "starting_helper") }?.let { "request" })
 }

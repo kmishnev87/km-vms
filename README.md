@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.21](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.21)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.22](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.22)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.21/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.21
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.22/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.22
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -190,7 +190,7 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - Supported PTZ with low-latency viewing during control.
 - Recordings, clips, synchronized chronology, camera management, events, storage, server health, and NAS maintenance.
 - Select timeline cameras in the order you need, then drag to reorder them; retained archives of deleted cameras remain available for manual selection.
-- Access camera presets in fullscreen PTZ control. Swipe a recording to reveal deletion, with confirmation before removal.
+- Access camera presets in fullscreen PTZ control. Swipe recordings to reveal deletion; confirm removal individually or for the selected group.
 - Add, edit, enable, disable and delete NAS user accounts and assign supported roles from the phone, under the same server-enforced permissions and owner protections as the browser.
 - A notification setup offer after the first NAS login, with a separately remembered choice for each server.
 - Notifications that open the corresponding server, camera, and event.

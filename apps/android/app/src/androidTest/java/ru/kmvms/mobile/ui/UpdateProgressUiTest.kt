@@ -102,6 +102,20 @@ class UpdateProgressUiTest {
             context.getString(R.string.nas_step_request)))
     }
 
+    @Test fun theActualInitialAcquirePhaseShowsDownloadNotAnUnconfirmedOutcome() {
+        val initial=NasUpdateProgress.from(JSONObject("""{"status":"running","phase":"acquire","current_step":"acquire_source",
+            "elapsed_seconds":8,"steps":[{"name":"request","status":"completed"},{"name":"preflight","status":"running"}]}"""))
+        var state by mutableStateOf(NasUpdatesState(progress=initial,watching=true))
+        compose.setContent { KMVMSTheme { NasUpdateOperation(state,{}, {}, {}) } }
+        compose.onNodeWithTag("nas-update-result").assertTextEquals(context.getString(R.string.operation_running))
+        compose.onNodeWithTag("nas-update-detail").assertTextEquals(context.getString(R.string.nas_phase_download))
+        compose.onNodeWithText(context.getString(R.string.operation_unknown)).assertDoesNotExist()
+        compose.runOnIdle { state=state.copy(progress=initial.copy(phase="next_server_phase",step="next_server_step")) }
+        compose.onNodeWithTag("nas-update-detail").assertTextEquals(context.getString(R.string.nas_step_preflight))
+        compose.runOnIdle { state=state.copy(progress=null,posting=true) }
+        compose.onNodeWithTag("nas-update-detail").assertTextEquals(context.getString(R.string.nas_step_request))
+    }
+
     private fun progress(status:String,phase:String,verified:Boolean=false):NasUpdateProgress {
         val payload=JSONObject().put("status",status).put("phase",phase).put("current_step",if(status=="completed")"commit_verification"else"preflight")
             .put("target_version","0.9.18").put("elapsed_seconds",281).put("commit_verified",verified).put("installed_commit","a".repeat(40))

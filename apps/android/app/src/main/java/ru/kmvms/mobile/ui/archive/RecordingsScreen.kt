@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,7 +34,6 @@ import ru.kmvms.mobile.ui.Muted
 import ru.kmvms.mobile.ui.Outline
 import ru.kmvms.mobile.ui.DashboardImage
 import java.time.LocalDate
-import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -47,7 +47,9 @@ import kotlinx.coroutines.launch
     var date by rememberSaveable { mutableStateOf<String?>(null) }
     var cameraMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Recording?>(null) }
-    var deletion by remember { mutableStateOf<Pair<Recording, String>?>(null) }
+    var deletion by remember { mutableStateOf<List<RecordingDeleteRequest>?>(null) }
+    var revealed by rememberSaveable(camera, date, stateSaver = listSaver<Set<String>, String>(
+        save = { it.toList() }, restore = { it.toSet() })) { mutableStateOf(emptySet<String>()) }
     var deleting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val deleteFailure = stringResource(R.string.recording_delete_failed)
@@ -55,6 +57,7 @@ import kotlinx.coroutines.launch
     val positions = remember { mutableMapOf<String, Long>() }
     val context = LocalContext.current
     val playing = selected
+    val deleteSelection = state.items.filter { it.identityKey in revealed }
     LaunchedEffect(browser, camera, date) { browser.search(camera, date?.let(LocalDate::parse)) }
     DisposableEffect(browser) { onDispose { browser.close() } }
     BackHandler(selected != null || clips) { if (selected != null) selected = null else clips = false }
@@ -110,16 +113,15 @@ import kotlinx.coroutines.launch
                     Text(date ?: stringResource(R.string.all_dates), maxLines=1, modifier=Modifier.fillMaxWidth(), textAlign=TextAlign.Center)
                 }
             }
-            Box(Modifier.fillMaxWidth().height(28.dp).padding(horizontal=16.dp), contentAlignment = Alignment.CenterStart) {
-                if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-                else Text(stringResource(R.string.archive_count, state.total, zoneLabel(state.zone)), color=Muted, style=MaterialTheme.typography.labelSmall)
-            }
+            RecordingsSelectionBar(state.total, zoneLabel(state.zone), deleteSelection.size, state.loading, canDelete, deleting,
+                deleteSelected = { deletion = deleteSelection.map(::RecordingDeleteRequest) })
             if (state.failed) TextButton(onClick = browser::refresh, Modifier.padding(horizontal=16.dp)) { Text(stringResource(R.string.retry)) }
-            LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(16.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(start=16.dp,end=16.dp,top=8.dp,bottom=16.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
                 if (state.items.isEmpty() && !state.loading) item { Text(stringResource(R.string.no_recordings), color=Muted) }
                 items(state.items, key={it.identityKey}) { recording ->
-                    RecordingSwipeCard(recording.id.toString(), canDelete, deleting,
-                        requestDelete = { deletion = recording to UUID.randomUUID().toString() }) {
+                    RecordingSwipeCard(recording.id.toString(), canDelete, deleting, recording.identityKey in revealed,
+                        onRevealedChange = { open -> revealed = if (open) revealed + recording.identityKey else revealed - recording.identityKey },
+                        requestDelete = { deletion = listOf(RecordingDeleteRequest(recording)) }) {
                     Surface(modifier=Modifier.fillMaxWidth().testTag("recording-${recording.id}"), shape=RoundedCornerShape(14.dp),
                         color=Color.White, border=androidx.compose.foundation.BorderStroke(1.dp, Outline)) {
                         Row(Modifier.padding(14.dp), verticalAlignment=Alignment.CenterVertically) {
@@ -142,13 +144,20 @@ import kotlinx.coroutines.launch
     }
     deletion?.let { pending ->
         AlertDialog(onDismissRequest={if(!deleting)deletion=null},
-            title={Text(stringResource(R.string.recording_delete_title))},
-            text={Text(stringResource(R.string.recording_delete_confirmation,pending.first.camera,pending.first.displayTime))},
+            title={Text(stringResource(if(pending.size==1) R.string.recording_delete_title else R.string.recordings_delete_title))},
+            text={Text(if(pending.size==1) stringResource(R.string.recording_delete_confirmation,pending.single().recording.camera,pending.single().recording.displayTime)
+                else stringResource(R.string.recordings_delete_confirmation,pending.size))},
             confirmButton={TextButton(enabled=!deleting && canDelete,onClick={
                 if(!canDelete || deleting)return@TextButton
                 deleting=true
                 scope.launch {
-                    try { archiveApi.deleteRecording(pending.first,pending.second);deletion=null;browser.refresh() }
+                    try {
+                        val result = deleteSelectedRecordings(pending, archiveApi::deleteRecording)
+                        revealed = revealed - result.removed.map { it.recording.identityKey }.toSet()
+                        deletion = result.failed.takeIf { it.isNotEmpty() }
+                        browser.refresh()
+                        if(result.failed.isNotEmpty()) message(deleteFailure)
+                    }
                     catch(cancelled:CancellationException){throw cancelled}
                     catch(_:Exception){message(deleteFailure)}
                     finally{deleting=false}
