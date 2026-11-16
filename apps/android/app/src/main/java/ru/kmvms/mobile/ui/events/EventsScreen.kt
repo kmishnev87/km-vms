@@ -55,9 +55,10 @@ import java.time.format.DateTimeFormatter
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var preferencesOpen by rememberSaveable { mutableStateOf(false) }
+    var receivingOpen by rememberSaveable { mutableStateOf(false) }
     var filtersOpen by remember { mutableStateOf(false) }
     var editedFilter by remember { mutableStateOf(EventFilter()) }
-    BackHandler(preferencesOpen) { preferencesOpen=false }
+    BackHandler(preferencesOpen) { preferencesOpen=false; receivingOpen=false }
     var deletion by remember { mutableStateOf<EventDeletion?>(null) }
     var opening by remember { mutableStateOf(false) }
     val failure = stringResource(R.string.server_error)
@@ -94,8 +95,8 @@ import java.time.format.DateTimeFormatter
         Surface(color = Color.White) {
             Column {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if(preferencesOpen)IconButton(onClick={preferencesOpen=false},modifier=Modifier.testTag("events-history-tab")){Icon(Icons.AutoMirrored.Filled.ArrowBack,stringResource(R.string.back))}
-                    Text(stringResource(if(preferencesOpen)R.string.events_alerts else R.string.events), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    if(preferencesOpen)IconButton(onClick={preferencesOpen=false;receivingOpen=false},modifier=Modifier.testTag("events-history-tab")){Icon(Icons.AutoMirrored.Filled.ArrowBack,stringResource(R.string.back))}
+                    Text(stringResource(if(preferencesOpen&&receivingOpen)R.string.events_receiving else if(preferencesOpen)R.string.events_alerts else R.string.events), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     if(!preferencesOpen) {
                         IconButton(onClick={editedFilter=state.filter;filtersOpen=true},enabled=!state.busy,modifier=Modifier.testTag("events-open-filters")) {
                             Canvas(Modifier.size(22.dp).semantics { contentDescription=filtersLabel }) {
@@ -106,16 +107,24 @@ import java.time.format.DateTimeFormatter
                                 }
                             }
                         }
-                        IconButton(onClick={preferencesOpen=true},modifier=Modifier.testTag("events-alerts-tab")) {
+                        IconButton(onClick={preferencesOpen=true;controller.refreshSettings()},modifier=Modifier.testTag("events-alerts-tab")) {
                             Icon(painterResource(R.drawable.kmvms_menu_events),stringResource(R.string.events_alerts),tint=Color.Unspecified,modifier=Modifier.size(26.dp))
                         }
                         IconButton(onClick = { controller.refresh() }, enabled = !state.loading, modifier = Modifier.testTag("events-refresh")) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
                     }
+                    if(preferencesOpen&&receivingOpen)IconButton(onClick=controller::refreshSettings,enabled=!state.busy,modifier=Modifier.testTag("events-receiving-refresh")) {
+                        Icon(Icons.Default.Refresh,stringResource(R.string.refresh))
+                    }
+                }
+                if(preferencesOpen&&canDelete)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected=!receivingOpen,onClick={receivingOpen=false},label={Text(stringResource(R.string.events_alerts))},modifier=Modifier.testTag("events-personal-tab"))
+                    FilterChip(selected=receivingOpen,onClick={receivingOpen=true;controller.refreshSettings()},label={Text(stringResource(R.string.events_receiving))},modifier=Modifier.testTag("events-receiving-tab"))
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().height(4.dp)) { if (state.loading || state.busy || opening) LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        if (preferencesOpen) EventPreferencesScreen(state, controller::save, api, profileId, message)
+        Box(Modifier.fillMaxWidth().height(4.dp)) { if (state.loading || state.settingsLoading || state.busy || opening) LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (preferencesOpen && receivingOpen && canDelete) EventReceivingScreen(state, controller::receiving)
+        else if (preferencesOpen) EventPreferencesScreen(state, controller::save, api, profileId, message)
         else {
             val page = state.page
             val allSelected = page?.items?.isNotEmpty() == true && page.items.all { state.isSelected(it.id) }

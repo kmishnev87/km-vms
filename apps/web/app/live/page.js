@@ -6,6 +6,7 @@ import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
 import { useAuthSession } from "../../lib/useAuthSession";
 import useCameraEventHandoff from "../../lib/useCameraEventHandoff";
 import { cameraEventId, eventErrorKey } from "../../lib/cameraEvents";
+import { cameraPreviewId } from "../../lib/cameraPreviewLive";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationToast } from "../../components/OperationFeedback";
@@ -257,6 +258,7 @@ export default function LivePage() {
   const backendReadyRef = useRef(false);
   const eventViewRef = useRef(false);
   const eventCameraRef = useRef(null);
+  const previewHandledRef = useRef("");
   const saveTimerRef = useRef(null);
   const pendingLayoutSaveRef = useRef(null);
   const lastBackendLayoutPayloadRef = useRef("");
@@ -408,6 +410,8 @@ export default function LivePage() {
     const ownerSession = workspaceSession;
     const generation = ++workspaceGenerationRef.current;
     eventViewRef.current = Boolean(cameraEventId(window.location.search));
+    if (cameraPreviewId(window.location.search)) eventViewRef.current = true;
+    previewHandledRef.current = "";
     eventCameraRef.current = null;
     hydratedRef.current = backendReadyRef.current = false;
     cacheOwnerRef.current = null;
@@ -564,12 +568,10 @@ export default function LivePage() {
     addTile(cameraId, stream, bounds.left + bounds.width / 2 + offset, bounds.top + bounds.height * 0.42 + offset / 2);
   }
 
-  useCameraEventHandoff({ ready: workspaceLayoutReady && camerasLoaded, mode: "live",
-    onError: error => showWorkspaceError(t(`cameraEvents.errors.${eventErrorKey(error)}`)),
-    onTarget: target => {
-      const camera = cameraMap.get(String(target.camera_id));
+  function openSingleCamera(cameraId, prefix) {
+      const camera = cameraMap.get(String(cameraId));
       if (!camera) { showWorkspaceError(t("cameraEvents.errors.event_camera_not_available")); return; }
-      const tile = { id: `event-${target.camera_id}-${Date.now()}`, cameraId: String(target.camera_id), stream: defaultStream(camera),
+      const tile = { id: `${prefix}-${cameraId}-${Date.now()}`, cameraId: String(cameraId), stream: defaultStream(camera),
         xPct: .06, yPct: .06, wPct: .85, hPct: .85, z: nextZIndex(tiles) };
       eventViewRef.current = true;
       // Switching to an event from an already open Live page is temporary too.
@@ -581,8 +583,20 @@ export default function LivePage() {
       closePtz();
       setFrameLayoutActive(true);
       setTiles([tile]);
-    },
+  }
+
+  useCameraEventHandoff({ ready: workspaceLayoutReady && camerasLoaded, mode: "live",
+    onError: error => showWorkspaceError(t(`cameraEvents.errors.${eventErrorKey(error)}`)),
+    onTarget: target => openSingleCamera(target.camera_id, "event"),
   });
+
+  useEffect(() => {
+    if (!workspaceLayoutReady || !camerasLoaded || !workspaceSession) return;
+    const cameraId = cameraPreviewId(window.location.search);
+    if (!cameraId || previewHandledRef.current === `${workspaceSession}:${cameraId}`) return;
+    previewHandledRef.current = `${workspaceSession}:${cameraId}`;
+    openSingleCamera(cameraId, "preview");
+  }, [workspaceLayoutReady, camerasLoaded, workspaceSession, cameraMap]);
 
   function updateTile(tileId, patch) {
     if (patch?.stream) {

@@ -6,7 +6,10 @@ import { apiFetch, captureAuthSession } from "../lib/api";
 import { useAuthSession } from "../lib/useAuthSession";
 import { useI18n } from "../lib/i18n";
 import { formatProductDateTime } from "../lib/timezone";
-import { CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, CAMERA_EVENT_HUB_OPEN, eventErrorKey, eventHistoryQuery, eventLabelKey, eventObjectLabelKeys, minuteLabel, minuteValue } from "../lib/cameraEvents";
+import { CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, CAMERA_EVENT_HUB_OPEN, eventErrorKey, eventHistoryQuery, eventLabelKey, eventObjectLabelKeys } from "../lib/cameraEvents";
+import CameraEventPreferences from "./CameraEventPreferences";
+import CameraEventReceiving from "./CameraEventReceiving";
+import { mergeEventPreferenceDraft } from "../lib/cameraEventPreferences";
 import { OperationDialog, OperationToast } from "./OperationFeedback";
 import { eventIsSelected, filteredSelectionBody, selectedEventCount, snapshotHistoryQuery, toggleSnapshotEvent } from "../lib/cameraEventSelection";
 import { silenceWatchedCameraEvent } from "../lib/cameraEventAttention";
@@ -52,8 +55,9 @@ export default function CameraEventsHub({ currentUser }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [errorToast, setErrorToast] = useState(null);
   const [eventToast, setEventToast] = useState(null);
-  const [detectorCamera, setDetectorCamera] = useState("");
-  const [detectors, setDetectors] = useState(null);
+  const preferenceServerRef = useRef(null);
+  const [receivingRefresh, setReceivingRefresh] = useState(0);
+  const [receivingLoading, setReceivingLoading] = useState(false);
   const generation = useRef(0);
   const selectionGeneration = useRef(0);
   const selectPageRef = useRef(null);
@@ -66,12 +70,20 @@ export default function CameraEventsHub({ currentUser }) {
 
   function clearSelection() { selectionGeneration.current++; setSelection([]); setSelectionSnapshot(null); }
 
+  function receivePreferences(value, force = false) {
+    const previous = preferenceServerRef.current;
+    preferenceServerRef.current = value;
+    // Refresh another client's saved settings without erasing an unsaved draft.
+    setPreference(draft => mergeEventPreferenceDraft(draft, previous, value, force));
+  }
+
   function showError(error) {
     setErrorToast({ id: `camera-events-${Date.now()}`, title: t(`cameraEvents.errors.${eventErrorKey(error)}`), tone: "error" });
   }
 
   useEffect(() => {
     setOpen(false); setEventToast(null); setHistory(null); setPreference(null); clearSelection(); setDeleteTarget(null); setBusy(false);
+    preferenceServerRef.current = null;
     const owner = ++generation.current;
     if (!enabled || !session) { setUnread(0); return undefined; }
     if (cached.session !== session) cached = { session, cursor: null, unread: 0 };
@@ -88,6 +100,7 @@ export default function CameraEventsHub({ currentUser }) {
           if (controller.signal.aborted || !current() || generation.current !== owner) return;
           cached = { session, cursor: value.cursor, unread: value.unread_count };
           setUnread(value.unread_count);
+          if (value.preferences) receivePreferences(value.preferences);
           if (value.items?.length) {
             const notifications = value.items.filter(item => item.notify && !silenceWatchedCameraEvent(item, document));
             if (notifications.length && document.visibilityState === "visible" && !openRef.current) setEventToast({ ...notifications.at(-1), timezone: value.timezone });
@@ -127,10 +140,22 @@ export default function CameraEventsHub({ currentUser }) {
     const controller = new AbortController();
     const current = captureAuthSession();
     Promise.all([apiFetch("/camera-events/cameras", { signal: controller.signal }), apiFetch("/camera-events/preferences", { signal: controller.signal })])
-      .then(([cameraData, prefs]) => { if (!controller.signal.aborted && current()) { setCameras(cameraData.items || []); setPreference(prefs); } })
+      .then(([cameraData, prefs]) => { if (!controller.signal.aborted && current()) { setCameras(cameraData.items || []); receivePreferences(prefs); } })
       .catch(error => { if (!controller.signal.aborted && current()) showError(error); });
     return () => controller.abort();
   }, [open, session]);
+
+  useEffect(() => {
+    if (!open || tab !== "receiving" || !manage) return undefined;
+    const controller = new AbortController();
+    const current = captureAuthSession();
+    setReceivingLoading(true);
+    apiFetch("/camera-events/cameras", { signal: controller.signal }).then(value => {
+      if (!controller.signal.aborted && current()) setCameras(value.items || []);
+    }).catch(error => { if (!controller.signal.aborted && current()) showError(error); })
+      .finally(() => { if (!controller.signal.aborted && current()) setReceivingLoading(false); });
+    return () => controller.abort();
+  }, [open, tab, manage, session, receivingRefresh]);
 
   useEffect(() => {
     if (!open || tab !== "history") return undefined;
@@ -298,49 +323,19 @@ export default function CameraEventsHub({ currentUser }) {
     <div className="cameraEventsPager"><span>{t("cameraEvents.retention", { days: history?.retention_days || 30 })}</span><button className="button secondary small" type="button" disabled={busy || loading || !offset} onClick={() => setOffset(n => Math.max(0, n - 25))}>{t("cameraEvents.previous")}</button><button className="button secondary small" type="button" disabled={busy || loading || offset + rows.length >= (history?.total || 0)} onClick={() => setOffset(n => n + 25)}>{t("cameraEvents.next")}</button></div>
   </div>;
 
-  function togglePreferenceList(key, value, allowed) {
-    setPreference(previous => {
-      const values = previous[key] === null ? allowed : previous[key] || [];
-      return { ...previous, [key]: values.includes(value) ? values.filter(item => item !== value) : [...values, value] };
-    });
-  }
-  function changeNotificationTime(key, value) {
-    if (!value) return;
-    const minute = minuteValue(value);
-    setPreference(previous => ({ ...previous, hours_enabled: true, [key]: minute }));
-  }
-  function openNotificationTimePicker(event) {
-    // Native time editing remains available when a browser has no picker API.
-    try { event.currentTarget.showPicker?.(); } catch {}
-  }
-  function handleNotificationTimeKeyDown(event) {
-    // Escape belongs to the native time editor/picker, not its parent dialog.
-    if (event.key === "Escape") event.stopPropagation();
-  }
-  const preferenceContent = preference ? <div className="cameraEventsPreferences">
-    <div className="cameraEventsPreferenceScroll">
-    <p>{t("cameraEvents.notificationHelp")}</p>
-    <label className="cameraEventsCheck cameraEventsPreferenceMaster"><input type="checkbox" disabled={busy} checked={preference.notifications} onChange={e => setPreference(p => ({ ...p, notifications: e.target.checked }))}/><span>{t("cameraEvents.notifyMe")}</span></label>
-    <fieldset disabled={busy}><legend>{t("cameraEvents.notificationCameras")}</legend><div className="cameraEventsChoices">{cameras.map(camera => <label className="cameraEventsCheck" key={camera.id}><input type="checkbox" checked={preference.camera_ids === null || preference.camera_ids?.includes(camera.id)} onChange={() => togglePreferenceList("camera_ids", camera.id, cameras.map(c => c.id))}/><span title={camera.name}>{camera.name}</span></label>)}</div></fieldset>
-    <fieldset disabled={busy}><legend>{t("cameraEvents.notificationTypes")}</legend><div className="cameraEventsChoices">{CAMERA_EVENT_KINDS.map(kind => <label className="cameraEventsCheck" key={kind}><input type="checkbox" checked={preference.kinds === null || preference.kinds?.includes(kind)} onChange={() => togglePreferenceList("kinds", kind, CAMERA_EVENT_KINDS)}/><span>{t(`cameraEvents.kinds.${kind}`)}</span></label>)}</div></fieldset>
-    <div className="cameraEventsSchedule"><label className="cameraEventsCheck"><input type="checkbox" disabled={busy} checked={preference.hours_enabled} onChange={e => setPreference(p => ({ ...p, hours_enabled: e.target.checked }))}/><span>{t("cameraEvents.schedule")}</span></label><div className="cameraEventsTimeRange"><label>{t("cameraEvents.from")}<input type="time" value={minuteLabel(preference.start_minute)} disabled={busy} onClick={openNotificationTimePicker} onKeyDown={handleNotificationTimeKeyDown} onChange={e => changeNotificationTime("start_minute", e.target.value)}/></label><label>{t("cameraEvents.to")}<input type="time" value={minuteLabel(preference.end_minute)} disabled={busy} onClick={openNotificationTimePicker} onKeyDown={handleNotificationTimeKeyDown} onChange={e => changeNotificationTime("end_minute", e.target.value)}/></label></div></div>
-    <small>{t("cameraEvents.scheduleHelp")}</small>
-    </div>
-    <div className="cameraEventsPreferenceFooter">
-    <button type="button" className="button secondary" disabled={busy} onClick={() => act(async current => { const value = await apiFetch("/camera-events/preferences", { method: "PUT", headers, body: JSON.stringify(preference) }); if (current()) { setPreference(value); setErrorToast({ id: `event-saved-${Date.now()}`, title: t("cameraEvents.saved"), tone: "info" }); } })}>{t("cameraEvents.save")}</button>
-    </div>
-  </div> : <div className="cameraEventsEmpty">{t("cameraEvents.loading")}</div>;
-
-  async function loadDetectors() {
-    setDetectors(null);
-    await act(async current => { const value = await apiFetch(`/camera-events/cameras/${detectorCamera}/detectors`); if (current()) setDetectors(value); });
-  }
-  const detectorContent = <div className="cameraEventsDetectors">
-    <p>{t("cameraEvents.detectorHelp")}</p>
-    <div className="cameraEventsDetectorChooser"><label>{t("cameraEvents.camera")}<select value={detectorCamera} disabled={busy} onChange={e => { setDetectorCamera(e.target.value); setDetectors(null); }}><option value="">{t("cameraEvents.chooseCamera")}</option>{cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.name}</option>)}</select></label><button type="button" className="button secondary small" disabled={busy || !detectorCamera} onClick={loadDetectors}>{busy ? t("cameraEvents.loading") : t("cameraEvents.readSettings")}</button></div>
-    <div className="cameraEventsReceiverList">{cameras.map(camera => <div key={camera.id}><strong>{camera.name}</strong><span>{t(`cameraEvents.receiver.${camera.receiver?.status || "pending"}`)}</span></div>)}</div>
-    {detectors ? !detectors.supported || !detectors.rules?.length ? <div className="cameraEventsEmpty">{t("cameraEvents.noDetectorControl")}</div> : <div className="cameraEventsDetectorRules">{detectors.rules.map(rule => <div key={rule.id}><div><strong>{t(`cameraEvents.kinds.${rule.kind}`)}</strong><small>{rule.name}</small></div>{rule.can_change ? <label className="cameraEventsCheck"><input type="checkbox" disabled={busy} checked={rule.enabled === true} onChange={e => { const enabledValue = e.target.checked; act(async current => { const value = await apiFetch(`/camera-events/cameras/${detectorCamera}/detectors/${rule.id}`, { method: "PUT", headers, body: JSON.stringify({ enabled: enabledValue, revision: rule.revision }) }); if (current()) setDetectors(value); }); }}/>{rule.enabled ? t("cameraEvents.enabled") : t("cameraEvents.disabled")}</label> : <span>{t("cameraEvents.noDetectorControl")}</span>}</div>)}</div> : null}
-  </div>;
+  const preferenceContent = <CameraEventPreferences preference={preference} cameras={cameras} busy={busy} onChange={setPreference}
+    onSave={() => act(async current => {
+      const value = await apiFetch("/camera-events/preferences", { method: "PUT", headers, body: JSON.stringify(preference) });
+      if (current()) { receivePreferences(value, true); setErrorToast({ id: `event-saved-${Date.now()}`, title: t("cameraEvents.saved"), tone: "info" }); }
+    })}/>;
+  const receivingContent = <CameraEventReceiving cameras={cameras} busy={busy || receivingLoading} onRefresh={() => setReceivingRefresh(value => value + 1)}
+    onChange={(camera, events_enabled) => act(async current => {
+      // This is the same shared choice as CameraEditor, with the same server
+      // permission, support validation and receiver revision fence.
+      await apiFetch(`/cameras/${camera.id}`, { method: "PUT", headers, body: JSON.stringify({ events_enabled }) });
+      const value = await apiFetch("/camera-events/cameras");
+      if (current()) setCameras(value.items || []);
+    })}/>;
 
   if (!enabled) return null;
   return <>
@@ -349,7 +344,7 @@ export default function CameraEventsHub({ currentUser }) {
     <OperationToast toast={errorToast} onClose={() => setErrorToast(null)}/>
     {eventToast ? <aside className="cameraEventArrival" role="status"><button className="cameraEventArrivalClose" type="button" aria-label={t("cameraEvents.close")} onClick={() => setEventToast(null)}>×</button><strong>{eventToast.camera_name}</strong><span>{t(eventLabelKey(eventToast))}{eventObjectLabelKeys(eventToast).map(key => ` · ${t(key)}`).join("")}</span><time dateTime={eventToast.occurred_at}>{formatProductDateTime(eventToast.occurred_at, eventToast.timezone, locale)}</time>{rowActions(eventToast)}</aside> : null}
     <OperationDialog dialog={open ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
-      content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications", ...(manage ? ["detection"] : [])].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : tab === "notifications" ? preferenceContent : detectorContent}</div>
+      content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications", ...(manage ? ["receiving"] : [])].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : tab === "notifications" ? preferenceContent : manage ? receivingContent : null}</div>
     } : null} onClose={() => setOpen(false)}/>
     <OperationDialog dialog={deleteTarget ? {
       id: "camera-events-delete", title: t("cameraEvents.deleteConfirmTitle"), tone: "warning", presentation: "compact-confirmation",

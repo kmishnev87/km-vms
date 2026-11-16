@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
 import AuthenticatedPreviewImage from "../../components/AuthenticatedPreviewImage";
 import CameraEditor from "../../components/cameras/CameraEditor";
@@ -14,6 +15,7 @@ import { useCurrentUser } from "../../lib/currentUser";
 import { loadCamerasViewMode, saveCamerasViewMode } from "../../lib/cameraStage16";
 import { cameraRuntimeWarningKey, notifyCameraRuntimeChanged } from "../../lib/operatorWarnings";
 import { useI18n, useLocaleText } from "../../lib/i18n";
+import { cameraPreviewLiveUrl } from "../../lib/cameraPreviewLive";
 
 function normalizeCameraError(message, copy) {
   const text = String(message || "").trim();
@@ -140,6 +142,7 @@ function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable
 }
 
 export default function CamerasPage() {
+  const router = useRouter();
   const { t } = useI18n();
   const copy = useLocaleText("cameras");
   const { currentUser } = useCurrentUser();
@@ -168,6 +171,11 @@ export default function CamerasPage() {
   const secondaryRequestRef = useRef(0);
   const camerasHaveDataRef = useRef(false);
   const camerasLoadWarningRef = useRef("");
+
+  function previewLive(camera) {
+    const url = cameraPreviewLiveUrl(camera.id);
+    if (url && currentUser?.permissions?.includes("view_live")) router.push(url);
+  }
 
   async function load() {
     const request = ++camerasRequestRef.current;
@@ -381,7 +389,8 @@ export default function CamerasPage() {
             if (viewMode === "cards") {
               return (
                 <article className="cameraTileCard" key={camera.id}>
-                  <div className="cameraTilePreview">
+                  <div className="cameraTilePreview cameraPreviewLiveTarget" onDoubleClick={() => previewLive(camera)}
+                    title={t("cameraEvents.previewLiveHelp")}>
                     {camera.preview_url ? (
                       <AuthenticatedPreviewImage
                         src={camera.preview_url}
@@ -453,7 +462,8 @@ export default function CamerasPage() {
                     </div>
                   </div>
 
-                  <div className="cameraPreviewField" aria-label={copy.cameraFrame}>
+                  <div className="cameraPreviewField cameraPreviewLiveTarget" aria-label={copy.cameraFrame}
+                    onDoubleClick={() => previewLive(camera)} title={t("cameraEvents.previewLiveHelp")}>
                     {camera.preview_url ? (
                       <AuthenticatedPreviewImage
                         src={camera.preview_url}

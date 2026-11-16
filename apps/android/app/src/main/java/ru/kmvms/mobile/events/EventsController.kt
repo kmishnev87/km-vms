@@ -12,6 +12,7 @@ data class EventsState(
     val preferences: EventPreferences? = null, val loading: Boolean = false,
     val busy: Boolean = false, val failures: Int = 0,
     val selection: EventSelection? = null,
+    val settingsLoading: Boolean = false,
 ) {
     val selectedCount get() = selection?.selectedCount ?: selected.size
     fun isSelected(id: String) = selection?.contains(id) ?: (id in selected)
@@ -25,19 +26,29 @@ class EventsController(private val api: EventsApi) {
     val state = mutable.asStateFlow()
     private var loading: Job? = null
     private var watch: Job? = null
+    private var settingsJob: Job? = null
+    private var settingsGeneration = 0L
     private var generation = 0L
     private var selectionGeneration = 0L
     private var active = false
     init {
         refresh()
-        scope.launch {
+        refreshSettings()
+    }
+
+    fun refreshSettings() {
+        settingsJob?.cancel()
+        val own = ++settingsGeneration
+        mutable.update { it.copy(settingsLoading = true) }
+        settingsJob = scope.launch {
             try {
                 val cameras = api.cameras()
                 val preferences = api.preferences()
-                mutable.update { it.copy(cameras = cameras, preferences = preferences) }
+                if (own == settingsGeneration) mutable.update { it.copy(cameras = cameras, preferences = preferences) }
             }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { failure() }
+            catch (_: Exception) { if (own == settingsGeneration) failure() }
+            finally { if (own == settingsGeneration) mutable.update { it.copy(settingsLoading = false) } }
         }
     }
 
@@ -118,6 +129,11 @@ class EventsController(private val api: EventsApi) {
         val saved = api.save(preferences)
         mutable.update { it.copy(preferences = saved) }
     }
+    fun receiving(cameraId: Long, enabled: Boolean) = action {
+        api.receiving(cameraId, enabled)
+        val cameras = api.cameras()
+        mutable.update { it.copy(cameras = cameras) }
+    }
     private fun action(block: suspend () -> Unit) {
         if (mutable.value.busy) return
         mutable.update { it.copy(busy = true) }
@@ -139,6 +155,9 @@ class EventsController(private val api: EventsApi) {
                 try {
                     val changes = api.updates(cursor)
                     cursor = changes.optString("cursor").takeUnless { it.isBlank() || it == "null" }
+                    changes.optJSONObject("preferences")?.let { value ->
+                        if (!mutable.value.busy) mutable.update { it.copy(preferences = EventPreferences.from(value)) }
+                    }
                     if (changes.optBoolean("changed") || (changes.optJSONArray("items")?.length() ?: 0) > 0) refresh()
                     // A broken server without a cursor must not become a hot loop.
                     if (cursor == null) delay(30_000)

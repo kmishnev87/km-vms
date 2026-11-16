@@ -243,8 +243,16 @@
     <string name="events_alerts">Оповещения</string>
     <string name="events_types">События</string>
     <string name="events_all_types">Все события</string>
-    <string name="events_allow_notifications">Получать оповещения</string>
-    <string name="events_preferences_scope">Личные оповещения пользователя NAS. Их отключение не прекращает получение и сохранение событий от камер.</string>
+    <string name="events_allow_notifications">Уведомлять меня</string>
+    <string name="events_preferences_scope">Общие личные настройки для веба и телефонов этой учётной записи. Новые события вне выбранных камер, типов и времени сохраняются просмотренными, без оповещений. Старые непросмотренные не меняются. Приём событий и запись не выключаются.</string>
+    <string name="events_receiving">Приём событий</string>
+    <string name="events_receiving_help">Сохранять события на NAS для всех пользователей. Изменения применяются сразу и совпадают с настройкой «Получать события камеры». Запись и обнаружение на камере не меняются.</string>
+    <string name="events_receiving_unsupported">Нужен ONVIF</string>
+    <string name="events_receiving_on">Включено</string>
+    <string name="events_receiving_off">Выключено</string>
+    <string name="events_schedule_all">Одно время для всех</string>
+    <string name="events_schedule_per_camera">Для каждой камеры</string>
+    <string name="events_schedule_help">Часовой пояс NAS. Можно выбрать ночной интервал; одинаковое начало и конец означают круглосуточно.</string>
     <string name="events_hours">Только в указанное время</string>
     <string name="events_hours_from">С</string>
     <string name="events_hours_to">до</string>
@@ -274,7 +282,7 @@
     <string name="push_server_update">Этому NAS нужна версия сервера с поддержкой мобильных уведомлений.</string>
     <string name="push_failed">Не удалось настроить или проверить доставку. Проверьте соединение и повторите.</string>
     <string name="push_temporary">Служба доставки временно недоступна.</string>
-    <string name="push_scope">Выбор камер и событий ниже действует и для фоновых оповещений. Телефон не опрашивает NAS постоянно.</string>
+    <string name="push_scope">Только этот телефон и выбранный NAS. Не меняет непросмотренные события; личные правила ниже общие для веба и телефонов. Постоянного опроса NAS нет.</string>
     <string name="push_test">Проверить</string>
     <string name="push_test_accepted">Служба доставки приняла тест. Проверьте шторку уведомлений Android.</string>
     <string name="push_test_received">Тест получен на этом телефоне.</string>

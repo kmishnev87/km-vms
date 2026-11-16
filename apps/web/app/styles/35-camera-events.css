@@ -1,5 +1,6 @@
 /* Camera events use the established quiet maintenance palette and type scale. */
 .cameraEventsNav { position: relative; }
+.cameraPreviewLiveTarget { cursor: pointer; }
 .cameraEventsBell { flex-shrink: 0; }
 .cameraEventsBadge { position: absolute; top: 3px; right: 1px; min-width: 19px; padding: 2px 4px; border: 1px solid #fff; border-radius: 10px; background: #456f94; color: white; font: 600 10px/1.2 Arial, sans-serif; }
 .operationFeedbackDialog.cameraEventsDialog { width: min(1120px, calc(100vw - 24px)); height: min(760px, calc(100dvh - 32px)); max-height: calc(100dvh - 32px); padding: 0; gap: 0; }
@@ -61,6 +62,26 @@
 .cameraEventsTimeRange { display: inline-flex; align-items: center; gap: 10px; }
 .cameraEventsTimeRange > label { display: inline-flex; align-items: center; gap: 6px; color: #64748b; font-size: 13px; }
 .cameraEventsTimeRange input[type="time"] { width: 82px; height: 32px; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+.cameraEventsTimeInput { width: 90px; min-width: 0; height: 32px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 4px 6px; background: #fff; color: #172238; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; }
+.cameraEventsTimeInput:disabled { background: #f4f7fa; color: #8190a2; }
+.cameraEventsTimeInput::-webkit-calendar-picker-indicator { display: block; opacity: 1; visibility: visible; width: 14px; height: 14px; margin: 0; padding: 0; cursor: pointer; }
+.cameraEventsScheduleMode { width: auto; max-width: 220px; min-width: 0; height: 32px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 4px 6px; background: #fff; color: #334155; font: inherit; font-size: 13px; }
+.cameraEventsCameraPreferences { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+.cameraEventsCameraPreferences.hasSchedules { grid-template-columns: minmax(0, 1fr); }
+.cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { min-width: 0; display: grid; align-items: center; gap: 12px; padding: 4px 0; }
+.hasSchedules .cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { grid-template-columns: minmax(0, 1fr) 90px 90px; }
+.cameraEventsCameraPreferenceHead { color: #64748b; font-size: 12px; border-bottom: 1px solid #e8eef4; padding: 0 0 6px; }
+.cameraEventsCameraPreferenceHead > span:not(:first-child) { text-align: center; }
+.cameraEventsPreferences .cameraEventsCameraPreference .cameraEventsCheck span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cameraEventsCameraPreference:has(input:focus-visible) { border-radius: 3px; }
+.cameraEventsReceiving { min-height: 0; flex: 1; display: flex; flex-direction: column; padding: 16px 20px; gap: 12px; }
+.cameraEventsReceivingHead { display: flex; gap: 20px; align-items: center; justify-content: space-between; }
+.cameraEventsReceivingHead p { margin: 0; max-width: 78ch; color: #526377; font-size: 13px; line-height: 1.5; }
+.cameraEventsReceivingList { overflow: auto; min-height: 0; overscroll-behavior: contain; border-top: 1px solid #dce5ee; }
+.cameraEventsReceivingRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 160px); align-items: center; gap: 20px; padding: 6px 0; border-bottom: 1px solid #e8eef4; }
+.cameraEventsReceivingRow .cameraEventsCheck { min-width: 0; }
+.cameraEventsReceivingRow .cameraEventsCheck span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cameraEventsReceivingRow > span { color: #64748b; font-size: 12px; text-align: right; }
 .cameraEventsTimeRange input[type="time"]::-webkit-calendar-picker-indicator { display: block; opacity: 1; visibility: visible; width: 14px; height: 14px; margin: 0; padding: 0; cursor: pointer; }
 .cameraEventsPreferenceScroll > small { color: #64748b; font-size: 12px; line-height: 1.5; }
 .cameraEventsPreferenceFooter { flex-shrink: 0; display: flex; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #dce5ee; background: #fff; }
@@ -119,4 +140,9 @@
 @media (max-width: 480px) {
   .cameraEventsChoices { grid-template-columns: minmax(0, 1fr); }
   .cameraEventsSchedule > .cameraEventsCheck { flex-basis: 100%; justify-content: flex-start; }
+  .cameraEventsCameraPreferences { grid-template-columns: minmax(0, 1fr); }
+  .hasSchedules .cameraEventsCameraPreference, .cameraEventsCameraPreferenceHead { grid-template-columns: minmax(0, 1fr) 82px 82px; gap: 6px; }
+  .cameraEventsCameraPreference .cameraEventsTimeInput { width: 82px; padding: 4px; }
+  .cameraEventsReceiving { padding: 14px; }
+  .cameraEventsReceivingRow { grid-template-columns: minmax(0, 1fr) 80px; gap: 10px; }
 }

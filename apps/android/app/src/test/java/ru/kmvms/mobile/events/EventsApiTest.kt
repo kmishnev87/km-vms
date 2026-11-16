@@ -14,6 +14,35 @@ class EventsApiTest {
     private val id = "de5d0fb2-f7f4-4f0b-817a-94a4a567f746"
     private fun client(server: MockWebServer) = EventsApi(NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") })
 
+    @Test fun individualHoursRoundTripWithoutChangingCameraFiltersOrGlobalDefaults() {
+        val baseline = EventPreferences(cameraIds = setOf(1, 2), kinds = setOf(CameraEventKind.PERSON),
+            hoursEnabled = true, startMinute = 1140, endMinute = 420, perCameraHours = true,
+            cameraSchedules = mapOf(1L to EventHours(0, 360), 2L to EventHours(1140, 420)))
+        assertEquals(baseline, EventPreferences.from(baseline.json()))
+        assertEquals(EventHours(1140, 420), baseline.hoursFor(3))
+        assertEquals("per_camera", baseline.json().getString("schedule_mode"))
+        assertEquals(EventPreferences(), EventPreferences.from(JSONObject()))
+        assertEquals(baseline.cameraSchedules, baseline.copy(perCameraHours = false).cameraSchedules)
+    }
+
+    @Test fun receivingUsesOnlyTheExistingSharedCameraSetting() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("{}"))
+            client(server).receiving(42, false)
+            val request = server.takeRequest()
+            assertEquals("PUT", request.method)
+            assertEquals("/api/cameras/42", request.path)
+            val body = JSONObject(request.body.readUtf8())
+            assertEquals(setOf("events_enabled"), body.keys().asSequence().toSet())
+            assertFalse(body.getBoolean("events_enabled"))
+        }
+    }
+
+    @Test fun invalidIndividualHoursCannotBeCreated() {
+        for (minutes in listOf(-1, 1440)) try { EventHours(minutes, 0); fail("must reject invalid time") }
+        catch (_: IllegalArgumentException) { }
+    }
+
     @Test fun allCamerasAndNoCamerasRemainDifferentPreferences() {
         val all = EventPreferences()
         assertTrue(all.json().isNull("camera_ids"))

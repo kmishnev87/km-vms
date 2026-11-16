@@ -6,7 +6,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
@@ -30,6 +30,12 @@ EventKind = Literal["motion", "person", "vehicle", "animal", "intrusion", "line_
                     "loitering", "tamper", "audio", "wrong_direction", "fire", "other"]
 
 
+class CameraSchedule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_minute: StrictInt = Field(ge=0, le=1439)
+    end_minute: StrictInt = Field(ge=0, le=1439)
+
+
 class Preferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
     notifications: StrictBool = True
@@ -38,6 +44,15 @@ class Preferences(BaseModel):
     hours_enabled: StrictBool = False
     start_minute: int = Field(0, ge=0, le=1439)
     end_minute: int = Field(0, ge=0, le=1439)
+    schedule_mode: Literal["all", "per_camera"] = "all"
+    camera_schedules: dict[str, CameraSchedule] = Field(default_factory=dict, max_length=512)
+
+    @field_validator("camera_schedules")
+    @classmethod
+    def valid_schedule_cameras(cls, value):
+        if any(not key.isascii() or not key.isdigit() or str(int(key)) != key or not 1 <= int(key) <= 2147483647 for key in value):
+            raise ValueError("invalid_event_camera")
+        return value
 
 
 class ReadSelection(BaseModel):
@@ -165,6 +180,11 @@ def get_preferences(db: Session = Depends(get_db), user: User = Depends(require_
 @router.put("/preferences")
 def put_preferences(payload: Preferences, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     value = payload.model_dump()
+    # An older installed APK must not erase individual schedules it cannot edit.
+    previous = events.preferences(db, user.id, lock=True)[0]
+    for key in ("schedule_mode", "camera_schedules"):
+        if key not in payload.model_fields_set:
+            value[key] = previous[key]
     if value["camera_ids"] is not None and any(item < 1 for item in value["camera_ids"]):
         _failure("invalid_event_camera", 422)
     return events.save_preferences(db, user.id, value)
@@ -247,8 +267,6 @@ async def updates(request: Request, after: str | None = Query(None, max_length=1
             events.unlisten(listener[0])
     ctx = timezone_context(db)
     result["timezone"] = ctx.name
-    for item in result["items"]:
-        item["notify"] = events.notifications_allowed(result["preferences"], item, ctx)
     return result
 
 

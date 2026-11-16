@@ -66,11 +66,16 @@ def event_query(db):
 def preferences(db, user_id, *, lock=False):
     query = db.query(UserWorkspaceLayout).filter(UserWorkspaceLayout.user_id == user_id, UserWorkspaceLayout.workspace_key == PREFERENCE_KEY)
     row = (query.with_for_update() if lock else query).first()
-    value = dict(row.layout or {}) if row else {}
+    return preference_value(row.layout if row else {}), row
+
+
+def preference_value(layout):
+    value = dict(layout or {})
     return {"notifications": bool(value.get("notifications", True)), "camera_ids": value.get("camera_ids"),
             "kinds": [kind for kind in value["kinds"] if kind in EVENT_KINDS] if isinstance(value.get("kinds"), list) else None,
             "hours_enabled": bool(value.get("hours_enabled", False)),
-            "start_minute": int(value.get("start_minute", 0)), "end_minute": int(value.get("end_minute", 0))}, row
+            "start_minute": int(value.get("start_minute", 0)), "end_minute": int(value.get("end_minute", 0)),
+            "schedule_mode": value.get("schedule_mode", "all"), "camera_schedules": value.get("camera_schedules") or {}}
 
 
 def save_preferences(db, user_id, value):
@@ -85,12 +90,20 @@ def save_preferences(db, user_id, value):
     db.execute(statement.on_conflict_do_update(index_elements=[UserWorkspaceLayout.user_id, UserWorkspaceLayout.workspace_key],
         set_={"layout": value, "updated_at": now_utc()}))
     db.commit()
+    # Wake existing long polls so other signed-in clients can refresh personal
+    # settings. Saving never acknowledges any event, including the old backlog.
+    notify_change()
     return value
 
 
 def read_expression(user_id):
     marker = aliased(AuditEvent)
     return select(marker.id).where(marker.category == READ_CATEGORY, marker.actor_user_id == user_id, marker.target_id == AuditEvent.id).exists()
+
+
+def marked_read_ids(db, user_id, ids):
+    return {row[0] for row in db.query(AuditEvent.target_id).filter(AuditEvent.category == READ_CATEGORY,
+        AuditEvent.actor_user_id == user_id, AuditEvent.target_id.in_(ids)).all()} if ids else set()
 
 
 def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread=False, user_id=None):
@@ -143,8 +156,7 @@ def list_camera_events(db, user_id, *, limit=50, offset=0, selection_id=None, **
     total = query.count()
     rows = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).offset(offset).limit(min(MAX_PAGE, limit)).all()
     ids = [r.id for r in rows]
-    read_ids = {r[0] for r in db.query(AuditEvent.target_id).filter(AuditEvent.category == READ_CATEGORY,
-                AuditEvent.actor_user_id == user_id, AuditEvent.target_id.in_(ids)).all()} if ids else set()
+    read_ids = marked_read_ids(db, user_id, ids)
     selection = None
     if selection_id is not None:
         from app.services import camera_event_selections
@@ -156,17 +168,46 @@ def list_camera_events(db, user_id, *, limit=50, offset=0, selection_id=None, **
             "read_cursor": read_cursor, "history_count": history_count, "selection": selection}
 
 
-def _insert_read_markers(db, user_id, rows):
+def _insert_read_markers(db, user_id, rows, *, automatic=False):
     values = [{"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"km-vms-camera-read:{user_id}:{row.id}")),
                "created_at": now_utc(), "actor_user_id": user_id, "category": READ_CATEGORY,
                "event_type": "camera_event.read", "severity": "info", "message_ru": "", "message_en": "",
-               "target_type": "camera_event", "target_id": row.id, "event_metadata": {}} for row in rows]
+               "target_type": "camera_event", "target_id": row.id,
+               "event_metadata": {"automatic": True} if automatic else {}} for row in rows]
     if values:
         if db.get_bind().dialect.name == "postgresql":
             from sqlalchemy.dialects.postgresql import insert
         else:
             from sqlalchemy.dialects.sqlite import insert
         db.execute(insert(AuditEvent).values(values).on_conflict_do_nothing(index_elements=[AuditEvent.id]))
+
+
+def auto_read_new_event(db, row, received):
+    """Freeze muted personal attention when a NEW event is accepted, not read.
+
+    Users without saved preferences use the all-day/all-camera default. Read
+    markers belong only to the excluded user and share the event transaction.
+    Lock existing preference rows against a simultaneous settings save; neither
+    a later client visit nor re-enabling alerts can rewrite this decision.
+    """
+    settings = db.query(UserWorkspaceLayout).filter(UserWorkspaceLayout.workspace_key == PREFERENCE_KEY).order_by(
+        UserWorkspaceLayout.user_id).with_for_update().all()
+    event, context = serialize(row), timezone_context(db)
+    for setting in settings:
+        if not notifications_allowed(preference_value(setting.layout), event, context, at=received):
+            _insert_read_markers(db, setting.user_id, [row], automatic=True)
+
+
+def automatic_read_ids(db, user_id, ids):
+    return {row[0] for row in db.query(AuditEvent.target_id).filter(AuditEvent.category == READ_CATEGORY,
+        AuditEvent.actor_user_id == user_id, AuditEvent.target_id.in_(ids),
+        AuditEvent.event_metadata["automatic"].as_boolean().is_(True)).all()} if ids else set()
+
+
+def event_notification_allowed(db, user_id, preference, event, ctx):
+    # A muted event stays silent even if a phone was offline until alerts were
+    # enabled again. Ordinary manual read markers keep their existing semantics.
+    return notifications_allowed(preference, event, ctx) and not automatic_read_ids(db, user_id, [event["id"]])
 
 
 def mark_read(db, user_id, ids):
@@ -334,6 +375,8 @@ def record_signal(db, group, camera, signal, *, diagnostics=None):
                          **repeats.attributes(repeat_key, received),
                      })
     db.add(row)
+    db.flush()
+    auto_read_new_event(db, row, received)
     from app.services.mobile_push import signal_change, wake_local
     signal_change(db)
     db.commit()
@@ -377,11 +420,16 @@ def updates(db, user_id, cursor=None):
     rows = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).limit(20).all()
     if rows:
         result["cursor"] = cursor_for(rows[-1])
-        result["items"] = [serialize(row) for row in rows]
+        ids = [row.id for row in rows]
+        read_ids = marked_read_ids(db, user_id, ids)
+        automatic = automatic_read_ids(db, user_id, ids)
+        context = timezone_context(db)
+        result["items"] = [{**serialize(row, row.id in read_ids),
+            "notify": row.id not in automatic and notifications_allowed(result["preferences"], serialize(row), context)} for row in rows]
     return result
 
 
-def notifications_allowed(preference, event, ctx):
+def notifications_allowed(preference, event, ctx, *, at=None):
     if not preference.get("notifications", True):
         return False
     if preference.get("camera_ids") is not None and event.get("camera_id") not in preference["camera_ids"]:
@@ -391,8 +439,13 @@ def notifications_allowed(preference, event, ctx):
     if preference.get("kinds") is not None and not event_kinds.intersection(preference["kinds"]):
         return False
     if preference.get("hours_enabled"):
-        local = datetime.now(ctx.zone)
-        minute, start, end = local.hour * 60 + local.minute, preference["start_minute"], preference["end_minute"]
+        # Arrival uses the NAS clock, not a camera's possibly wrong timestamp.
+        # Delivery also respects the user's CURRENT quiet hours.
+        instant = at or datetime.now(timezone.utc)
+        local = instant.replace(tzinfo=timezone.utc).astimezone(ctx.zone) if instant.tzinfo is None else instant.astimezone(ctx.zone)
+        schedule = (preference.get("camera_schedules") or {}).get(str(event.get("camera_id")), {}) if preference.get("schedule_mode") == "per_camera" else {}
+        minute = local.hour * 60 + local.minute
+        start, end = schedule.get("start_minute", preference["start_minute"]), schedule.get("end_minute", preference["end_minute"])
         if start < end and not start <= minute < end:
             return False
         if start > end and not (minute >= start or minute < end):

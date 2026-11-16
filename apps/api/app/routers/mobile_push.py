@@ -58,7 +58,8 @@ def notification_event(event_id: UUID, db: Session = Depends(get_db), user: User
     if row is None:
         raise HTTPException(404, detail={"code": "camera_event_not_found"})
     context = timezone_context(db)
-    return {"event": camera_events.serialize(row, ctx=context), "timezone": context.name}
+    read = row.id in camera_events.marked_read_ids(db, user.id, [row.id])
+    return {"event": camera_events.serialize(row, read=read, ctx=context), "timezone": context.name}
 
 
 @router.put("/devices/{device_id}")

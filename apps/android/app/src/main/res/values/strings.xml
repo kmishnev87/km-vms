@@ -243,8 +243,16 @@
     <string name="events_alerts">Alerts</string>
     <string name="events_types">Event types</string>
     <string name="events_all_types">All events</string>
-    <string name="events_allow_notifications">Receive alerts</string>
-    <string name="events_preferences_scope">Personal NAS alert settings. Turning alerts off does not stop the NAS from receiving and saving camera events.</string>
+    <string name="events_allow_notifications">Notify me</string>
+    <string name="events_preferences_scope">Shared by this account in the web app and on phones. New events outside the selected cameras, types or hours are saved as viewed, without alerts. Existing unviewed events stay unchanged. Reception and recording remain on.</string>
+    <string name="events_receiving">Event reception</string>
+    <string name="events_receiving_help">Save events on the NAS for all users. Changes apply immediately and mirror “Receive camera events” in camera settings. Recording and camera-side detection are unchanged.</string>
+    <string name="events_receiving_unsupported">ONVIF required</string>
+    <string name="events_receiving_on">On</string>
+    <string name="events_receiving_off">Off</string>
+    <string name="events_schedule_all">Same hours for all</string>
+    <string name="events_schedule_per_camera">Per-camera hours</string>
+    <string name="events_schedule_help">NAS time zone. Overnight hours are supported; identical start and end mean all day.</string>
     <string name="events_hours">Only during these hours</string>
     <string name="events_hours_from">From</string>
     <string name="events_hours_to">to</string>
@@ -274,7 +282,7 @@
     <string name="push_server_update">This NAS needs a server version with mobile notification support.</string>
     <string name="push_failed">Could not configure or test delivery. Check the connection and try again.</string>
     <string name="push_temporary">The delivery service is temporarily unavailable.</string>
-    <string name="push_scope">Camera and event selections below also apply to background alerts. Your phone does not continuously poll the NAS.</string>
+    <string name="push_scope">For this phone and NAS only; unread status is unchanged. Personal rules below apply on the web and all phones. No continuous NAS polling.</string>
     <string name="push_test">Test</string>
     <string name="push_test_accepted">The delivery service accepted the test. Check the Android notification shade.</string>
     <string name="push_test_received">Test received on this phone.</string>

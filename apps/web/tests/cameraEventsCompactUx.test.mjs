@@ -43,10 +43,10 @@ test("unread state only changes a fixed-size marker, never row controls or geome
 
 test("Live event handoff fits just that camera and cannot overwrite the ordinary saved layout", () => {
   const source = read("../app/live/page.js");
-  const body = source.match(/useCameraEventHandoff\(\{ ready:[\s\S]*?onTarget: target => \{([\s\S]*?)\n    \},\n  \}\);/)[1];
+  const body = source.match(/function openSingleCamera\(cameraId, prefix\) \{([\s\S]*?)\n  \}/)[1];
   let fitted = false, result, cancelled = false, invalidated = false;
   const eventViewRef = { current: false }, pendingLayoutSaveRef = { current: () => assert.fail("must not save") };
-  vm.runInNewContext(`(target => {${body}})({ camera_id: 42 })`, {
+  vm.runInNewContext(`((cameraId, prefix) => {${body}})(42, 'event')`, {
     cameraMap: new Map([["42", { id: 42 }]]), defaultStream: () => "sub", nextZIndex: () => 3,
     tiles: [{ id: "ordinary", cameraId: "99" }], eventViewRef, pendingLayoutSaveRef,
     saveTimerRef: { current: 123 }, clearTimeout: () => { cancelled = true; },
@@ -62,4 +62,5 @@ test("Live event handoff fits just that camera and cannot overwrite the ordinary
   assert.equal(result.length, 1);
   assert.equal(result[0].cameraId, "42");
   assert.equal(result[0].stream, "sub");
+  assert.match(source, /onTarget: target => openSingleCamera\(target.camera_id, "event"\)/);
 });

@@ -172,7 +172,8 @@ def deliver_one(factory, device_id, owner, *, sender=send_push, defer=None):
             cursor, identifier, revision = candidate.delivery_at, event.id, row.revision
             serialized = events.serialize(event, ctx=timezone_context(db))
             preference = events.preferences(db, user.id)[0]
-            allowed = cursor >= now - timedelta(hours=DELIVERY_TTL_HOURS) and events.notifications_allowed(preference, serialized, timezone_context(db))
+            allowed = cursor >= now - timedelta(hours=DELIVERY_TTL_HOURS) and events.event_notification_allowed(
+                db, user.id, preference, serialized, timezone_context(db))
             payload = event_payload(serialized) if allowed else None
             try:
                 subscription = json.loads(decrypt_text(row.subscription_encrypted)) if allowed else None

@@ -2,11 +2,11 @@
   "format": 1,
   "published": true,
   "package_name": "ru.kmvms.mobile",
-  "version_name": "0.8.7",
-  "version_code": 807,
-  "release_tag": "v0.9.23",
-  "size_bytes": 6559049,
-  "sha256": "31cd7009f270ebbb0335be909443ed9784a9ab310e112df2df8693f9c44fd551",
+  "version_name": "0.8.8",
+  "version_code": 808,
+  "release_tag": "v0.9.24",
+  "size_bytes": 6580889,
+  "sha256": "d5912012c9494c59d6d610f43afb08a596623e954da1390b51c37f55ecb847e3",
   "certificate_sha256": "2d3a85fdd3b2573be0eceb33aebb05b9cac8cd1f4fb07bc72416899feca1fbff",
   "min_android_sdk": 26
 }

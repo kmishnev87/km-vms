@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.23](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.23)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.24](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.24)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.23/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.23
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.24/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.24
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -92,6 +92,7 @@ Camera controls are grounded in what the device reports. Supported settings can 
 - Align by tile or **fit the cameras' frame aspect ratios** to use the screen more effectively.
 - Add all current cameras with frame-aware alignment.
 - Open individual fullscreen views with main/sub selection and audio controls.
+- Double-click a camera preview to open its own frame-fitted live view without replacing your saved workspace.
 - Recover viewing after temporary connection interruptions.
 
 ### Capability-based PTZ
@@ -141,14 +142,14 @@ Receive ONVIF events from compatible cameras, keep a searchable history, and mov
 
 **Motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame.**
 
-- Enable event reception separately for each compatible camera.
-- Select personal notifications by camera, event type, and time window.
+- Control shared event reception from camera setup or a dedicated per-camera reception list.
+- Select personal notifications by camera and event type, with shared or individual camera schedules in the NAS time zone.
+- Retain muted arrivals in history as viewed, without new alert badges or push notifications. Existing unviewed events keep their status.
 - Open live video or available recordings around an event; keep event markers visible even when that moment was not recorded.
 - Keep service chatter, such as clock synchronization, out of detection history.
 - Discard identical triggers arriving less than **45 seconds** after the preceding matching signal, before storage and push delivery. Each repeat advances that sliding interval; cameras, rules, types, and reported object classes have independent intervals.
 - Quiet ordinary alerts on the client already visibly playing that camera, without globally muting other devices or distinct critical alarms.
 - Mark events viewed, select matching events across pages, and confirm history deletion without deleting footage.
-- Change supported ONVIF detection switches when the camera explicitly exposes them.
 
 Detection is performed by the camera. Receiving its events is not a claim that KM VMS already runs its own server-side AI analytics. Opening an event uses existing footage; it cannot recreate a recording that was never made.
 

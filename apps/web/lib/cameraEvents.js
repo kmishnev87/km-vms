@@ -14,7 +14,7 @@ export function eventErrorKey(error) {
   return ["event_camera_not_available", "event_source_ambiguous", "event_archive_unavailable", "event_not_found",
     "event_access_denied", "detector_state_changed", "detector_change_unconfirmed", "detector_switch_not_exposed",
     "detector_read_failed", "analytics_unsupported", "analytics_profile_unavailable", "event_selection_expired",
-    "event_selection_too_large"].includes(code) ? code : "request_failed";
+    "event_selection_too_large", "event_reception_onvif_required", "event_reception_support_unconfirmed"].includes(code) ? code : "request_failed";
 }
 
 export function eventHistoryQuery(filters = {}, offset = 0) {

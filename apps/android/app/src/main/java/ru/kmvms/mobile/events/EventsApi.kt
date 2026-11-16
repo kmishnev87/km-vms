@@ -49,21 +49,36 @@ data class EventSelection(val id: String, val count: Int, val since: String,
     val selectedCount get() = (count-excluded.size).coerceAtLeast(0)
     fun contains(id: String) = id in visibleIds && id !in excluded
 }
-data class EventCamera(val id: Long, val name: String, val receiving: Boolean)
+data class EventCamera(val id: Long, val name: String, val receiving: Boolean, val protocol: String = "onvif")
+data class EventHours(val startMinute: Int, val endMinute: Int) {
+    init { require(startMinute in 0..1439 && endMinute in 0..1439) }
+    fun json() = JSONObject().put("start_minute", startMinute).put("end_minute", endMinute)
+}
 data class EventPreferences(val notifications: Boolean = true, val cameraIds: Set<Long>? = null,
-    val kinds: Set<CameraEventKind>? = null, val hoursEnabled: Boolean = false, val startMinute: Int = 0, val endMinute: Int = 0) {
+    val kinds: Set<CameraEventKind>? = null, val hoursEnabled: Boolean = false, val startMinute: Int = 0, val endMinute: Int = 0,
+    val perCameraHours: Boolean = false, val cameraSchedules: Map<Long, EventHours> = emptyMap()) {
+    fun hoursFor(cameraId: Long) = cameraSchedules[cameraId] ?: EventHours(startMinute, endMinute)
     fun json() = JSONObject().put("notifications", notifications)
         .put("camera_ids", cameraIds?.let { JSONArray(it.toList()) } ?: JSONObject.NULL)
         .put("kinds", kinds?.let { JSONArray(it.map(CameraEventKind::code)) } ?: JSONObject.NULL)
         .put("hours_enabled", hoursEnabled).put("start_minute", startMinute).put("end_minute", endMinute)
+        .put("schedule_mode", if (perCameraHours) "per_camera" else "all")
+        .put("camera_schedules", JSONObject().also { result -> cameraSchedules.forEach { (id, hours) -> result.put(id.toString(), hours.json()) } })
     companion object {
         fun from(value: JSONObject): EventPreferences {
             val ids = value.optJSONArray("camera_ids")
             val kinds = value.optJSONArray("kinds")
+            val schedules = value.optJSONObject("camera_schedules")
+            val hours = schedules?.keys()?.asSequence()?.associate { key ->
+                val id = key.toLong().also { require(it in 1..Int.MAX_VALUE.toLong()) }
+                val range = schedules.getJSONObject(key)
+                id to EventHours(range.getInt("start_minute"), range.getInt("end_minute"))
+            }.orEmpty()
             return EventPreferences(value.optBoolean("notifications", true),
                 ids?.let { (0 until it.length()).map(it::getLong).toSet() },
                 kinds?.let { (0 until it.length()).map { index -> CameraEventKind.parse(it.getString(index)) }.toSet() },
-                value.optBoolean("hours_enabled"), value.optInt("start_minute"), value.optInt("end_minute"))
+                value.optBoolean("hours_enabled"), value.optInt("start_minute"), value.optInt("end_minute"),
+                value.optString("schedule_mode") == "per_camera", hours)
         }
     }
 }
@@ -112,12 +127,18 @@ class EventsApi(val api: NasApi) {
     suspend fun cameras(): List<EventCamera> {
         val rows = (api.json("api/camera-events/cameras") as JSONObject).getJSONArray("items")
         return (0 until rows.length()).map { index -> rows.getJSONObject(index).let {
-            EventCamera(it.getLong("id"), it.getString("name"), it.optBoolean("events_enabled"))
+            EventCamera(it.getLong("id"), it.getString("name"), it.optBoolean("events_enabled"), it.optString("protocol"))
         } }
     }
     suspend fun preferences() = EventPreferences.from(api.json("api/camera-events/preferences") as JSONObject)
+    suspend fun receiving(cameraId: Long, enabled: Boolean) {
+        require(cameraId in 1..Int.MAX_VALUE.toLong())
+        // Exactly the same setting, validation and permissions as CameraEditor.
+        api.json("api/cameras/$cameraId", "PUT", JSONObject().put("events_enabled", enabled))
+    }
     suspend fun save(value: EventPreferences): EventPreferences {
         require(value.startMinute in 0..1439 && value.endMinute in 0..1439)
+        require(value.cameraSchedules.size <= 512 && value.cameraSchedules.keys.all { it in 1..Int.MAX_VALUE.toLong() })
         return EventPreferences.from(api.json("api/camera-events/preferences", "PUT", value.json()) as JSONObject)
     }
     suspend fun read(ids: Set<String>) {

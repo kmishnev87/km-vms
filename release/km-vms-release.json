@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.23",
-  "tag": "v0.9.23",
-  "title": "KM VMS 0.9.23 — Clip details and precise Android event playback",
-  "summary": "Android 0.8.7 opens event recordings at the correct NAS-local time from the first playback request. Completed clips show file size and measured media duration; the web clip dialog also shows duration. Existing viewing, permissions and update protections are preserved.",
+  "version": "0.9.24",
+  "tag": "v0.9.24",
+  "title": "KM VMS 0.9.24 — Clear event controls and personal notification schedules",
+  "summary": "Separate shared camera event reception from personal alerts in the web interface and Android 0.8.8. Set common or per-camera hours in the NAS time zone. Muted arrivals remain in history as viewed; existing unread events keep their status. Double-click a web camera preview for an individual live view.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.23",
+  "source_ref": "v0.9.24",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,35 +20,39 @@
     "target_version": 11
   },
   "changelog": [
-    "Android 0.8.7: resolve the NAS timezone before the first timeline request, fixing the five-hour event playback shift on GMT+5 installations.",
-    "Completed Android clips show file size and measured playback duration instead of a redundant Ready label; queued, running and failed statuses remain visible.",
-    "Saved web clips show duration beside size, using existing clip metadata without scanning video files or changing the original recordings."
+    "Web and Android 0.8.8: replace the detector controls screen with shared camera event reception switches matching camera setup and existing permissions.",
+    "Personal alert exclusions mark only newly accepted events viewed, without badges or push delivery. Existing unread history is preserved when settings change.",
+    "Choose common hours or individual camera schedules in the NAS time zone, including overnight intervals; saved settings are shared between web and Android.",
+    "Double-click a web camera preview to open only that camera with frame-aware alignment, without replacing the saved live workspace."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.23 — Clip details and precise Android event playback",
-    "ru": "KM VMS 0.9.23 — Сведения о клипах и точный переход к событиям в Android",
-    "zh-CN": "KM VMS 0.9.23 — 剪辑详情与 Android 事件录像定位"
+    "en": "KM VMS 0.9.24 — Clear event controls and personal notification schedules",
+    "ru": "KM VMS 0.9.24 — Понятный приём событий и личные расписания оповещений",
+    "zh-CN": "KM VMS 0.9.24 — 清晰的事件接收与个人通知时段"
   },
   "summary_i18n": {
-    "en": "Android 0.8.7 opens event recordings at the correct NAS-local time from the first playback request. Completed clips show file size and measured media duration; the web clip dialog also shows duration. Existing viewing, permissions and update protections are preserved.",
-    "ru": "APK 0.8.7 открывает запись события в правильное время с первого запроса, учитывая часовой пояс NAS. В готовых клипах показаны размер и измеренная длительность вместо лишнего статуса «Готов». Длительность добавлена и в веб-версию. Права и механизмы обновления сохранены.",
-    "zh-CN": "Android 0.8.7 首次请求事件录像时即使用 NAS 时区，避免数小时偏移。已完成剪辑显示文件大小和实测时长，网页端也增加时长信息。保留现有观看功能、权限和更新保护。"
+    "en": "Separate shared camera event reception from personal alerts in the web interface and Android 0.8.8. Set common or per-camera hours in the NAS time zone. Muted arrivals remain in history as viewed; existing unread events keep their status. Double-click a web camera preview for an individual live view.",
+    "ru": "Веб и APK 0.8.8 разделяют общий приём событий камер и личные оповещения. Доступны общие и покамерные расписания по времени NAS. Новые события вне личных настроек сохраняются просмотренными; старые непрочитанные не меняются. Двойной клик по превью открывает онлайн одной камеры.",
+    "zh-CN": "网页和 Android 0.8.8 区分 NAS 共享事件接收与个人通知。可按 NAS 时区设置统一或逐摄像机时段。静音期间的新事件以已读状态保留，已有未读事件不变。双击网页摄像机预览即可打开单路实时画面。"
   },
   "changelog_i18n": {
     "en": [
-      "Android 0.8.7: resolve the NAS timezone before the first timeline request, fixing the five-hour event playback shift on GMT+5 installations.",
-      "Completed Android clips show file size and measured playback duration instead of a redundant Ready label; queued, running and failed statuses remain visible.",
-      "Saved web clips show duration beside size, using existing clip metadata without scanning video files or changing the original recordings."
+      "Web and Android 0.8.8: replace the detector controls screen with shared camera event reception switches matching camera setup and existing permissions.",
+      "Personal alert exclusions mark only newly accepted events viewed, without badges or push delivery. Existing unread history is preserved when settings change.",
+      "Choose common hours or individual camera schedules in the NAS time zone, including overnight intervals; saved settings are shared between web and Android.",
+      "Double-click a web camera preview to open only that camera with frame-aware alignment, without replacing the saved live workspace."
     ],
     "ru": [
-      "APK 0.8.7: часовой пояс NAS определяется до первого запроса хронологии; устранён сдвиг перехода к событию на пять часов в GMT+5.",
-      "Готовые клипы APK показывают размер и измеренную длительность вместо «Готов». Состояния ожидания, подготовки и ошибки остаются видны.",
-      "В сохранённых клипах веб-версии добавлена длительность рядом с размером. Данные берутся из паспорта, без сканирования видео и изменения исходных записей."
+      "Веб и APK 0.8.8: вместо управления обнаружением — общий приём событий камер. Переключатели совпадают с настройками камеры и сохраняют прежние права доступа.",
+      "Личные исключения делают просмотренными только новые события, без счётчика и push. Старые непрочитанные события не меняются при сохранении настроек.",
+      "Общее или покамерное расписание по времени NAS, включая переход через полночь. Сохранённые настройки общие для веба и APK.",
+      "Двойной клик по превью в вебе открывает онлайн одной камеры с выравниванием по кадру, не изменяя сохранённую рабочую область."
     ],
     "zh-CN": [
-      "Android 0.8.7：首次时间轴请求前确定 NAS 时区，修复 GMT+5 安装中事件录像跳转提前五小时的问题。",
-      "Android 已完成剪辑显示大小和实测播放时长，移除多余的就绪标签；保留排队、生成中和失败状态。",
-      "网页保存的剪辑增加时长信息，复用现有剪辑元数据，不扫描视频、不修改原始录像。"
+      "网页和 Android 0.8.8 用共享事件接收列表替代检测设置页，与摄像机设置保持一致，沿用现有权限。",
+      "个人通知规则仅将新接收且被排除的事件标为已读，不增加角标或推送；修改设置不改变已有未读事件。",
+      "按 NAS 时区设置统一或逐摄像机时段，支持跨午夜；网页与 Android 共用已保存设置。",
+      "双击网页摄像机预览，打开按画面比例排列的单路实时视频，不覆盖已保存的实时工作区。"
     ]
   }
 }
