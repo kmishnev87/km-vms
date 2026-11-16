@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useLocaleText } from "../lib/i18n";
-import { formatBytes } from "../lib/archiveExports";
+import { formatBytes, clipDurationSeconds, formatClipDuration } from "../lib/archiveExports";
 import ArchiveExportResult from "./ArchiveExportResult";
 
 // Entry points own separate drafts. Presentation is shared, never their context.
@@ -73,7 +73,7 @@ export default function ArchiveExportDialog({ draft, onDraftChange, onClose, onC
             <option value="">{copy.none}</option>{recent.map((item) => <option key={item.id} value={item.id}>{item.camera?.label || copy.camera} — {item.start_ts?.replace("T", " ")} — {item.end_ts?.replace("T", " ")}</option>)}
           </select></label>
           <div className="archiveClipSavedFacts">
-            <dl><div><dt>{copy.camera}</dt><dd>{job?.camera?.label || "—"}</dd></div><div><dt>{copy.size}</dt><dd>{job?.output_size_bytes != null ? formatBytes(job.output_size_bytes) : "—"}</dd></div><div><dt>{copy.period}</dt><dd>{job ? `${job.start_ts?.replace("T", " ")} — ${job.end_ts?.replace("T", " ")}` : "—"}</dd></div></dl>
+            <dl><div className="archiveClipSavedCamera"><dt>{copy.camera}</dt><dd>{job?.camera?.label || "—"}</dd></div><div><dt>{copy.size}</dt><dd>{job?.output_size_bytes != null ? formatBytes(job.output_size_bytes) : "—"}</dd></div><div><dt>{copy.duration}</dt><dd>{formatClipDuration(clipDurationSeconds(job))}</dd></div><div><dt>{copy.period}</dt><dd>{job ? `${job.start_ts?.replace("T", " ")} — ${job.end_ts?.replace("T", " ")}` : "—"}</dd></div></dl>
             <span className="archiveExportFile" title={job?.filename || ""}>{job?.filename || "\u00a0"}</span>
           </div>
           <div className="archiveClipListState">

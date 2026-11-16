@@ -1,6 +1,8 @@
 package ru.kmvms.mobile.chronology
 
 import org.json.JSONObject
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.kmvms.mobile.archive.encode
 import ru.kmvms.mobile.archive.parseTime
 import ru.kmvms.mobile.data.NasApi
@@ -39,13 +41,20 @@ sealed interface TimelineLookup {
     data object Unavailable : TimelineLookup
 }
 
-class ChronologyApi(val api: NasApi, initialZone: ZoneId = ZoneOffset.UTC) {
+class ChronologyApi(val api: NasApi, initialZone: ZoneId? = null) {
     suspend fun cameras(): List<Camera> {
         val rows = api.json("api/chronology/cameras") as JSONArray
         return (0 until rows.length()).map { Camera.fromJson(rows.getJSONObject(it)) }
     }
-    @Volatile private var serverZone: ZoneId = initialZone
-    private fun timestamp(instant: Instant) = instant.atZone(serverZone).toLocalDateTime().toString()
+    @Volatile private var serverZone: ZoneId? = initialZone
+    private val zoneLock = Mutex()
+    private suspend fun timezone(): ZoneId = serverZone ?: zoneLock.withLock {
+        serverZone ?: ZoneId.of((api.json("api/system/status") as JSONObject).getString("timezone"))
+            .also { serverZone = it }
+    }
+    // Resolve the installation timezone before the FIRST local-naive request.
+    // Learning it from ranges afterwards can leave a cached wrong-hour source.
+    private suspend fun timestamp(instant: Instant) = instant.atZone(timezone()).toLocalDateTime().toString()
     suspend fun ranges(cameraIds: List<Long>, from: Instant, to: Instant): TimelineRanges {
         require(cameraIds.isNotEmpty() && cameraIds.all { it > 0 } && to > from)
         val body = api.json("api/chronology/ranges?camera_ids=${cameraIds.distinct().joinToString(",")}" +

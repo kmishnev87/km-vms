@@ -32,13 +32,16 @@ data class RecordingPage(val items: List<Recording>, val total: Int, val more: B
 data class ArchiveOptions(val names: List<String>, val exportable: List<ArchiveCamera>, val cameras: List<ArchiveCamera>)
 data class Clip(val id: String, val title: String, val camera: String, val status: String,
                 val progress: Int, val filename: String?, val size: Long, val canDownload: Boolean,
-                val start: String?, val end: String?, val gaps: Int = 0, val errorCode: String? = null) {
+                val start: String?, val end: String?, val gaps: Int = 0, val errorCode: String? = null,
+                val durationSeconds: Double? = null) {
     companion object {
         fun fromJson(value: JSONObject) = Clip(value.getString("id"), value.optionalText("title") ?: value.optionalText("filename").orEmpty(),
             value.optJSONObject("camera")?.optString("label").orEmpty(), value.getString("status"), value.optInt("progress_percent"),
             value.optionalText("filename"), value.optLong("output_size_bytes"), value.optBoolean("download_ready"),
             value.optionalText("start_ts"), value.optionalText("end_ts"), value.optJSONArray("gap_warnings")?.length() ?: 0,
-            value.optionalText("error_code")?.takeIf { it == "source_gap_detected" })
+            value.optionalText("error_code")?.takeIf { it == "source_gap_detected" },
+            value.optDouble(if (value.has("output_duration_seconds")) "output_duration_seconds" else "duration_seconds")
+                .takeIf { it.isFinite() && it > 0 })
     }
 }
 class ArchiveApi(val api: NasApi) {

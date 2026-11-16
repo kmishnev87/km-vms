@@ -53,6 +53,37 @@ FORBIDDEN_PATTERNS = (
 )
 
 
+def test_serialized_clip_uses_measured_manifest_duration_without_probing_video(tmp_path, monkeypatch):
+    output = tmp_path / "clip.mkv"
+    output.write_bytes(b"fixture-video")
+    manifest = tmp_path / "clip.json"
+    job = ArchiveExportJob(id="clip-fixture", status="done", duration_seconds=960,
+                           internal_checksum="fixture-checksum", internal_output_path="output", internal_manifest_path="manifest")
+    metadata = {"schema_version": export_service.MANIFEST_SCHEMA_VERSION, "manifest_type": export_service.MANIFEST_TYPE,
+                "export_job": {"id": job.id}, "output": {"size_bytes": output.stat().st_size,
+                "sha256": job.internal_checksum, "duration_seconds": 956.7}}
+    manifest.write_text(json.dumps(metadata), encoding="utf-8")
+    monkeypatch.setattr(export_service, "_path_from_internal", lambda path: output if path == "output" else manifest)
+    monkeypatch.setattr(export_service, "_safe_download_filename", lambda *_: "clip.mkv")
+    monkeypatch.setattr(export_service, "_ffprobe_duration", lambda *_: pytest.fail("clip listing must not probe video"))
+    serialized = export_service.serialize_archive_export_job(job)
+    assert serialized["output_duration_seconds"] == 956.7
+    assert serialized["duration_seconds"] == 960
+    assert serialized["output_size_bytes"] == output.stat().st_size
+    for field, value in (("duration_seconds", -1), ("duration_seconds", True), ("duration_seconds", "60"),
+                         ("duration_seconds", float("nan")), ("size_bytes", 999), ("sha256", "wrong")):
+        bad = {**metadata, "output": {**metadata["output"], field: value}}
+        manifest.write_text(json.dumps(bad), encoding="utf-8")
+        assert export_service.serialize_archive_export_job(job)["output_duration_seconds"] is None
+    metadata["export_job"]["id"] = "different-clip"
+    manifest.write_text(json.dumps(metadata), encoding="utf-8")
+    assert export_service.serialize_archive_export_job(job)["output_duration_seconds"] is None
+    manifest.write_bytes(b"invalid")
+    assert export_service.serialize_archive_export_job(job)["output_duration_seconds"] is None
+    manifest.unlink()
+    assert export_service.serialize_archive_export_job(job)["output_duration_seconds"] is None
+
+
 @pytest.fixture
 def api_db():
     tmp = tempfile.TemporaryDirectory(prefix="stage11_archive_export_")
@@ -365,7 +396,9 @@ def test_stage11_stage5_chronology_quick_download_contract(client, api_db):
     deleted_segment = add_segment(db, deleted, name="deleted_download.mkv")
     deleted_ts = (deleted_segment.started_at + timedelta(seconds=1)).isoformat()
     soft_deleted = client.post("/chronology/download-token", params={"camera_id": deleted.id, "ts": deleted_ts}, headers=auth_headers(operator))
-    assert soft_deleted.status_code == 404
+    # Retained recordings of deleted cameras remain available by exact identity.
+    assert soft_deleted.status_code == 200
+    assert soft_deleted.json()["segment_id"] == deleted_segment.id
 
     (Path(settings.storage_root) / segment.relative_path).unlink()
     unavailable = client.post("/chronology/download-token", params=params, headers=auth_headers(operator))

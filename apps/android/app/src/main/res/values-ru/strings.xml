@@ -98,6 +98,8 @@
     <string name="saved_clips">Сохранённые клипы</string>
     <string name="no_saved_clips">Сохранённых клипов нет.</string>
     <string name="clip_ready">Готов</string>
+    <string name="clip_size">Размер: %1$s</string>
+    <string name="clip_duration">Длительность: %1$s</string>
     <string name="clip_queued">Ожидает создания</string>
     <string name="clip_running">Создаём клип…</string>
     <string name="clip_failed">Не удалось создать клип.</string>

@@ -114,6 +114,19 @@ export function formatBytes(sizeBytes) {
   return `${Math.round(value)} ${unit}`;
 }
 
+export function clipDurationSeconds(job) {
+  const seconds = job && Object.hasOwn(job, "output_duration_seconds") ? job.output_duration_seconds : job?.duration_seconds;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+export function formatClipDuration(seconds) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return "—";
+  const total = Math.max(1, Math.round(seconds));
+  const part = (value) => String(value).padStart(2, "0");
+  return total >= 3600 ? `${Math.floor(total / 3600)}:${part(Math.floor(total / 60) % 60)}:${part(total % 60)}`
+    : `${Math.floor(total / 60)}:${part(total % 60)}`;
+}
+
 export function describeArchiveExportLimits(limits = DEFAULT_ARCHIVE_EXPORT_LIMITS) {
   return `Максимальный диапазон: ${formatDuration(limits?.max_duration_seconds || DEFAULT_ARCHIVE_EXPORT_LIMITS.max_duration_seconds)}.`;
 }

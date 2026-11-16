@@ -221,6 +221,7 @@ export const enDictionary = {
     "deleteConfirm": "Delete this clip and its passport? The original camera recordings will be kept.",
     "none": "No clip selected",
     "size": "Size",
+    "duration": "Duration",
     "period": "Recording period",
     "loading": "Loading clips…",
     "empty": "No saved clips yet.",

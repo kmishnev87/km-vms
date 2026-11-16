@@ -389,7 +389,8 @@
 .archiveExportField .input, .archiveExportField .select { min-width: 0; width: 100%; min-height: 42px; box-sizing: border-box; padding: 8px 10px; border-radius: 9px; font: inherit; }
 .archiveClipLimit, .archiveClipListState { margin: 0; color: #64748b; font-size: 12px; line-height: 1.5; }
 .archiveClipSavedFacts { min-width: 0; }
-.archiveClipSavedFacts dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; margin: 0 0 12px; }
+.archiveClipSavedFacts dl { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px 20px; margin: 0 0 12px; }
+.archiveClipSavedCamera { min-width: 0; }
 .archiveClipSavedFacts dl > div:last-child { grid-column: 1 / -1; }
 .archiveClipSavedFacts dt { color: #64748b; font-size: 12px; }
 .archiveClipSavedFacts dd { margin: 4px 0 0; font-size: 14px; overflow-wrap: anywhere; }
@@ -405,6 +406,8 @@
 .archiveClipDialog button:focus-visible, .archiveClipHelp summary:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
 .archiveClipListState .button { width: auto; height: 34px; font-size: 12px; }
 @media (max-width: 620px) {
+  .archiveClipSavedFacts dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .archiveClipSavedCamera { grid-column: 1 / -1; }
   .archiveExportModal.archiveClipDialog { height: min(620px, calc(100dvh - 32px)); padding: 16px; gap: 12px; }
   .archiveExportFields { grid-template-columns: 1fr; gap: 10px; }
   .archiveClipDialog .button { font-size: 12px; padding: 5px; }

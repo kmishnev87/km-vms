@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.22",
-  "tag": "v0.9.22",
-  "title": "KM VMS 0.9.22 — Android navigation and recording controls",
-  "summary": "Android 0.8.6 returns event-launched live views to Events on Back, adds confirmed bulk deletion for swipe-selected recordings, clarifies timeline interval controls and the initial NAS download status, and centers the app-report action. NAS update execution and event-to-archive navigation remain unchanged.",
+  "version": "0.9.23",
+  "tag": "v0.9.23",
+  "title": "KM VMS 0.9.23 — Clip details and precise Android event playback",
+  "summary": "Android 0.8.7 opens event recordings at the correct NAS-local time from the first playback request. Completed clips show file size and measured media duration; the web clip dialog also shows duration. Existing viewing, permissions and update protections are preserved.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.22",
+  "source_ref": "v0.9.23",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,43 +20,35 @@
     "target_version": 11
   },
   "changelog": [
-    "Android 0.8.6: Back from an event-launched live view returns to Events, including after rotation, without changing normal Live or camera-preview navigation.",
-    "Swipe-select recordings and confirm individual or bulk deletion; aligned trash buttons, server permissions, exact file identities and stable retry receipts are preserved.",
-    "Center the timeline interval between its controls: minus selects a shorter duration, plus a longer duration.",
-    "Show initial NAS file download correctly; preserve server-reported stages, verified completion and existing updater protections.",
-    "Center the Android diagnostic-report button in Settings, retaining the product style and all three languages."
+    "Android 0.8.7: resolve the NAS timezone before the first timeline request, fixing the five-hour event playback shift on GMT+5 installations.",
+    "Completed Android clips show file size and measured playback duration instead of a redundant Ready label; queued, running and failed statuses remain visible.",
+    "Saved web clips show duration beside size, using existing clip metadata without scanning video files or changing the original recordings."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.22 — Android navigation and recording controls",
-    "ru": "KM VMS 0.9.22 — Навигация Android и управление записями",
-    "zh-CN": "KM VMS 0.9.22 — Android 导航与录像管理"
+    "en": "KM VMS 0.9.23 — Clip details and precise Android event playback",
+    "ru": "KM VMS 0.9.23 — Сведения о клипах и точный переход к событиям в Android",
+    "zh-CN": "KM VMS 0.9.23 — 剪辑详情与 Android 事件录像定位"
   },
   "summary_i18n": {
-    "en": "Android 0.8.6 returns event-launched live views to Events on Back, adds confirmed bulk deletion for swipe-selected recordings, clarifies timeline interval controls and the initial NAS download status, and centers the app-report action. NAS update execution and event-to-archive navigation remain unchanged.",
-    "ru": "APK 0.8.6 возвращает из онлайна события обратно в события, добавляет общее удаление раскрытых свайпом записей с подтверждением, исправляет центровку и логику интервала хронологии, пояснение начала скачивания обновления NAS и расположение кнопки отчёта. Механизм обновления NAS и переход к архиву события не изменены.",
-    "zh-CN": "Android 0.8.6 可从事件实时画面返回事件列表，支持确认后批量删除滑动选中的录像，改进时间轴区间按钮、NAS 更新初始下载状态和诊断报告按钮对齐。NAS 更新执行逻辑与事件录像导航保持不变。"
+    "en": "Android 0.8.7 opens event recordings at the correct NAS-local time from the first playback request. Completed clips show file size and measured media duration; the web clip dialog also shows duration. Existing viewing, permissions and update protections are preserved.",
+    "ru": "APK 0.8.7 открывает запись события в правильное время с первого запроса, учитывая часовой пояс NAS. В готовых клипах показаны размер и измеренная длительность вместо лишнего статуса «Готов». Длительность добавлена и в веб-версию. Права и механизмы обновления сохранены.",
+    "zh-CN": "Android 0.8.7 首次请求事件录像时即使用 NAS 时区，避免数小时偏移。已完成剪辑显示文件大小和实测时长，网页端也增加时长信息。保留现有观看功能、权限和更新保护。"
   },
   "changelog_i18n": {
     "en": [
-      "Android 0.8.6: Back from an event-launched live view returns to Events, including after rotation, without changing normal Live or camera-preview navigation.",
-      "Swipe-select recordings and confirm individual or bulk deletion; aligned trash buttons, server permissions, exact file identities and stable retry receipts are preserved.",
-      "Center the timeline interval between its controls: minus selects a shorter duration, plus a longer duration.",
-      "Show initial NAS file download correctly; preserve server-reported stages, verified completion and existing updater protections.",
-      "Center the Android diagnostic-report button in Settings, retaining the product style and all three languages."
+      "Android 0.8.7: resolve the NAS timezone before the first timeline request, fixing the five-hour event playback shift on GMT+5 installations.",
+      "Completed Android clips show file size and measured playback duration instead of a redundant Ready label; queued, running and failed statuses remain visible.",
+      "Saved web clips show duration beside size, using existing clip metadata without scanning video files or changing the original recordings."
     ],
     "ru": [
-      "APK 0.8.6: возврат из онлайна события ведёт в события, в том числе после поворота. Прежняя навигация обычного онлайна и превью сохранена.",
-      "Общее удаление раскрытых свайпом записей с подтверждением, выровненными корзинами и прежними правами. Неуспешные файлы сохраняют квитанции для повтора.",
-      "Интервал хронологии отцентрирован: минус выбирает меньший промежуток времени, плюс — больший.",
-      "Начальное скачивание обновления NAS отображается как скачивание, а не неподтверждённый результат. Проверка завершения и защиты сохранены.",
-      "Кнопка отправки диагностики APK размещена по центру блока настроек, с прежним оформлением и тремя языками."
+      "APK 0.8.7: часовой пояс NAS определяется до первого запроса хронологии; устранён сдвиг перехода к событию на пять часов в GMT+5.",
+      "Готовые клипы APK показывают размер и измеренную длительность вместо «Готов». Состояния ожидания, подготовки и ошибки остаются видны.",
+      "В сохранённых клипах веб-версии добавлена длительность рядом с размером. Данные берутся из паспорта, без сканирования видео и изменения исходных записей."
     ],
     "zh-CN": [
-      "Android 0.8.6：从事件打开实时画面后，返回操作回到事件列表，旋转屏幕后亦然；保留普通实时预览和摄像头预览的导航方式。",
-      "滑动多条录像后显示与各行对齐的批量删除按钮。删除前确认准确的所选项；保留权限与文件标识校验，失败项重试时沿用原操作凭据。",
-      "时间轴区间居中显示：减号缩短时间范围，加号扩大时间范围。",
-      "NAS 更新初始文件下载显示为正常下载，不再误显示结果尚未确认；保留完成验证与现有更新保护。",
-      "设置中的 Android 诊断报告按钮居中，保留产品样式与三种语言。"
+      "Android 0.8.7：首次时间轴请求前确定 NAS 时区，修复 GMT+5 安装中事件录像跳转提前五小时的问题。",
+      "Android 已完成剪辑显示大小和实测播放时长，移除多余的就绪标签；保留排队、生成中和失败状态。",
+      "网页保存的剪辑增加时长信息，复用现有剪辑元数据，不扫描视频、不修改原始录像。"
     ]
   }
 }

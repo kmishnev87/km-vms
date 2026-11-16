@@ -98,6 +98,8 @@
     <string name="saved_clips">已保存的剪辑</string>
     <string name="no_saved_clips">尚无已保存的剪辑。</string>
     <string name="clip_ready">就绪</string>
+    <string name="clip_size">大小：%1$s</string>
+    <string name="clip_duration">时长：%1$s</string>
     <string name="clip_queued">等待创建</string>
     <string name="clip_running">正在创建剪辑…</string>
     <string name="clip_failed">无法创建剪辑。</string>

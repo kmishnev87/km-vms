@@ -98,6 +98,8 @@
     <string name="saved_clips">Saved clips</string>
     <string name="no_saved_clips">No saved clips.</string>
     <string name="clip_ready">Ready</string>
+    <string name="clip_size">Size: %1$s</string>
+    <string name="clip_duration">Duration: %1$s</string>
     <string name="clip_queued">Waiting to create</string>
     <string name="clip_running">Creating clip…</string>
     <string name="clip_failed">Could not create the clip.</string>

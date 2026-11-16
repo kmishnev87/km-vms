@@ -12,6 +12,23 @@ import ru.kmvms.mobile.data.NasApi
 import java.time.*
 
 class ArchiveApiTest {
+    @Test fun completedClipHasMeasuredSizeAndDurationInsteadOfJustAReadyLabel() {
+        val clip=Clip.fromJson(JSONObject("""{"id":"abcdef12","status":"done","output_size_bytes":6442450944,"duration_seconds":960,"output_duration_seconds":956.7}"""))
+        assertEquals(6442450944L,clip.size)
+        assertEquals(956.7,clip.durationSeconds!!,0.001)
+        assertEquals("15:57",clipDuration(clip.durationSeconds))
+        assertEquals("1:02:03",clipDuration(3723.0))
+        assertEquals("0:01",clipDuration(0.2))
+        for (seconds in listOf(null,Double.NaN,Double.POSITIVE_INFINITY,-1.0,0.0))assertEquals("—",clipDuration(seconds))
+    }
+    @Test fun olderNasDurationIsCompatibleButAnExplicitUnknownOutputDurationIsNotInvented() {
+        val old=JSONObject("""{"id":"abcdef12","status":"done","duration_seconds":60}""")
+        assertEquals("1:00",clipDuration(Clip.fromJson(old).durationSeconds))
+        old.put("output_duration_seconds",JSONObject.NULL)
+        assertNull(Clip.fromJson(old).durationSeconds)
+        old.put("output_duration_seconds",-2)
+        assertNull(Clip.fromJson(old).durationSeconds)
+    }
     @Test fun bulkDeletionUsesTheSameExactPerFileApiAndKeepsDeniedFilesForRetry()=runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"ok":true}"""))

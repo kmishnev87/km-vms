@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.22](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.22)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.23](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.23)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.22/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.22
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.23/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.23
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -132,7 +132,7 @@ This is a common time-based workspace for investigating footage, not just a grid
 - Create clips from Records or Chronology, including footage from removed cameras.
 - Select up to three hours without a fixed 4 GiB source-size cap; preparation checks available storage.
 - Download the resulting video and its clip-information passport.
-- Browse saved clips and explicitly delete derived results.
+- Browse saved clips with file size and playback duration, and explicitly delete derived results.
 - Deleting a clip does not delete its source recordings. Original footage follows separate retention rules.
 
 ### Camera events and notifications

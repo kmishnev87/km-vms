@@ -221,6 +221,7 @@ export const zhCNDictionary = {
     "deleteConfirm": "删除此片段及其说明文件？原始摄像机录像将保留。",
     "none": "未选择片段",
     "size": "大小",
+    "duration": "时长",
     "period": "录像时间",
     "loading": "正在加载片段…",
     "empty": "暂无已保存片段。",

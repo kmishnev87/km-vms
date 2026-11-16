@@ -3,6 +3,7 @@ package ru.kmvms.mobile.ui.archive
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.text.format.Formatter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -90,7 +91,7 @@ import java.time.format.DateTimeFormatter
                             (ending?.let{" — "+it.format(DateTimeFormatter.ofPattern(if(it.toLocalDate()==beginning.toLocalDate())"HH:mm" else "dd.MM.yyyy HH:mm"))}?:""),
                             style=MaterialTheme.typography.labelMedium,color=Muted)
                     } }
-                    Text(stringResource(when(clip.status){"done"->R.string.clip_ready;"queued"->R.string.clip_queued;"running"->R.string.clip_running;else->R.string.clip_failed}),color=Muted,style=MaterialTheme.typography.labelMedium)
+                    ClipFacts(clip)
                     if(clip.gaps>0||clip.errorCode=="source_gap_detected")Text(stringResource(R.string.clip_has_gaps),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.error)
                     if(clip.status=="running")LinearProgressIndicator(progress={clip.progress.coerceIn(0,100)/100f},modifier=Modifier.fillMaxWidth())
                     Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
@@ -109,4 +110,14 @@ import java.time.format.DateTimeFormatter
     confirmation?.let{clip->AlertDialog(onDismissRequest={confirmation=null},modifier=Modifier.semantics{testTagsAsResourceId=true},text={Text(stringResource(R.string.delete_clip_confirmation))},
         confirmButton={TextButton(onClick={confirmation=null;controller.delete(clip)},modifier=Modifier.testTag("confirm-delete-clip")){Text(stringResource(R.string.remove))}},
         dismissButton={TextButton(onClick={confirmation=null}){Text(stringResource(R.string.cancel))}})}
+}
+
+@Composable internal fun ClipFacts(clip: Clip) {
+    val context=LocalContext.current
+    if(clip.status=="done") Row(Modifier.fillMaxWidth().testTag("clip-facts-${clip.id}"),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        Text(stringResource(R.string.clip_size,if(clip.size>0)Formatter.formatShortFileSize(context,clip.size)else"—"),color=Muted,
+            style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f).testTag("clip-size-${clip.id}"))
+        Text(stringResource(R.string.clip_duration,clipDuration(clip.durationSeconds)),color=Muted,
+            style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f).testTag("clip-duration-${clip.id}"))
+    } else Text(stringResource(when(clip.status){"queued"->R.string.clip_queued;"running"->R.string.clip_running;else->R.string.clip_failed}),color=Muted,style=MaterialTheme.typography.labelMedium)
 }

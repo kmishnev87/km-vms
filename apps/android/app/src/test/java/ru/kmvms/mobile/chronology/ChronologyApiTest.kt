@@ -8,9 +8,61 @@ import org.junit.Test
 import ru.kmvms.mobile.core.ServerAddress
 import ru.kmvms.mobile.data.NasApi
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.ZoneId
+import java.time.LocalDateTime
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.RecordedRequest
 
 class ChronologyApiTest {
-    private fun client(server: MockWebServer) = ChronologyApi(NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") })
+    private fun client(server: MockWebServer, zone: ZoneId? = ZoneOffset.UTC) = ChronologyApi(NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") },zone)
+
+    @Test fun coldPlaybackAndRangesKnowTheNasZoneBeforeAnyLocalTimestampIsSent() = runBlocking {
+        for (zone in listOf("Etc/GMT-5", "America/Los_Angeles", "Asia/Kolkata", "UTC")) MockWebServer().use { server ->
+            val target = Instant.parse("2026-11-16T09:05:00Z")
+            val expected = target.atZone(ZoneId.of(zone)).toLocalDateTime()
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val url = request.requestUrl!!
+                    return MockResponse().setBody(when(url.encodedPath) {
+                        "/api/system/status" -> """{"initialized":true,"timezone":"$zone"}"""
+                        "/api/chronology/ranges" -> {
+                            assertEquals(expected,LocalDateTime.parse(url.queryParameter("from")))
+                            """{"timezone":{"id":"$zone"},"items":{}}"""
+                        }
+                        else -> {
+                            assertEquals(expected,LocalDateTime.parse(url.queryParameter("ts")))
+                            """{"camera_id":3,"segment_id":9,"archive_root_id":"root-a","has_video":true,"offset_sec":5,"duration_sec":60}"""
+                        }
+                    })
+                }
+            }
+            val api = client(server,null)
+            val sources = listOf(async { api.resolve(3,target.toEpochMilli()) },async { api.resolve(3,target.toEpochMilli()) }).awaitAll()
+            val source = (sources.first() as TimelineLookup.Video).source
+            assertEquals(target.minusSeconds(5).toEpochMilli(),source.start)
+            api.ranges(listOf(3),target,target.plusSeconds(60))
+            assertEquals(4,server.requestCount)
+            assertEquals("/api/system/status",server.takeRequest().path)
+        }
+    }
+
+    @Test fun invalidOrFailedZoneLookupNeverSendsAnAssumedUtcPlaybackRequest() = runBlocking {
+        MockWebServer().use { server ->
+            val api = client(server,null)
+            for (response in listOf(MockResponse().setResponseCode(503).setBody("{}"),MockResponse().setBody("""{"timezone":"invalid"}"""))) {
+                server.enqueue(response)
+                assertTrue(runCatching { api.resolve(3,1_000) }.isFailure)
+                assertEquals("/api/system/status",server.takeRequest().path)
+            }
+            server.enqueue(MockResponse().setBody("""{"timezone":"UTC"}"""))
+            server.enqueue(MockResponse().setBody("""{"camera_id":3,"has_video":false}"""))
+            assertEquals(TimelineLookup.Empty,api.resolve(3,1_000))
+            assertEquals(4,server.requestCount)
+        }
+    }
 
     @Test fun retainedCameraCatalogIsSeparateFromTheLiveCameraList() = runBlocking {
         MockWebServer().use { server ->

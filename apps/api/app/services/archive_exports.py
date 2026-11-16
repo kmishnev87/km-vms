@@ -1438,6 +1438,27 @@ def delete_archive_export_job(db: Session, *, export_id: str, actor: User, reque
         lock.release()
 
 
+def _display_output_duration(job: ArchiveExportJob, manifest_path: Path | None, output_size: int | None) -> float | None:
+    """Reuse measured clip metadata; listing clips must never probe video files."""
+    if not manifest_path or output_size is None:
+        return None
+    try:
+        manifest = _read_manifest_file(manifest_path)
+        output = manifest.get("output") or {}
+        if (manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION
+                or manifest.get("manifest_type") != MANIFEST_TYPE
+                or (manifest.get("export_job") or {}).get("id") != job.id
+                or output.get("size_bytes") != output_size
+                or not job.internal_checksum or output.get("sha256") != job.internal_checksum):
+            return None
+        duration = output.get("duration_seconds")
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            return None
+        return float(duration) if math.isfinite(duration) and duration > 0 else None
+    except (HTTPException, AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
 def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
     try:
         output_path = _path_from_internal(job.internal_output_path)
@@ -1482,4 +1503,5 @@ def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
         "filename": _safe_download_filename(job, output_container or "mkv") if ready else None,
         "output_container": output_container,
         "output_size_bytes": output_size,
+        "output_duration_seconds": _display_output_duration(job, manifest_path, output_size) if ready else None,
     }

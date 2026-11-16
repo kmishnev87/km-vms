@@ -10,6 +10,8 @@ import ru.kmvms.mobile.core.ServerAddress
 import ru.kmvms.mobile.data.NasApi
 import java.time.Instant
 import java.time.ZoneId
+import ru.kmvms.mobile.chronology.ChronologyApi
+import ru.kmvms.mobile.chronology.TimelineLookup
 
 class EventVideoNavigationTest {
     private val occurred = Instant.parse("2026-11-14T10:00:00Z")
@@ -36,6 +38,24 @@ class EventVideoNavigationTest {
             assertEquals(occurred.minusSeconds(5).toEpochMilli(), result.request!!.archiveTime)
             assertFalse(result.request!!.returnToEvents)
             assertEquals("2026-11-14T14:59:55", server.takeRequest().requestUrl!!.queryParameter("ts"))
+        }
+    }
+
+    @Test fun eventToFreshChronologyPlayerKeepsFourteenOhFiveInsteadOfNineOhFive() = runBlocking {
+        MockWebServer().use { server ->
+            val api = NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") }
+            val occurrence = Instant.parse("2026-11-16T09:05:00Z")
+            val video = """{"camera_id":3,"has_video":true,"segment_id":9,"archive_root_id":"root","offset_sec":5,"duration_sec":60}"""
+            server.enqueue(MockResponse().setBody(video))
+            val request = EventVideoNavigation(api).open(event.copy(occurred=occurrence),EventAction.RECORDING,zone,occurrence.plusSeconds(600)).request!!
+            assertEquals("2026-11-16T14:04:55",server.takeRequest().requestUrl!!.queryParameter("ts"))
+            server.enqueue(MockResponse().setBody("""{"initialized":true,"timezone":"Etc/GMT-5"}"""))
+            server.enqueue(MockResponse().setBody(video))
+            val source=(ChronologyApi(api).resolve(request.cameraId,request.archiveTime!!) as TimelineLookup.Video).source
+            assertEquals("/api/system/status",server.takeRequest().path)
+            assertEquals("2026-11-16T14:04:55",server.takeRequest().requestUrl!!.queryParameter("ts"))
+            assertEquals(occurrence.minusSeconds(10).toEpochMilli(),source.start)
+            assertEquals(5_000L,request.archiveTime!!-source.start)
         }
     }
 
