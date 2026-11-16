@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.24",
-  "tag": "v0.9.24",
-  "title": "KM VMS 0.9.24 — Clear event controls and personal notification schedules",
-  "summary": "Separate shared camera event reception from personal alerts in the web interface and Android 0.8.8. Set common or per-camera hours in the NAS time zone. Muted arrivals remain in history as viewed; existing unread events keep their status. Double-click a web camera preview for an individual live view.",
+  "version": "0.9.25",
+  "tag": "v0.9.25",
+  "title": "KM VMS 0.9.25 — Android home-screen notification widget",
+  "summary": "Android 0.8.9 adds an optional compact home-screen widget for personal camera alerts. Open a translucent panel to switch alerts for your account or individual cameras without navigating through the app. Saved schedules still apply, recording and event reception stay unchanged, and each widget remains bound to its chosen NAS/account.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.24",
+  "source_ref": "v0.9.25",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,39 +20,39 @@
     "target_version": 11
   },
   "changelog": [
-    "Web and Android 0.8.8: replace the detector controls screen with shared camera event reception switches matching camera setup and existing permissions.",
-    "Personal alert exclusions mark only newly accepted events viewed, without badges or push delivery. Existing unread history is preserved when settings change.",
-    "Choose common hours or individual camera schedules in the NAS time zone, including overnight intervals; saved settings are shared between web and Android.",
-    "Double-click a web camera preview to open only that camera with frame-aware alignment, without replacing the saved live workspace."
+    "Add the Android notification widget explicitly from Settings, choose a saved NAS and confirm Android's launcher prompt; no automatic installation or overlay permission is required.",
+    "A compact translucent panel provides a master alert switch and scrollable camera choices, with existing common or per-camera schedules shown in the NAS time zone.",
+    "Personal alert changes preserve schedules, event types and existing unread history. Recording, shared camera event reception and phone-specific delivery registration are unchanged.",
+    "Permission-checked single-choice saves preserve other preferences. Each widget stays bound to its NAS/account and does not poll the NAS while closed."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.24 — Clear event controls and personal notification schedules",
-    "ru": "KM VMS 0.9.24 — Понятный приём событий и личные расписания оповещений",
-    "zh-CN": "KM VMS 0.9.24 — 清晰的事件接收与个人通知时段"
+    "en": "KM VMS 0.9.25 — Android home-screen notification widget",
+    "ru": "KM VMS 0.9.25 — Виджет оповещений на рабочем столе Android",
+    "zh-CN": "KM VMS 0.9.25 — Android 桌面通知小组件"
   },
   "summary_i18n": {
-    "en": "Separate shared camera event reception from personal alerts in the web interface and Android 0.8.8. Set common or per-camera hours in the NAS time zone. Muted arrivals remain in history as viewed; existing unread events keep their status. Double-click a web camera preview for an individual live view.",
-    "ru": "Веб и APK 0.8.8 разделяют общий приём событий камер и личные оповещения. Доступны общие и покамерные расписания по времени NAS. Новые события вне личных настроек сохраняются просмотренными; старые непрочитанные не меняются. Двойной клик по превью открывает онлайн одной камеры.",
-    "zh-CN": "网页和 Android 0.8.8 区分 NAS 共享事件接收与个人通知。可按 NAS 时区设置统一或逐摄像机时段。静音期间的新事件以已读状态保留，已有未读事件不变。双击网页摄像机预览即可打开单路实时画面。"
+    "en": "Android 0.8.9 adds an optional compact home-screen widget for personal camera alerts. Open a translucent panel to switch alerts for your account or individual cameras without navigating through the app. Saved schedules still apply, recording and event reception stay unchanged, and each widget remains bound to its chosen NAS/account.",
+    "ru": "В Android 0.8.9 появился компактный виджет личных оповещений. Полупрозрачная панель позволяет включать и выключать оповещения аккаунта или отдельных камер без переходов по приложению. Расписания соблюдаются, запись и приём событий не меняются, каждый виджет привязан к выбранному NAS и аккаунту.",
+    "zh-CN": "Android 0.8.9 新增可选的紧凑桌面通知小组件。通过半透明面板切换账户或各摄像机的个人通知，无需进入应用各页面。现有时段继续生效，录像和事件接收保持不变，每个小组件始终绑定所选 NAS 和账户。"
   },
   "changelog_i18n": {
     "en": [
-      "Web and Android 0.8.8: replace the detector controls screen with shared camera event reception switches matching camera setup and existing permissions.",
-      "Personal alert exclusions mark only newly accepted events viewed, without badges or push delivery. Existing unread history is preserved when settings change.",
-      "Choose common hours or individual camera schedules in the NAS time zone, including overnight intervals; saved settings are shared between web and Android.",
-      "Double-click a web camera preview to open only that camera with frame-aware alignment, without replacing the saved live workspace."
+      "Add the Android notification widget explicitly from Settings, choose a saved NAS and confirm Android's launcher prompt; no automatic installation or overlay permission is required.",
+      "A compact translucent panel provides a master alert switch and scrollable camera choices, with existing common or per-camera schedules shown in the NAS time zone.",
+      "Personal alert changes preserve schedules, event types and existing unread history. Recording, shared camera event reception and phone-specific delivery registration are unchanged.",
+      "Permission-checked single-choice saves preserve other preferences. Each widget stays bound to its NAS/account and does not poll the NAS while closed."
     ],
     "ru": [
-      "Веб и APK 0.8.8: вместо управления обнаружением — общий приём событий камер. Переключатели совпадают с настройками камеры и сохраняют прежние права доступа.",
-      "Личные исключения делают просмотренными только новые события, без счётчика и push. Старые непрочитанные события не меняются при сохранении настроек.",
-      "Общее или покамерное расписание по времени NAS, включая переход через полночь. Сохранённые настройки общие для веба и APK.",
-      "Двойной клик по превью в вебе открывает онлайн одной камеры с выравниванием по кадру, не изменяя сохранённую рабочую область."
+      "Виджет добавляется только из настроек APK: выбор сохранённого NAS и системное подтверждение Android. Автоматического добавления и разрешения поверх других приложений нет.",
+      "Компактная полупрозрачная панель: общий переключатель личных оповещений и прокручиваемый список камер. Общее или покамерное расписание отображается по времени NAS.",
+      "Переключения сохраняют расписания, типы событий и старые непрочитанные сообщения. Запись, общий приём событий и регистрация доставки на телефон не меняются.",
+      "Выбор сохраняется после проверки прав и подтверждения NAS, без перезаписи других настроек. Виджет привязан к своему NAS и аккаунту, не опрашивает сервер в закрытом состоянии."
     ],
     "zh-CN": [
-      "网页和 Android 0.8.8 用共享事件接收列表替代检测设置页，与摄像机设置保持一致，沿用现有权限。",
-      "个人通知规则仅将新接收且被排除的事件标为已读，不增加角标或推送；修改设置不改变已有未读事件。",
-      "按 NAS 时区设置统一或逐摄像机时段，支持跨午夜；网页与 Android 共用已保存设置。",
-      "双击网页摄像机预览，打开按画面比例排列的单路实时视频，不覆盖已保存的实时工作区。"
+      "仅在 APK 设置中主动添加小组件：选择已保存 NAS 并确认 Android 系统提示。不自动添加，也不要求悬浮窗权限。",
+      "紧凑半透明面板包含个人通知总开关和可滚动的摄像机列表，按 NAS 时区显示统一或逐摄像机通知时段。",
+      "切换保留通知时段、事件类型及已有未读记录，不改变录像、共享事件接收或手机推送注册。",
+      "单项更改经过权限校验并由 NAS 确认，不覆盖其他偏好。小组件固定绑定所选 NAS 和账户，关闭时不轮询服务器。"
     ]
   }
 }

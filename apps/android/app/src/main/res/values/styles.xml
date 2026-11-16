@@ -8,4 +8,13 @@
         <item name="android:windowBackground">#EEF3F8</item>
     </style>
     <style name="Theme.KMVMS" parent="Base.Theme.KMVMS" />
+    <style name="Theme.KMVMS.WidgetPopup" parent="Base.Theme.KMVMS">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
 </resources>

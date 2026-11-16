@@ -339,6 +339,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
         Text(stringResource(R.string.application), style = MaterialTheme.typography.titleLarge)
         val languages=listOf("" to stringResource(R.string.system_language),"en" to "English","ru" to "Русский","zh-CN" to "中文")
         LabeledChoice(stringResource(R.string.app_language),languages.find{it.first==AppLocales.selected(context)}?.second.orEmpty(),languages,true,"app-language"){AppLocales.set(context,it)}
+        ru.kmvms.mobile.widget.AlertWidgetSetupButton(state.profiles, state.active?.id)
         Surface(shape = RoundedCornerShape(14.dp), color = Color.White) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.servers), fontWeight = FontWeight.SemiBold)

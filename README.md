@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.24](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.24)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.25](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.25)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.24/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.24
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.25/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.25
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -195,6 +195,7 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - Add, edit, enable, disable and delete NAS user accounts and assign supported roles from the phone, under the same server-enforced permissions and owner protections as the browser.
 - A notification setup offer after the first NAS login, with a separately remembered choice for each server.
 - Notifications that open the corresponding server, camera, and event.
+- An optional home-screen notification widget: add it from Settings, bind it to a NAS, and switch personal camera alerts in a compact translucent panel. Existing schedules still apply; recording and event reception are unchanged.
 - Built-in app diagnostics: add a comment and send a client report directly to KM VMS support from Settings. No ZIP needs to be created, saved, or shared on the phone; the support server confirms acceptance with a report number.
 - APK checks on the first foreground opening in a new day, plus manual checks. Before installation, the client checks size, hash, package, version, and signing certificate. Android asks for installation confirmation.
 - NAS update checks start when you enter the Android maintenance screen. Follow server-reported stages and the current operation; APK downloads show transferred bytes and a measured percentage, followed by a separate verification step.

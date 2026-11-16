@@ -16,6 +16,22 @@
         <service android:name=".push.MobilePushService" android:exported="false">
             <intent-filter><action android:name="org.unifiedpush.android.connector.PUSH_EVENT" /></intent-filter>
         </service>
+        <receiver android:name=".widget.AlertWidgetProvider" android:exported="false" android:label="@string/widget_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.LOCALE_CHANGED" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/alert_widget_info" />
+        </receiver>
+        <receiver android:name=".widget.AlertWidgetPinnedReceiver" android:exported="false" />
+        <activity android:name=".widget.AlertWidgetActivity" android:exported="false"
+            android:theme="@style/Theme.KMVMS.WidgetPopup" android:taskAffinity="${applicationId}.widgets"
+            android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".widget.AlertWidgetConfigureActivity" android:exported="true"
+            android:theme="@style/Theme.KMVMS.WidgetPopup" android:taskAffinity="${applicationId}.widgets"
+            android:excludeFromRecents="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" /></intent-filter>
+        </activity>
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden">
             <intent-filter>

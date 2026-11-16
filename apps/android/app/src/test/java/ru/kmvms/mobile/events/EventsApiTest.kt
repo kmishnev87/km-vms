@@ -14,6 +14,25 @@ class EventsApiTest {
     private val id = "de5d0fb2-f7f4-4f0b-817a-94a4a567f746"
     private fun client(server: MockWebServer) = EventsApi(NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") })
 
+    @Test fun widgetChangesOnlyTheChosenFieldWithoutSendingOldSchedulesOrOtherChoices() = runBlocking {
+        MockWebServer().use { server ->
+            val api = client(server)
+            val confirmed = EventPreferences(notifications = false, kinds = setOf(CameraEventKind.PERSON), hoursEnabled = true,
+                perCameraHours = true, cameraSchedules = mapOf(42L to EventHours(1140, 420)))
+            server.enqueue(MockResponse().setBody(confirmed.json().toString()))
+            assertEquals(confirmed, api.chooseNotifications(false))
+            val master = server.takeRequest()
+            assertEquals("PATCH", master.method); assertEquals("/api/camera-events/preferences", master.path)
+            assertEquals(setOf("notifications"), JSONObject(master.body.readUtf8()).keys().asSequence().toSet())
+            server.enqueue(MockResponse().setBody(confirmed.copy(cameraIds = setOf(42)).json().toString()))
+            assertEquals(confirmed.cameraSchedules, api.chooseCamera(42, true).cameraSchedules)
+            val camera = server.takeRequest(); val body = JSONObject(camera.body.readUtf8())
+            assertEquals("PATCH", camera.method)
+            assertEquals(setOf("camera_id", "enabled"), body.keys().asSequence().toSet())
+            assertEquals(42, body.getInt("camera_id")); assertTrue(body.getBoolean("enabled"))
+        }
+    }
+
     @Test fun individualHoursRoundTripWithoutChangingCameraFiltersOrGlobalDefaults() {
         val baseline = EventPreferences(cameraIds = setOf(1, 2), kinds = setOf(CameraEventKind.PERSON),
             hoursEnabled = true, startMinute = 1140, endMinute = 420, perCameraHours = true,

@@ -425,4 +425,21 @@
     <string name="recordings_delete_selected">Удалить выбранные записи</string>
     <string name="recordings_delete_title">Удалить выбранные записи?</string>
     <string name="recordings_delete_confirmation">Безвозвратно удалить выбранные записи (%1$d)? Остальные записи сохранятся.</string>
+    <string name="widget_alerts">Оповещения</string>
+    <string name="widget_title">Виджет оповещений</string>
+    <string name="widget_description">Быстрые личные оповещения камер выбранного NAS.</string>
+    <string name="widget_add">Добавить на рабочий стол</string>
+    <string name="widget_choose_server">Выберите NAS для этого виджета.</string>
+    <string name="widget_configure">Выбрать NAS</string>
+    <string name="widget_open_for">Оповещения камер: %1$s</string>
+    <string name="widget_schedule">Расписание: %1$s–%2$s</string>
+    <string name="widget_all_day">Круглосуточно</string>
+    <string name="widget_schedule_help">По времени NAS (%1$s). Расписания соблюдаются.</string>
+    <string name="widget_scope">Только личные оповещения. Приём событий и запись не меняются.</string>
+    <string name="widget_receiving_off">Приём событий выключен</string>
+    <string name="widget_phone_off">Доставка на этот телефон не готова. Проверьте оповещения телефона в приложении.</string>
+    <string name="widget_sign_in">Сначала войдите в этот NAS в приложении.</string>
+    <string name="widget_update_nas">Обновите KM VMS на этом NAS для управления из виджета.</string>
+    <string name="widget_pin_manual">Нажмите и удерживайте пустое место рабочего стола, откройте «Виджеты» и выберите KM VMS → «Виджет оповещений».</string>
+    <string name="widget_no_servers">Сначала добавьте подключение к NAS в приложении.</string>
 </resources>

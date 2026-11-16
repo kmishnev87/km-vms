@@ -60,6 +60,17 @@ class ReadSelection(BaseModel):
     ids: list[UUID] = Field(max_length=200)
 
 
+class NotificationMasterChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    notifications: StrictBool
+
+
+class NotificationCameraChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    camera_id: StrictInt = Field(ge=1, le=2147483647)
+    enabled: StrictBool
+
+
 class ReadAll(BaseModel):
     model_config = ConfigDict(extra="forbid")
     through: str = Field(min_length=39, max_length=100)
@@ -187,6 +198,28 @@ def put_preferences(payload: Preferences, db: Session = Depends(get_db), user: U
             value[key] = previous[key]
     if value["camera_ids"] is not None and any(item < 1 for item in value["camera_ids"]):
         _failure("invalid_event_camera", 422)
+    return events.save_preferences(db, user.id, value)
+
+
+@router.patch("/preferences")
+def choose_notification(payload: NotificationMasterChoice | NotificationCameraChoice,
+                        db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    # A widget changes one choice, never a stale copy of kinds/hours/other cameras.
+    if isinstance(payload, NotificationCameraChoice):
+        _camera(db, payload.camera_id)
+    value = events.lock_notification_preferences(db, user.id)
+    if isinstance(payload, NotificationMasterChoice):
+        value["notifications"] = payload.notifications
+    else:
+        selected = set(value["camera_ids"] if value["camera_ids"] is not None else
+                       [item[0] for item in db.query(Camera.id).filter(Camera.deleted_at.is_(None)).all()])
+        if payload.enabled:
+            selected.add(payload.camera_id)
+        else:
+            selected.discard(payload.camera_id)
+        if len(selected) > 512:
+            _failure("invalid_event_camera", 422)
+        value["camera_ids"] = sorted(selected)
     return events.save_preferences(db, user.id, value)
 
 

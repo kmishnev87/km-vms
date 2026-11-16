@@ -131,6 +131,13 @@ class EventsApi(val api: NasApi) {
         } }
     }
     suspend fun preferences() = EventPreferences.from(api.json("api/camera-events/preferences") as JSONObject)
+    suspend fun chooseNotifications(enabled: Boolean) = EventPreferences.from(api.json("api/camera-events/preferences", "PATCH",
+        JSONObject().put("notifications", enabled)) as JSONObject)
+    suspend fun chooseCamera(cameraId: Long, enabled: Boolean): EventPreferences {
+        require(cameraId in 1..Int.MAX_VALUE.toLong())
+        return EventPreferences.from(api.json("api/camera-events/preferences", "PATCH",
+            JSONObject().put("camera_id", cameraId).put("enabled", enabled)) as JSONObject)
+    }
     suspend fun receiving(cameraId: Long, enabled: Boolean) {
         require(cameraId in 1..Int.MAX_VALUE.toLong())
         // Exactly the same setting, validation and permissions as CameraEditor.

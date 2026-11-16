@@ -78,6 +78,19 @@ def preference_value(layout):
             "schedule_mode": value.get("schedule_mode", "all"), "camera_schedules": value.get("camera_schedules") or {}}
 
 
+def lock_notification_preferences(db, user_id):
+    # Materialize the default row before locking: FOR UPDATE alone cannot lock
+    # an absent row. No user-row lock that could invert ingestion's FK ordering.
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    db.execute(insert(UserWorkspaceLayout).values(user_id=user_id, workspace_key=PREFERENCE_KEY,
+        layout_version=1, layout=preference_value({}), updated_at=now_utc()).on_conflict_do_nothing(
+            index_elements=[UserWorkspaceLayout.user_id, UserWorkspaceLayout.workspace_key]))
+    return preferences(db, user_id, lock=True)[0]
+
+
 def save_preferences(db, user_id, value):
     value = {**value, "kinds": [kind for kind in value["kinds"] if kind in EVENT_KINDS]
              if isinstance(value.get("kinds"), list) else None}

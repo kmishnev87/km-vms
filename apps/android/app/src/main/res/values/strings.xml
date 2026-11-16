@@ -425,4 +425,21 @@
     <string name="users_credentials_changed">Sign in again with the updated credentials.</string>
     <string name="system_normal">Normal</string>
     <string name="system_idle">Idle</string>
+    <string name="widget_alerts">Alerts</string>
+    <string name="widget_title">Notification widget</string>
+    <string name="widget_description">Quick personal camera alerts for a selected NAS.</string>
+    <string name="widget_add">Add to home screen</string>
+    <string name="widget_choose_server">Choose the NAS for this widget.</string>
+    <string name="widget_configure">Choose NAS</string>
+    <string name="widget_open_for">Camera alerts: %1$s</string>
+    <string name="widget_schedule">Schedule: %1$s–%2$s</string>
+    <string name="widget_all_day">All day</string>
+    <string name="widget_schedule_help">NAS time (%1$s). Schedules remain in effect.</string>
+    <string name="widget_scope">Personal alerts only. Event reception and recording stay unchanged.</string>
+    <string name="widget_receiving_off">Event reception is off</string>
+    <string name="widget_phone_off">Delivery to this phone is not ready. Check phone alerts in the app.</string>
+    <string name="widget_sign_in">Sign in to this NAS in the app first.</string>
+    <string name="widget_update_nas">Update KM VMS on this NAS to use widget controls.</string>
+    <string name="widget_pin_manual">Touch and hold an empty area of the home screen, open Widgets, and choose KM VMS → Notification widget.</string>
+    <string name="widget_no_servers">Add a NAS connection in the app first.</string>
 </resources>
