@@ -24,6 +24,13 @@
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/alert_widget_info" />
         </receiver>
         <receiver android:name=".widget.AlertWidgetPinnedReceiver" android:exported="false" />
+        <receiver android:name=".widget.AlertCountWidgetProvider" android:exported="false" android:label="@string/widget_count_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.LOCALE_CHANGED" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/alert_widget_count_info" />
+        </receiver>
         <activity android:name=".widget.AlertWidgetActivity" android:exported="false"
             android:theme="@style/Theme.KMVMS.WidgetPopup" android:taskAffinity="${applicationId}.widgets"
             android:excludeFromRecents="true" android:noHistory="true" />

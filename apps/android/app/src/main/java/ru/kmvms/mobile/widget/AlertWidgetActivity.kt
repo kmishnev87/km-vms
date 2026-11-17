@@ -61,14 +61,16 @@ class AlertWidgetConfigureActivity : ComponentActivity() {
         enableEdgeToEdge()
         val vault = ProfileVault(this)
         setContent { KMVMSTheme {
-            AlertWidgetProfileDialog(vault.profiles(), vault.selectedId(), { profile ->
-                if (runCatching { vault.signIn(profile.id) }.getOrNull() == null) false else {
+            AlertWidgetProfileDialog(vault.profiles(), vault.selectedId(), { profile, variant ->
+                if (runCatching { vault.signIn(profile.id) }.getOrNull() == null ||
+                    (variant == WidgetVariant.COUNT && !WidgetUnreadSync.prepare(this, profile))) false else {
                     AlertWidgetStore(this).bind(id, AlertWidgetBinding(profile.id, profile.username))
                     AlertWidgetProvider.render(this, id)
+                    if (variant == WidgetVariant.COUNT) WidgetUnreadSync.enqueue(this, profile.id)
                     setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id))
                     finish(); true
                 }
-            }, ::finish)
+            }, ::finish, fixedVariant = widgetVariant(this, id))
         } }
     }
 }

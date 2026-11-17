@@ -37,15 +37,19 @@ def wake_local():
 
 
 def status(row):
-    return {"device_id": row.device_id, "enabled": row.enabled, "revision": row.revision,
+    return {"device_id": row.device_id, "enabled": row.enabled, "badge_enabled": row.badge_enabled, "revision": row.revision,
             "label": row.label, "status": row.last_status,
             "registered_at": row.registered_at.isoformat() + "Z",
             "last_sent_at": row.last_sent_at.isoformat() + "Z" if row.last_sent_at else None}
 
 
-def register_device(db, user_id, device_id, revision, label, enabled, subscription):
-    normalized = validate_subscription(subscription) if enabled else None
-    material = json.dumps({"label": label, "enabled": enabled, "subscription": normalized}, sort_keys=True, separators=(",", ":"))
+def register_device(db, user_id, device_id, revision, label, enabled, subscription, *, badge_enabled=False):
+    normalized = validate_subscription(subscription) if enabled or badge_enabled else None
+    configuration = {"label": label, "enabled": enabled, "subscription": normalized}
+    if badge_enabled:
+        configuration["badge_enabled"] = True
+    # Preserve exact fingerprints of existing clients which never opted in.
+    material = json.dumps(configuration, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(material.encode()).hexdigest()
     # The account lock serializes creation/quota checks, not network delivery.
     db.query(User).filter(User.id == user_id).with_for_update().one()
@@ -76,8 +80,15 @@ def register_device(db, user_id, device_id, revision, label, enabled, subscripti
     row.label, row.revision, row.configuration_hash = label, revision, fingerprint
     row.subscription_encrypted = encrypt_text(json.dumps(normalized)) if normalized else None
     row.enabled, row.registered_at = enabled, now
+    row.badge_enabled = badge_enabled
+    row.badge_retry_at, row.badge_failures = None, 0
+    if badge_enabled:
+        row.badge_epoch, row.badge_revision, row.badge_count = None, -1, None
     row.retry_at, row.failures, row.last_status = None, 0, "registered" if enabled else "disabled"
     row.save()
+    if badge_enabled:
+        from app.services.mobile_badges import snapshot
+        snapshot(db, user_id)
     signal_change(db)
     db.commit()
     wake_local()
@@ -158,7 +169,7 @@ def deliver_one(factory, device_id, owner, *, sender=send_push, defer=None):
             row = store.get(db, device_id)
             user = db.get(User, row.user_id)
             if not user or not user.is_active or not user_has_permission(user.role, "view_live") or row.registered_at < now - timedelta(days=REGISTRATION_DAYS):
-                row.enabled, row.subscription_encrypted, row.last_status = False, None, "registration_inactive"
+                row.enabled, row.badge_enabled, row.subscription_encrypted, row.last_status = False, False, None, "registration_inactive"
                 row.save()
                 db.commit()
                 return True
@@ -200,7 +211,7 @@ def deliver_one(factory, device_id, owner, *, sender=send_push, defer=None):
                 row.failures = min(20, row.failures + 1)
                 row.last_status = failure.code
                 if failure.permanent:
-                    row.enabled, row.subscription_encrypted, row.retry_at = False, None, None
+                    row.enabled, row.badge_enabled, row.subscription_encrypted, row.retry_at = False, False, None, None
                 else:
                     row.retry_at = events.now_utc() + timedelta(seconds=min(1800, 30 * 2 ** min(row.failures - 1, 6)))
             else:

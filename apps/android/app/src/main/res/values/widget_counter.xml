@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_count_title">Notifications · 3 × 1</string>
+    <string name="widget_count_description">Quick notification controls and the NAS unread count. Tap the number to open events.</string>
+    <string name="widget_with_count">With count</string>
+    <string name="widget_without_count">No count</string>
+    <string name="widget_unread_count">Unread events: %1$d. Open event history.</string>
+    <string name="widget_count_unavailable">Unread count unavailable. Open event history.</string>
+    <string name="widget_count_setup_failed">Sign in to an updated NAS and enable a push delivery service to keep the count up to date.</string>
+</resources>

@@ -25,11 +25,16 @@ class MobilePushService : PushService() {
         val binding = PushStore(this).byInstance(instance)
         if (binding == null) { AppDiagnostics.record(DiagnosticCode.PUSH_NO_BINDING, DiagnosticArea.PUSH); return }
         fun log(code: DiagnosticCode) = AppDiagnostics.record(code, DiagnosticArea.PUSH, profile = binding.profileId)
-        if (!binding.enabled) { log(DiagnosticCode.PUSH_DISABLED); return }
         val vault = ProfileVault(this)
         val profile = vault.profiles().find { it.id == binding.profileId }
         if (profile == null) { log(DiagnosticCode.PUSH_NO_PROFILE); return }
         if (runCatching { vault.signIn(profile.id) }.getOrNull() == null) { log(DiagnosticCode.PUSH_NO_SESSION); return }
+        val badge = ru.kmvms.mobile.widget.WidgetUnread.parse(message.content)
+        if (badge != null) {
+            if (binding.badgeEnabled) ru.kmvms.mobile.widget.receiveWidgetUnread(this, profile, badge)
+            return
+        }
+        if (!binding.enabled) { log(DiagnosticCode.PUSH_DISABLED); return }
         val envelope = runCatching { PushEnvelope.parse(message.content) }.getOrNull()
         if (envelope == null) { log(DiagnosticCode.PUSH_PARSE_FAILED); return }
         AppDiagnostics.record(DiagnosticCode.PUSH_PARSED, DiagnosticArea.PUSH, profile.id, envelope.eventId, envelope.cameraId)

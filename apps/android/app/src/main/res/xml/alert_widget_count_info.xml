@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp" android:minHeight="40dp" android:targetCellWidth="3" android:targetCellHeight="1"
+    android:resizeMode="horizontal" android:updatePeriodMillis="0" android:widgetCategory="home_screen"
+    android:initialLayout="@layout/alert_widget_count" android:previewLayout="@layout/alert_widget_count"
+    android:description="@string/widget_count_description" android:configure="ru.kmvms.mobile.widget.AlertWidgetConfigureActivity" />

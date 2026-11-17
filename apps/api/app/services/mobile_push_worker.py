@@ -12,6 +12,7 @@ import threading
 import uuid
 
 from sqlalchemy.engine import make_url
+from sqlalchemy import or_
 
 from app.core.config import settings
 from app.db.session import SessionLocal
@@ -19,6 +20,7 @@ from app.models.workspace_layout import UserWorkspaceLayout
 from app.services import mobile_push_store as store
 from app.services.camera_events import now_utc
 from app.services.mobile_push import deliver_one
+from app.services.mobile_badges import deliver_one as deliver_badge
 
 _log = logging.getLogger(__name__)
 _guard = threading.Lock()
@@ -60,7 +62,8 @@ def _run():
                     continue
             try:
                 with SessionLocal() as db:
-                    candidates = store.query(db).filter(UserWorkspaceLayout.layout["enabled"].as_boolean().is_(True))
+                    candidates = store.query(db).filter(or_(UserWorkspaceLayout.layout["enabled"].as_boolean().is_(True),
+                        UserWorkspaceLayout.layout["badge_enabled"].as_boolean().is_(True)))
                     identifiers = [value[0] for value in candidates.with_entities(UserWorkspaceLayout.id).order_by(UserWorkspaceLayout.id).all()]
                     identifiers = [value for value in identifiers if value > last_device] + [value for value in identifiers if value <= last_device]
                 progressed = 0
@@ -69,15 +72,19 @@ def _run():
                     last_device = identifier
                     if _stop.is_set():
                         return
-                    if deliver_one(SessionLocal, identifier, owner, defer=deferred.append):
+                    worked = deliver_one(SessionLocal, identifier, owner, defer=deferred.append)
+                    worked = deliver_badge(SessionLocal, identifier, owner, defer=deferred.append) or worked
+                    if worked:
                         progressed += 1
                     if progressed >= 32:
                         break
                 if progressed:
                     continue  # Drain a real backlog in bounded, fair passes.
                 with SessionLocal() as db:
-                    pending = [store.decode(row) for row in store.query(db).filter(UserWorkspaceLayout.layout["enabled"].as_boolean().is_(True))]
-                    due = min([row.retry_at for row in pending if row and row.retry_at] + deferred, default=None)
+                    pending = [store.decode(row) for row in store.query(db).filter(or_(UserWorkspaceLayout.layout["enabled"].as_boolean().is_(True),
+                        UserWorkspaceLayout.layout["badge_enabled"].as_boolean().is_(True)))]
+                    due = min([row.retry_at for row in pending if row and row.enabled and row.retry_at] +
+                        [row.badge_retry_at for row in pending if row and row.badge_enabled and row.badge_retry_at] + deferred, default=None)
                 timeout = max(1, (due - now_utc()).total_seconds()) if due else None
                 ready, _, _ = select.select([_read, connection], [], [], timeout)
                 if _read in ready:

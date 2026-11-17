@@ -25,11 +25,17 @@ class Registration(BaseModel):
     label: str = Field(min_length=1, max_length=80, pattern=r"^[^\x00-\x1f\x7f]+$")
     enabled: StrictBool
     subscription: dict | None = None
+    badge_enabled: StrictBool = False
 
 
 @router.get("/config")
-def configuration(user: User = Depends(require_permission("view_live"))):
-    return {"protocol": 1, "vapid_public_key": vapid_public_key(), "registration_days": push.REGISTRATION_DAYS}
+def configuration(badge: bool = False, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    value = {"protocol": 1, "vapid_public_key": vapid_public_key(), "registration_days": push.REGISTRATION_DAYS, "widget_badge_v1": True}
+    if badge:
+        from app.services.mobile_badges import snapshot
+        value["unread_badge"] = snapshot(db, user.id)
+        db.commit()
+    return value
 
 
 @router.get("/devices/{device_id}")
@@ -66,7 +72,7 @@ def notification_event(event_id: UUID, db: Session = Depends(get_db), user: User
 def registration(device_id: UUID, payload: Registration, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     try:
         return push.register_device(db, user.id, str(device_id), payload.revision, payload.label,
-            payload.enabled, payload.subscription)
+            payload.enabled, payload.subscription, badge_enabled=payload.badge_enabled)
     except ValueError as exc:
         db.rollback()
         code = str(exc)

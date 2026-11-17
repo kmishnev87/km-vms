@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.27",
-  "tag": "v0.9.27",
-  "title": "KM VMS 0.9.27 — Compact archive rules and clearer camera controls",
-  "summary": "A focused web-interface update: recording and retention rules take less space, numeric values are centered, and the shared apply action follows the three inputs. Camera search uses a surveillance-camera icon, unsaved-change confirmations are clearer, and Recordings keeps the approved scissors button. Android remains at 0.8.10.",
+  "version": "0.9.28",
+  "tag": "v0.9.28",
+  "title": "KM VMS 0.9.28 — Android widgets with quiet unread counts",
+  "summary": "Android 0.8.11 adds two home-screen notification widgets: compact 2x1 controls and a 3x1 version with the NAS unread-event count. Tap the number to open the bound NAS history, or the rest to change personal camera alerts. Silent push keeps the count in sync after new, read and deleted events without periodic NAS polling. Schedules, old unread events, recording and event reception keep their existing rules.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.27",
+  "source_ref": "v0.9.28",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,39 +20,43 @@
     "target_version": 11
   },
   "changelog": [
-    "Keep recording and retention rules compact, with centered numbers and a shared apply button after the segment, retention and limit fields.",
-    "Use a surveillance-camera search icon and clearer Russian confirmations when closing without saving or leaving device parameters unapplied.",
-    "Keep the approved scissors as the only Create clip button in Recordings; remove the temporary filmstrip alternative.",
-    "Recording, event reception, discovery and Android notification behavior are unchanged; the official Android client remains at 0.8.10."
+    "Choose compact 2x1 notification controls or a 3x1 widget with an unread count from Android Settings; standard launcher configuration is also supported.",
+    "Show the real NAS unread count, including zero, as a quiet gray number. Tap it to open event history for the widget's saved NAS/account.",
+    "Synchronize new, read and deleted event counts through silent push, without sounds, tray notifications or periodic NAS polling.",
+    "Keep phone notification delivery independent. Personal camera choices still respect schedules and never acknowledge the old unread backlog.",
+    "Preserve existing widgets and reject stale count packets. Sign-out clears the local count; removing the last count widget disables its silent channel."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.27 — Compact archive rules and clearer camera controls",
-    "ru": "KM VMS 0.9.27 — Компактные правила архива и понятные действия",
-    "zh-CN": "KM VMS 0.9.27 — 紧凑的存储规则与更清晰的摄像机操作"
+    "en": "KM VMS 0.9.28 — Android widgets with quiet unread counts",
+    "ru": "KM VMS 0.9.28 — Два Android-виджета и спокойный счётчик событий",
+    "zh-CN": "KM VMS 0.9.28 — 两种 Android 小部件与低调的未读数"
   },
   "summary_i18n": {
-    "en": "A focused web-interface update: recording and retention rules take less space, numeric values are centered, and the shared apply action follows the three inputs. Camera search uses a surveillance-camera icon, unsaved-change confirmations are clearer, and Recordings keeps the approved scissors button. Android remains at 0.8.10.",
-    "ru": "Точечное обновление веб-интерфейса: компактные правила записи и хранения, числа по центру полей и кнопка применения справа после трёх общих значений. Поиск обозначен камерой видеонаблюдения, подтверждения закрытия стали понятнее, в записях оставлены согласованные ножницы. Android остаётся версии 0.8.10.",
-    "zh-CN": "本次更新专注于网页界面：录像和保留规则更紧凑，数字居中，批量应用按钮位于三个输入框之后。搜索图标改为监控摄像机，未保存更改的确认提示更清晰，录像页面保留已确认的剪刀按钮。Android 版本仍为 0.8.10。"
+    "en": "Android 0.8.11 adds two home-screen notification widgets: compact 2x1 controls and a 3x1 version with the NAS unread-event count. Tap the number to open the bound NAS history, or the rest to change personal camera alerts. Silent push keeps the count in sync after new, read and deleted events without periodic NAS polling. Schedules, old unread events, recording and event reception keep their existing rules.",
+    "ru": "В Android 0.8.11 доступны два виджета: компактный 2x1 и 3x1 со счётчиком непросмотренных событий NAS. Нажатие на число открывает историю выбранного для виджета NAS, остальная область — управление личными оповещениями. Тихие push обновляют число после новых событий, просмотра и удаления, без периодического опроса NAS. Расписания, прежние непросмотренные, запись и приём событий сохраняют свои правила.",
+    "zh-CN": "Android 0.8.11 提供两种桌面通知小部件：紧凑的 2x1 控制和带 NAS 未读事件数的 3x1 版本。点击数字打开绑定 NAS 的事件历史，点击其余区域调整个人通知。静默推送在新增、已读和删除事件后更新数字，无需定期轮询 NAS。时间表、既有未读事件、录像及事件接收规则保持不变。"
   },
   "changelog_i18n": {
     "en": [
-      "Keep recording and retention rules compact, with centered numbers and a shared apply button after the segment, retention and limit fields.",
-      "Use a surveillance-camera search icon and clearer Russian confirmations when closing without saving or leaving device parameters unapplied.",
-      "Keep the approved scissors as the only Create clip button in Recordings; remove the temporary filmstrip alternative.",
-      "Recording, event reception, discovery and Android notification behavior are unchanged; the official Android client remains at 0.8.10."
+      "Choose compact 2x1 notification controls or a 3x1 widget with an unread count from Android Settings; standard launcher configuration is also supported.",
+      "Show the real NAS unread count, including zero, as a quiet gray number. Tap it to open event history for the widget's saved NAS/account.",
+      "Synchronize new, read and deleted event counts through silent push, without sounds, tray notifications or periodic NAS polling.",
+      "Keep phone notification delivery independent. Personal camera choices still respect schedules and never acknowledge the old unread backlog.",
+      "Preserve existing widgets and reject stale count packets. Sign-out clears the local count; removing the last count widget disables its silent channel."
     ],
     "ru": [
-      "Уплотнено окно правил записи и хранения: числа по центру, применение общих значений справа после полей сегмента, срока и лимита.",
-      "В поиске используется значок камеры видеонаблюдения. При закрытии формы — понятные «Не сохранять» и «Не применять» вместо «Отбросить».",
-      "В записях оставлена одна кнопка создания клипа с согласованными ножницами; временная альтернатива с видеоплёнкой удалена.",
-      "Механика записи, приёма событий, поиска и мобильных уведомлений не менялась. Официальный Android-клиент остаётся версии 0.8.10."
+      "Из настроек Android добавляются компактный виджет 2x1 или 3x1 со счётчиком. Поддержано и стандартное добавление через оболочку телефона.",
+      "Спокойное серое число показывает реальные непросмотренные события NAS, включая ноль. Нажатие открывает историю привязанного NAS и пользователя.",
+      "Новые события, просмотр и удаление обновляют число тихими push: без звука, уведомления в шторке и периодического опроса NAS.",
+      "Доставка обычных уведомлений на телефон независима. Переключатели камер соблюдают расписания и не делают старые непросмотренные события прочитанными.",
+      "Прежние виджеты сохранены, устаревшие пакеты не откатывают число. Выход очищает счётчик; удаление последнего большого виджета отключает тихий канал."
     ],
     "zh-CN": [
-      "压缩录像和保留规则窗口，数字居中，批量应用按钮放在分段时长、保留天数和限额三个输入框之后。",
-      "搜索使用监控摄像机图标；改进俄语中关闭但不保存、或不应用设备参数时的确认提示。",
-      "录像页面仅保留已确认的剪刀剪辑按钮，移除临时胶片图标备选按钮。",
-      "录像、事件接收、搜索及 Android 通知行为不变；官方 Android 客户端仍为 0.8.10。"
+      "在 Android 设置中选择紧凑的 2x1 通知控制或带未读数的 3x1 小部件，也可通过桌面启动器添加。",
+      "以低调灰色数字显示 NAS 的真实未读数，包括零；点击数字打开小部件所绑定 NAS 和账户的事件历史。",
+      "新增、已读和删除事件通过静默推送更新数字，不播放声音、不显示通知栏消息，也不定期轮询 NAS。",
+      "手机普通通知独立控制；个人摄像机选择仍遵守时间表，不会将原有未读事件标记为已读。",
+      "保留已有小部件并拒绝过期计数包。退出登录清除本地计数；删除最后一个计数小部件将关闭其静默通道。"
     ]
   }
 }

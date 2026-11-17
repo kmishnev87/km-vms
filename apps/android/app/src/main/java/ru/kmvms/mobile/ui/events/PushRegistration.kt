@@ -113,7 +113,10 @@ internal data class PushRegistrationUi(
             store.answerSetup(profileId)
             failure = null
             testFeedback = null
-            store.disable(profileId)?.let { UnifiedPush.unregister(context, it.instance); PushUploadWorker.enqueue(context, profileId) }
+            store.disable(profileId)?.let {
+                if (!it.transportActive) UnifiedPush.unregister(context, it.instance)
+                PushUploadWorker.enqueue(context, profileId)
+            }
             MobileNotifications.clear(context, profileId)
         },
         chooseService = { store.answerSetup(profileId); if (permission) begin(true) else enable() },

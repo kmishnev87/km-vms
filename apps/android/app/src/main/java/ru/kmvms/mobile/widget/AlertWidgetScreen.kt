@@ -27,6 +27,8 @@ import ru.kmvms.mobile.R
 import ru.kmvms.mobile.data.ApiProblem
 import ru.kmvms.mobile.data.ServerProfile
 import ru.kmvms.mobile.ui.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 @Composable internal fun AlertWidgetPopup(server: String, state: AlertWidgetState, phoneReady: Boolean,
     retry: () -> Unit, master: (Boolean) -> Unit, camera: (Long, Boolean) -> Unit, close: () -> Unit) {
@@ -113,8 +115,10 @@ private fun minuteText(value: Int) = "%02d:%02d".format(java.util.Locale.ROOT, v
         Image(painterResource(R.drawable.kmvms_menu_events), null, Modifier.size(26.dp))
         Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.widget_title))
     }
-    if (choose) AlertWidgetProfileDialog(profiles, activeId, { profile ->
-        val accepted = runCatching { AlertWidgetPin.request(context, profile.id) }.getOrDefault(false)
+    if (choose) AlertWidgetProfileDialog(profiles, activeId, { profile, variant ->
+        val activity = context.widgetActivity()
+        val prepared = variant == WidgetVariant.COMPACT || (activity != null && WidgetUnreadSync.prepare(activity, profile))
+        val accepted = prepared && AlertWidgetPin.request(context, profile.id, variant)
         if (accepted) choose = false
         accepted
     }, { choose = false })
@@ -125,23 +129,55 @@ private fun minuteText(value: Int) = "%02d:%02d".format(java.util.Locale.ROOT, v
 }
 
 @Composable internal fun AlertWidgetProfileDialog(profiles: List<ServerProfile>, initialId: String?,
-    choose: (ServerProfile) -> Boolean, dismiss: () -> Unit) {
+    choose: suspend (ServerProfile, WidgetVariant) -> Boolean, dismiss: () -> Unit, fixedVariant: WidgetVariant? = null) {
     var selected by remember { mutableStateOf(initialId?.takeIf { id -> profiles.any { it.id == id } } ?: profiles.firstOrNull()?.id) }
     var failed by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = dismiss, title = { Text(stringResource(R.string.widget_title)) }, text = {
+    var busy by remember { mutableStateOf(false) }
+    var variant by remember(fixedVariant) { mutableStateOf(fixedVariant ?: WidgetVariant.COMPACT) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(onDismissRequest = { if (!busy) dismiss() }, title = { Text(stringResource(R.string.widget_title)) }, text = {
         Column {
+            if (fixedVariant == null) Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                WidgetVariant.entries.forEach { option ->
+                    OutlinedButton(onClick = { variant = option; failed = false }, enabled = !busy,
+                        modifier = Modifier.weight(1f).testTag("widget-size-${option.name}"),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (variant == option) SoftAccent else Color.Transparent),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(if (option == WidgetVariant.COUNT) "3 × 1" else "2 × 1")
+                            Text(stringResource(if (option == WidgetVariant.COUNT) R.string.widget_with_count else R.string.widget_without_count),
+                                style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        }
+                    }
+                }
+            }
             Text(stringResource(if (profiles.isEmpty()) R.string.widget_no_servers else R.string.widget_choose_server), style = MaterialTheme.typography.bodySmall, color = Muted)
             Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-                profiles.forEach { profile -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { selected = profile.id; failed = false }
+                profiles.forEach { profile -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = !busy) { selected = profile.id; failed = false }
                     .testTag("widget-profile-${profile.id}"), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected == profile.id, onClick = { selected = profile.id; failed = false })
+                    RadioButton(selected == profile.id, onClick = { selected = profile.id; failed = false }, enabled = !busy)
                     Text(profile.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 } }
             }
-            if (failed) Text(stringResource(R.string.widget_sign_in), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp).testTag("widget-setup-progress"))
+            if (failed) Text(stringResource(if (variant == WidgetVariant.COUNT) R.string.widget_count_setup_failed else R.string.widget_sign_in), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
     }, confirmButton = {
-        TextButton(onClick = { profiles.firstOrNull { it.id == selected }?.let { failed = !choose(it) } }, enabled = profiles.any { it.id == selected },
+        TextButton(onClick = { profiles.firstOrNull { it.id == selected }?.let { profile ->
+            busy = true; failed = false
+            scope.launch {
+                try { failed = !choose(profile, variant) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { failed = true }
+                finally { busy = false }
+            }
+        } }, enabled = !busy && profiles.any { it.id == selected },
             modifier = Modifier.testTag("widget-pin-confirm")) { Text(stringResource(R.string.widget_add)) }
-    }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
+    }, dismissButton = { TextButton(onClick = dismiss, enabled = !busy) { Text(stringResource(R.string.cancel)) } })
+}
+
+private tailrec fun android.content.Context.widgetActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.widgetActivity()
+    else -> null
 }

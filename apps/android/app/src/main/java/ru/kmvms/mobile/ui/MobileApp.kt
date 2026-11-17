@@ -131,6 +131,12 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     LaunchedEffect(notification?.key, state.active?.id, state.user?.id) {
         val pending = notification ?: return@LaunchedEffect
         if (state.active?.id != pending.profileId || state.user == null || state.showConnection) return@LaunchedEffect
+        if (pending.eventId == null) {
+            videoRequest = null
+            section = Section.EVENTS
+            NotificationNavigation.consume(pending.key)
+            return@LaunchedEffect
+        }
         val api = model.api() ?: return@LaunchedEffect
         try {
             val service = EventsApi(api)

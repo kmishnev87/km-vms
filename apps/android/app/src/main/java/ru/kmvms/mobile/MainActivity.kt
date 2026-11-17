@@ -18,15 +18,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         NotificationNavigation.accept(intent)
+        ru.kmvms.mobile.widget.AlertWidgetProvider.openEvents(this, intent)
         setContent { MobileApp(updates = updates) }
     }
     override fun onResume() {
         super.onResume()
         updates.foreground()
+        ru.kmvms.mobile.widget.WidgetUnreadSync.opened(this)
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         NotificationNavigation.accept(intent)
+        ru.kmvms.mobile.widget.AlertWidgetProvider.openEvents(this, intent)
     }
 }

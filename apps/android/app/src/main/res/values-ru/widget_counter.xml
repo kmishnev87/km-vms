@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_count_title">Оповещения · 3 × 1</string>
+    <string name="widget_count_description">Быстрое управление оповещениями и счётчик NAS. Нажатие на число открывает события.</string>
+    <string name="widget_with_count">Со счётчиком</string>
+    <string name="widget_without_count">Без счётчика</string>
+    <string name="widget_unread_count">Непросмотренных событий: %1$d. Открыть историю.</string>
+    <string name="widget_count_unavailable">Счётчик пока недоступен. Открыть историю событий.</string>
+    <string name="widget_count_setup_failed">Войдите на обновлённый NAS и подключите службу доставки push, чтобы счётчик обновлялся.</string>
+</resources>

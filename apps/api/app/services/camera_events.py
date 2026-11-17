@@ -193,6 +193,8 @@ def _insert_read_markers(db, user_id, rows, *, automatic=False):
         else:
             from sqlalchemy.dialects.sqlite import insert
         db.execute(insert(AuditEvent).values(values).on_conflict_do_nothing(index_elements=[AuditEvent.id]))
+        from app.services.mobile_badges import touch
+        touch(db, user_id)
 
 
 def auto_read_new_event(db, row, received):
@@ -286,6 +288,9 @@ def delete_camera_events(db, *, ids=None, through=None, actor=None):
                 metadata={"count": deleted, "scope": "selected" if ids is not None else "history"}, commit=False)
             if log is None:
                 raise RuntimeError("camera_event_delete_audit_failed")
+        if deleted:
+            from app.services.mobile_badges import touch
+            touch(db)
         db.commit()
     except Exception:
         db.rollback()
@@ -390,6 +395,8 @@ def record_signal(db, group, camera, signal, *, diagnostics=None):
     db.add(row)
     db.flush()
     auto_read_new_event(db, row, received)
+    from app.services.mobile_badges import touch
+    touch(db)
     from app.services.mobile_push import signal_change, wake_local
     signal_change(db)
     db.commit()
@@ -477,6 +484,9 @@ def _cleanup_batch(db):
         db.query(AuditEvent).filter(AuditEvent.category == READ_CATEGORY, AuditEvent.target_id.in_(ids)).delete(synchronize_session=False)
         removed = db.query(AuditEvent).filter(AuditEvent.category == CATEGORY, AuditEvent.id.in_(ids)).delete(synchronize_session=False)
     db.query(AuditEvent).filter(AuditEvent.category == READ_CATEGORY, AuditEvent.created_at < now_utc() - timedelta(days=RETENTION_DAYS)).delete(synchronize_session=False)
+    if removed:
+        from app.services.mobile_badges import touch
+        touch(db)
     db.commit()
     return removed
 

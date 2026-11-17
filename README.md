@@ -52,11 +52,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.27](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.27)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.28](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.28)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.27/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.27
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.28/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.28
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -197,7 +197,7 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - Add, edit, enable, disable and delete NAS user accounts and assign supported roles from the phone, under the same server-enforced permissions and owner protections as the browser.
 - A notification setup offer after the first NAS login, with a separately remembered choice for each server.
 - Notifications that open the corresponding server, camera, and event.
-- An optional home-screen notification widget: add it from Settings, bind it to a NAS, and switch personal camera alerts in a compact translucent panel. Existing schedules still apply; recording and event reception are unchanged.
+- Two optional home-screen notification widgets: compact 2×1 quick controls, or 3×1 with the NAS unread-event count. Add either from Settings and bind it to a NAS/account. Tap the quiet counter to open its event history, or the rest of the widget to switch personal camera alerts in a translucent panel. Existing schedules still apply; recording and event reception are unchanged. Count changes use silent push, not background NAS polling.
 - Built-in app diagnostics: add a comment and send a client report directly to KM VMS support from Settings. No ZIP needs to be created, saved, or shared on the phone; the support server confirms acceptance with a report number.
 - APK checks on the first foreground opening in a new day, plus manual checks. Before installation, the client checks size, hash, package, version, and signing certificate. Android asks for installation confirmation.
 - NAS update checks start when you enter the Android maintenance screen. Follow server-reported stages and the current operation; APK downloads show transferred bytes and a measured percentage, followed by a separate verification step.

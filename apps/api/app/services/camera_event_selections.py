@@ -101,6 +101,9 @@ def apply(db, user_id, selection_id, *, excluded_ids=(), delete=False, actor=Non
                 metadata={"count": changed, "scope": "filter_snapshot"}, commit=False)
             if logged is None:
                 raise RuntimeError("camera_event_delete_audit_failed")
+        if delete and changed:
+            from app.services.mobile_badges import touch
+            touch(db)
         db.commit()
     except Exception:
         db.rollback()

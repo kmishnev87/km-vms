@@ -7,12 +7,13 @@ import ru.kmvms.mobile.core.EventAction
 import java.net.URI
 import java.util.UUID
 
-data class NotificationOpen(val profileId: String, val eventId: String, val action: EventAction, val key: String = UUID.randomUUID().toString())
+data class NotificationOpen(val profileId: String, val eventId: String?, val action: EventAction, val key: String = UUID.randomUUID().toString())
 
 object NotificationNavigation {
     private val mutable = MutableStateFlow<NotificationOpen?>(null)
     val pending = mutable.asStateFlow()
     fun accept(intent: Intent?) { parse(intent?.dataString)?.let { mutable.value = it } }
+    internal fun events(profileId: String) { mutable.value = NotificationOpen(profileId, null, EventAction.LIVE) }
     fun consume(key: String) { if (mutable.value?.key == key) mutable.value = null }
     fun parse(value: String?): NotificationOpen? = runCatching {
         val uri = URI(value ?: return null)

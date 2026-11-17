@@ -30,6 +30,12 @@ class Device:
     last_status: str = "registered"
     last_sent_at: datetime | None = None
     last_test_at: datetime | None = None
+    badge_enabled: bool = False
+    badge_epoch: str | None = None
+    badge_revision: int = -1
+    badge_count: int | None = None
+    badge_retry_at: datetime | None = None
+    badge_failures: int = 0
 
     @property
     def id(self):
@@ -63,10 +69,10 @@ def decode(row):
         return None
     value = dict(row.layout or {})
     try:
-        for name in ("registered_at", "cursor_at", "retry_at", "last_sent_at", "last_test_at"):
+        for name in ("registered_at", "cursor_at", "retry_at", "last_sent_at", "last_test_at", "badge_retry_at"):
             if value.get(name) is not None:
                 value[name] = datetime.fromisoformat(value[name])
-        if type(value["enabled"]) is not bool or type(value["revision"]) is not int:
+        if type(value["enabled"]) is not bool or type(value["revision"]) is not int or type(value.get("badge_enabled", False)) is not bool:
             return None
         return Device(row=row, **value)
     except (ValueError, TypeError, KeyError):

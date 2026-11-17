@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.9.27](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.27)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.9.28](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.28)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.27/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.27
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.28/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.28
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.27 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.28 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.27 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.28 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -129,7 +129,7 @@ With camera-management permission, the adjacent trash icon deletes selected even
 
 ## Native Android client
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.10.apk** from the [0.9.26 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.26). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.11.apk** from the [0.9.28 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.28). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.
@@ -137,7 +137,11 @@ With camera-management permission, the adjacent trash icon deletes selected even
 
 The app checks the official APK metadata on the first foreground opening in a new day and on manual request. It checks size, hash, package/version and signing certificate before offering the system installer. Download and Android installation confirmation are explicit; the update keeps app data and NAS profiles. The NAS and mobile version numbers are independent. Use only the official signed asset for subsequent updates.
 
-To add the optional home-screen notification widget, open **Settings → Notification widget**, choose a saved NAS, and confirm Android's add-widget prompt. Nothing is added automatically during installation. Tap the widget to open a compact translucent panel with your account's master alert switch and camera choices. These are the same personal preferences used by the web interface; common and per-camera schedules still apply in the NAS time zone. The widget does not disable event reception or recording, clear unread history, or enable phone delivery by itself. Each widget stays bound to its chosen NAS/account when you switch servers in the app. It makes no periodic network requests while closed. A reachable NAS is needed to load and save choices; older NAS versions may need an update first. Launcher support for pinning widgets varies; the app provides manual-add guidance when necessary.
+To add an optional home-screen notification widget, open **Settings → Notification widget**, choose **2×1 without a counter** or **3×1 with a counter**, select a saved NAS, and confirm Android's add-widget prompt. Nothing is added automatically during installation. Launcher cell sizes vary; both variants also support standard launcher configuration.
+
+Tap the widget to open a compact translucent panel with your account's master alert switch and camera choices. These are the same personal preferences used by the web interface; common and per-camera schedules still apply in the NAS time zone. The widget does not disable event reception or recording, clear unread history, or enable visible phone alerts by itself. Each widget stays bound to its chosen NAS/account when you switch servers in the app.
+
+The 3×1 variant shows the NAS account's actual unread-event count, including **0**. Tap the number to open that NAS's event history. Read/delete actions in the web or mobile app update the count using a separate silent channel over the existing UnifiedPush delivery service; it does not post an Android notification. No recurring NAS polling or permanent widget service is used. This variant requires an updated NAS and an available push distributor; one authenticated snapshot is also fetched when binding or opening the app. An unavailable initial count or signed-out account shows a dash, not a false zero. Android delivery/network restrictions can delay updates while the phone is offline or force-stopped. A reachable NAS is needed to load and save choices; the app explains missing NAS/push support during setup.
 
 Live view, low-latency PTZ where supported, recordings, clips, synchronized chronology, camera management, storage, status, backups and NAS updates use the server's existing permissions and protected operations. Missing footage, an offline camera or unsupported PTZ capability is not silently replaced with another camera's video.
 

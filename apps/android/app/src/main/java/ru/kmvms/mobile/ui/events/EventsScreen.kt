@@ -51,6 +51,11 @@ import java.time.format.DateTimeFormatter
     val service = remember(api) { EventsApi(api) }
     val controller = remember(service) { EventsController(service) }
     val state by controller.state.collectAsStateWithLifecycle()
+    val widgetContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(profileId, state.page?.unread) {
+        if (profileId != null && state.page != null && ru.kmvms.mobile.widget.hasCountWidgets(widgetContext, profileId))
+            ru.kmvms.mobile.widget.WidgetUnreadSync.enqueue(widgetContext, profileId)
+    }
     val navigator = remember(api) { EventVideoNavigation(api) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle

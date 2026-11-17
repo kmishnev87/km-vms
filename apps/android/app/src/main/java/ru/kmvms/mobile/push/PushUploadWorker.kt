@@ -38,9 +38,14 @@ class PushUploadWorker(context: Context, parameters: WorkerParameters) : Corouti
     }
     companion object {
         suspend fun upload(api: NasApi, binding: PushBinding) {
-            api.json("api/mobile/push/devices/${binding.instance}", "PUT", JSONObject()
+            val body = JSONObject()
                 .put("revision", binding.revision).put("label", "${Build.MANUFACTURER} ${Build.MODEL}".take(80))
-                .put("enabled", binding.enabled).put("subscription", if (binding.enabled) binding.subscription ?: throw IllegalStateException("push_endpoint_missing") else JSONObject.NULL))
+                .put("enabled", binding.enabled).put("subscription", if (binding.transportActive) binding.subscription ?: throw IllegalStateException("push_endpoint_missing") else JSONObject.NULL)
+            // Keep the old request shape when talking to an older NAS.
+            if (binding.badgeEnabled || (api.json("api/mobile/push/config") as JSONObject).optBoolean("widget_badge_v1")) {
+                body.put("badge_enabled", binding.badgeEnabled)
+            }
+            api.json("api/mobile/push/devices/${binding.instance}", "PUT", body)
         }
         fun enqueue(context: Context, profileId: String) {
             val request = OneTimeWorkRequestBuilder<PushUploadWorker>().setInputData(workDataOf("profile" to profileId))
