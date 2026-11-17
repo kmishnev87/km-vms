@@ -9,7 +9,7 @@ import { OperationDialog } from "../OperationFeedback";
 const post = (path, body, extra = {}) => apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), ...extra });
 
 export function CameraSearchIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12.5 18H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2l1.5-2h5L15 6h3a2 2 0 0 1 2 2v2" /><circle cx="10.5" cy="11.5" r="3" /><circle cx="17" cy="16.5" r="3.5" /><path d="m19.5 19 2 2" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m3 4.5 11 2.5-1.5 6-11-2.5zM14 7l4 1-1 4M6.5 12v5H2" /><circle cx="17" cy="17" r="3.5" /><path d="m19.5 19.5 2.5 2.5" /></svg>;
 }
 
 export default function CameraDiscoveryDialog({ protocol, onSelect, onClose }) {

@@ -230,14 +230,6 @@ function ScissorsIcon() {
   );
 }
 
-function FilmstripClipIcon() {
-  return <svg className="recordingsUiIcon recordingsToolbarSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <rect x="3" y="4.5" width="18" height="15" rx="1.8" />
-    <path d="M3 8h18M3 16h18M8 4.5V8m8-3.5V8M8 16v3.5m8-3.5v3.5" />
-    <path d="m10 10 4 2-4 2z" />
-  </svg>;
-}
-
 function RefreshIcon() {
   return (
     <svg className="recordingsUiIcon recordingsToolbarSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -536,7 +528,7 @@ function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
 
 export default function RecordingsPage() {
   const exportSession = useAuthSession();
-  const { text, t: dictionary, locale } = useI18n();
+  const { text, t: dictionary } = useI18n();
   const t = useMemo(
     () => Object.fromEntries(Object.entries(TEXT).map(([key, value]) => [key, text(value)])),
     [text]
@@ -1412,15 +1404,6 @@ export default function RecordingsPage() {
                 aria-label={t.createClip}
               >
                 <ScissorsIcon />
-              </button>
-            ) : null}
-            {canExport ? (
-              <button type="button"
-                className="button secondary small recordingsActionButton recordingsToolbarIconButton recordingsCreateClipButton recordingsCreateClipFilmButton"
-                onClick={openExportModal} disabled={exportBusy}
-                title={`${t.createClipTooltip} — ${locale === "ru" ? "Видеоплёнка" : locale === "zh-CN" ? "胶片" : "Filmstrip"}`}
-                aria-label={`${t.createClip} — ${locale === "ru" ? "Видеоплёнка" : locale === "zh-CN" ? "胶片" : "Filmstrip"}`}>
-                <FilmstripClipIcon />
               </button>
             ) : null}
           </div>

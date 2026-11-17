@@ -1287,17 +1287,20 @@
 .archiveRulesDialog .operationFeedbackBody { min-height: 0; overflow: hidden; display: flex; }
 .archiveRulesDialog .operationFeedbackBusy { display: none; }
 .archiveRulesEditor { display: flex; flex-direction: column; min-height: 0; width: 100%; color: #172238; }
-.archiveRulesEditor .archiveRulesHelp { margin: 0 0 12px; color: #64748b; font-size: 12px; }
-.archiveRulesGrid { display: grid; grid-template-columns: 22px minmax(120px, 1fr) repeat(3, 104px); align-items: center; gap: 10px; }
+.archiveRulesGrid { display: grid; grid-template-columns: 22px minmax(120px, 1fr) repeat(3, 104px) 32px; align-items: center; gap: 10px; }
 .archiveRulesGrid input[type="checkbox"] { margin: 0; justify-self: center; }
-.archiveRulesGrid input.input { box-sizing: border-box; width: 100%; min-width: 0; height: 32px; min-height: 32px; padding: 4px 8px; text-align: center; font-size: 13px; }
+.archiveRulesGrid input.input { box-sizing: border-box; width: 100%; min-width: 0; height: 32px; min-height: 32px; padding: 4px 8px; text-align: center; font-size: 13px; appearance: textfield; }
+.archiveRulesGrid input[type="number"]::-webkit-inner-spin-button,
+.archiveRulesGrid input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .archiveRulesGrid input[aria-invalid="true"] { border-color: #dc2626; }
 .archiveRulesBulk { padding: 0 8px 6px; }
 .archiveRulesLabels, .archiveRulesBulk { overflow-y: hidden; scrollbar-gutter: stable; }
-.archiveRulesBulk > span:nth-child(2) { font-size: 12px; }
-.archiveRulesBulk small { display: block; color: #64748b; font-size: 11px; }
-.archiveRulesBulkAction { display: flex; justify-content: flex-end; min-height: 34px; margin-bottom: 8px; }
-.archiveRulesBulkAction .button { min-height: 28px; padding: 4px 10px; font-size: 12px; }
+.archiveRulesBulkLabel { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.archiveRulesBulkLabel > span { min-width: 0; }
+.archiveRulesBulk .archiveRulesApplyButton { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-height: 32px; padding: 6px; }
+.archiveRulesApplyButton svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.archiveRulesCameraHeading { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.archiveRulesCameraHeading small { color: #64748b; font-size: 11px; }
 .archiveRulesLabels { min-height: 32px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 12px; padding: 0 8px 5px; }
 .archiveRulesLabels > span { text-align: center; }
 .archiveRulesLabels strong { color: #172238; font-weight: 600; }
@@ -1310,8 +1313,9 @@
 .archiveRulesWarning { color: #92400e; }
 .archiveRulesError { color: #b91c1c; }
 @media (max-width: 620px) {
-  .archiveRulesGrid { grid-template-columns: 18px minmax(70px, 1fr) repeat(3, minmax(50px, 70px)); gap: 5px; }
+  .archiveRulesGrid { grid-template-columns: 18px minmax(50px, 1fr) repeat(3, minmax(42px, 70px)) 32px; gap: 4px; }
   .archiveRulesLabels { font-size: 10px; }
+  .archiveRulesBulkLabel > span, .archiveRulesCameraHeading small > span { display: none; }
   .archiveRulesGrid input.input { padding: 4px; font-size: 12px; }
   .archiveRulesCameraName { font-size: 12px; }
 }

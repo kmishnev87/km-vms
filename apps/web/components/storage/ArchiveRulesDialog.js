@@ -61,17 +61,20 @@ export default function ArchiveRulesDialog({ onClose, onSaved }) {
     } finally { setBusy(false); }
   }
   const content = <div className="archiveRulesEditor">
-    <p className="archiveRulesHelp">{copy.help}</p>
     {loading ? <p role="status">{copy.loading}</p> : error && !rows.length ? <div role="alert"><p>{error}</p><button type="button" className="button secondary small" onClick={() => setGeneration(value => value + 1)}>{copy.retry}</button></div> : !rows.length ? <p>{copy.empty}</p> : <>
       <div className="archiveRulesGrid archiveRulesBulk">
         <span />
-        <span>{copy.bulk}<small>{copy.selected}: {selected.length}</small></span>
+        <div className="archiveRulesBulkLabel">
+          <span>{copy.bulk}</span>
+        </div>
         {ARCHIVE_RULE_FIELDS.map(key => <input key={key} className="input" type="number" inputMode="numeric" min="1" max={ARCHIVE_RULE_LIMITS[key]} value={bulk[key] || ""} placeholder={copy.keep} disabled={busy} aria-label={`${copy.bulk}: ${copy[key]}`} onChange={event => setBulk(previous => ({ ...previous, [key]: event.target.value }))} />)}
+        <button className="button secondary small archiveRulesApplyButton" type="button" title={copy.apply} aria-label={copy.apply} disabled={busy || !selected.length || !ARCHIVE_RULE_FIELDS.some(key => bulk[key])} onClick={applyBulk}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4V2h6v2M8.5 13l2.5 2.5 4.5-5" /></svg>
+        </button>
       </div>
-      <div className="archiveRulesBulkAction"><button className="button secondary small" type="button" disabled={busy || !selected.length || !ARCHIVE_RULE_FIELDS.some(key => bulk[key])} onClick={applyBulk}>{copy.apply}</button></div>
       <div className="archiveRulesGrid archiveRulesLabels">
         <input type="checkbox" checked={rows.length > 0 && selected.length === rows.length} disabled={busy} aria-label={copy.selectAll} onChange={event => setSelected(event.target.checked ? rows.map(row => row.camera_id) : [])} />
-        <strong>{copy.camera}</strong>{ARCHIVE_RULE_FIELDS.map(key => <span key={key}>{copy[key]}</span>)}
+        <div className="archiveRulesCameraHeading"><strong>{copy.camera}</strong>{selected.length ? <small title={`${copy.selected}: ${selected.length}`}><span>{copy.selected}: </span>{selected.length}</small> : null}</div>{ARCHIVE_RULE_FIELDS.map(key => <span key={key}>{copy[key]}</span>)}
       </div>
       <div className="archiveRulesRows">
         {rows.map(row => <div className="archiveRulesGrid archiveRulesRow" key={row.camera_id}>

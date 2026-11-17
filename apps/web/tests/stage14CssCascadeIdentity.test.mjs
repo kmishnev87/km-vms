@@ -8,9 +8,11 @@ import { CSS_OWNERS, readProductSourceFile } from "./helpers/readProductSources.
 const root = path.resolve(import.meta.dirname, "..");
 const baseline = {
   // Reconciled with the already published compact camera list/clip workbench
-  // and the visually checked, scoped 0.9.26 archive-rules dialog. Management
-  // remains full width; stylesheet identity and import order stay enforced.
-  "40-storage-records-shared.css": "7bdea13e15119de6e726ab78ce26d45f9285ca261af781133f83ce1f816216ef",
+  // and the scoped, owner-requested compact archive-rules follow-up. Number
+  // fields have no asymmetric native spinner; apply follows the values at
+  // the right edge (Screenshot_27). Management stays full width.
+  // Stylesheet identity and import order remain enforced.
+  "40-storage-records-shared.css": "11ca83ba9ea3d59ee00ec05cf9d6632b3aead76733eb6a60d14c655604ebf007",
   // Existing published Settings layout: no Settings styles changed in 0.9.26.
   "20-settings-maintenance.css": "9f5a510c7e61bc71dd11199ba384af0a9123b503f6dcdfce66a96f3b72b6fabc"
 };

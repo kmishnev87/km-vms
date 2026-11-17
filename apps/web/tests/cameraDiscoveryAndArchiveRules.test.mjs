@@ -81,14 +81,41 @@ test("storage rule action stays in Storage and persists one batch", () => {
   assert.match(editor, /selected.includes/);
 });
 
-test("two equal clip icon options are only in Recordings, top information order is stable", () => {
+test("approved scissors are the only clip icon option, top information order is stable", () => {
   const recordings = read("../app/recordings/page.js"), timeline = read("../app/chronology/page.js"), nav = read("../components/Layout.js");
-  assert.match(recordings, /<ScissorsIcon \/>/); assert.match(recordings, /<FilmstripClipIcon \/>/);
+  assert.match(recordings, /<ScissorsIcon \/>/); assert.doesNotMatch(recordings, /FilmstripClipIcon|recordingsCreateClipFilmButton/);
   assert.doesNotMatch(timeline, /FilmstripClipIcon/);
   const controls = nav.slice(nav.indexOf('<div className="topNavRight">'));
   assert(controls.indexOf("<CameraEventsHub") < controls.indexOf("<SystemHealthIndicator"));
   assert(controls.indexOf("<SystemHealthIndicator") < controls.indexOf('href="/storage"'));
   assert(controls.indexOf('href="/storage"') < controls.indexOf('href="/settings"'));
+});
+
+test("archive rules apply after the three fields and keep centered spinner-free numeric inputs", () => {
+  const editor = read("../components/storage/ArchiveRulesDialog.js"), css = read("../app/styles/40-09-storage-migration-integrity.css");
+  assert.doesNotMatch(editor, /archiveRulesHelp|archiveRulesBulkAction/);
+  assert.match(editor, /archiveRulesApplyButton[\s\S]*?title=\{copy.apply\} aria-label=\{copy.apply\}/);
+  const bulk = editor.slice(editor.indexOf('className="archiveRulesGrid archiveRulesBulk"'), editor.indexOf('className="archiveRulesGrid archiveRulesLabels"'));
+  assert(bulk.indexOf("archiveRulesApplyButton") > bulk.indexOf("ARCHIVE_RULE_FIELDS.map"));
+  assert.match(css, /repeat\(3, 104px\) 32px/);
+  assert.match(editor, /archiveRulesCameraHeading[\s\S]*?copy.selected/);
+  assert.match(css, /\.archiveRulesGrid input\.input[^}]*text-align: center[^}]*appearance: textfield/);
+  assert.match(css, /::-webkit-inner-spin-button[\s\S]*?-webkit-appearance: none/);
+});
+
+test("camera search uses a surveillance camera silhouette rather than a still camera", () => {
+  const source = read("../components/cameras/CameraDiscoveryDialog.js");
+  const icon = source.slice(source.indexOf("export function CameraSearchIcon()"), source.indexOf("export default function"));
+  assert.match(icon, /M6\.5 12v5H2/); // Wall mount, not a shutter or photo lens.
+  assert.equal((icon.match(/<circle /g) || []).length, 1); // Magnifier only.
+});
+
+test("Russian close confirmations use clear non-saving terminology", () => {
+  const copy = read("../lib/i18n/ru.js");
+  assert.doesNotMatch(copy, /[Оо]тбросить/);
+  assert.match(copy, /editorDiscardClose: "Не сохранять"/);
+  assert.match(copy, /editorDiscardContinue: "Не применять"/);
+  assert.equal(ARCHIVE_RULE_COPY.ru.discardYes, "Не сохранять");
 });
 
 test("host worker is IPC-only and carries no archive, Docker socket or idle health polling", () => {

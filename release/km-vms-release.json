@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.26",
-  "tag": "v0.9.26",
-  "title": "KM VMS 0.9.26 — LAN/VPN camera discovery and shared archive rules",
-  "summary": "Find ONVIF and RTSP cameras on the NAS LAN or selected reachable private networks, including existing VPN routes. Search progress, cancellation and protocol selection replace the misleading instant empty result. Storage gains a compact atomic multi-camera rules editor. Android 0.8.10 includes the approved compact notification and widget layouts.",
+  "version": "0.9.27",
+  "tag": "v0.9.27",
+  "title": "KM VMS 0.9.27 — Compact archive rules and clearer camera controls",
+  "summary": "A focused web-interface update: recording and retention rules take less space, numeric values are centered, and the shared apply action follows the three inputs. Camera search uses a surveillance-camera icon, unsaved-change confirmations are clearer, and Recordings keeps the approved scissors button. Android remains at 0.8.10.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.26",
+  "source_ref": "v0.9.27",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,43 +20,39 @@
     "target_version": 11
   },
   "changelog": [
-    "Discover cameras from the physical NAS LAN and selected routed private IPv4 ranges, with ONVIF and RTSP response checks, bounded jobs, progress and cancellation.",
-    "Use Find on network from ONVIF or RTSP setup; retain the selected protocol and show existing cameras without adding duplicates automatically.",
-    "Edit segment length, retention and archive limits together in Storage, with shared values, permission checks and atomic conflict detection before saving.",
-    "Compare two clip-button icons in Recordings; reorder Events, System Health, Storage and Settings without changing Chronology's clip action.",
-    "Bundle Android 0.8.10 with compact notification schedules and a widget card whose height does not stretch with its launcher cell."
+    "Keep recording and retention rules compact, with centered numbers and a shared apply button after the segment, retention and limit fields.",
+    "Use a surveillance-camera search icon and clearer Russian confirmations when closing without saving or leaving device parameters unapplied.",
+    "Keep the approved scissors as the only Create clip button in Recordings; remove the temporary filmstrip alternative.",
+    "Recording, event reception, discovery and Android notification behavior are unchanged; the official Android client remains at 0.8.10."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.26 — LAN/VPN camera discovery and shared archive rules",
-    "ru": "KM VMS 0.9.26 — Поиск камер в LAN/VPN и общие правила архива",
-    "zh-CN": "KM VMS 0.9.26 — LAN/VPN 摄像机搜索与批量存储规则"
+    "en": "KM VMS 0.9.27 — Compact archive rules and clearer camera controls",
+    "ru": "KM VMS 0.9.27 — Компактные правила архива и понятные действия",
+    "zh-CN": "KM VMS 0.9.27 — 紧凑的存储规则与更清晰的摄像机操作"
   },
   "summary_i18n": {
-    "en": "Find ONVIF and RTSP cameras on the NAS LAN or selected reachable private networks, including existing VPN routes. Search progress, cancellation and protocol selection replace the misleading instant empty result. Storage gains a compact atomic multi-camera rules editor. Android 0.8.10 includes the approved compact notification and widget layouts.",
-    "ru": "Поиск ONVIF/RTSP-камер в локальной сети NAS и выбранных доступных подсетях, включая существующие VPN-маршруты. Вместо мгновенного пустого результата — ход поиска, остановка и явный выбор протокола. В хранилище появился компактный редактор правил нескольких камер с единым сохранением. Android 0.8.10 включает согласованные компактные расписания и виджет.",
-    "zh-CN": "在 NAS 本地网络及所选可达私有子网中搜索 ONVIF/RTSP 摄像机，包括已有 VPN 路由。显示搜索进度、支持停止并明确选择协议，不再将搜索不可用误报为空结果。存储页面新增紧凑的多摄像机规则编辑器并原子保存。Android 0.8.10 包含已确认的紧凑通知时段及小组件布局。"
+    "en": "A focused web-interface update: recording and retention rules take less space, numeric values are centered, and the shared apply action follows the three inputs. Camera search uses a surveillance-camera icon, unsaved-change confirmations are clearer, and Recordings keeps the approved scissors button. Android remains at 0.8.10.",
+    "ru": "Точечное обновление веб-интерфейса: компактные правила записи и хранения, числа по центру полей и кнопка применения справа после трёх общих значений. Поиск обозначен камерой видеонаблюдения, подтверждения закрытия стали понятнее, в записях оставлены согласованные ножницы. Android остаётся версии 0.8.10.",
+    "zh-CN": "本次更新专注于网页界面：录像和保留规则更紧凑，数字居中，批量应用按钮位于三个输入框之后。搜索图标改为监控摄像机，未保存更改的确认提示更清晰，录像页面保留已确认的剪刀按钮。Android 版本仍为 0.8.10。"
   },
   "changelog_i18n": {
     "en": [
-      "Discover cameras from the physical NAS LAN and selected routed private IPv4 ranges, with ONVIF and RTSP response checks, bounded jobs, progress and cancellation.",
-      "Use Find on network from ONVIF or RTSP setup; retain the selected protocol and show existing cameras without adding duplicates automatically.",
-      "Edit segment length, retention and archive limits together in Storage, with shared values, permission checks and atomic conflict detection before saving.",
-      "Compare two clip-button icons in Recordings; reorder Events, System Health, Storage and Settings without changing Chronology's clip action.",
-      "Bundle Android 0.8.10 with compact notification schedules and a widget card whose height does not stretch with its launcher cell."
+      "Keep recording and retention rules compact, with centered numbers and a shared apply button after the segment, retention and limit fields.",
+      "Use a surveillance-camera search icon and clearer Russian confirmations when closing without saving or leaving device parameters unapplied.",
+      "Keep the approved scissors as the only Create clip button in Recordings; remove the temporary filmstrip alternative.",
+      "Recording, event reception, discovery and Android notification behavior are unchanged; the official Android client remains at 0.8.10."
     ],
     "ru": [
-      "Поиск камер с физического LAN NAS и в выбранных частных IPv4-подсетях через маршруты: проверка ONVIF/RTSP, ограниченный объём, ход поиска и остановка.",
-      "«Найти в сети» доступно при ONVIF и RTSP. Выбранный протокол сохраняется; уже добавленные камеры видны, но автоматически повторно не добавляются.",
-      "Длительность сегмента, срок хранения и лимит нескольких камер редактируются в хранилище: общие значения, проверка прав и единое сохранение без частичного применения.",
-      "В записях два варианта значка клипа для выбора. Верхнее меню: события, состояние системы, хранилище, настройки. Кнопка клипа хронологии не заменена.",
-      "Включён Android 0.8.10: компактные расписания оповещений и виджет, который не растягивается по высоте ячейки рабочего стола."
+      "Уплотнено окно правил записи и хранения: числа по центру, применение общих значений справа после полей сегмента, срока и лимита.",
+      "В поиске используется значок камеры видеонаблюдения. При закрытии формы — понятные «Не сохранять» и «Не применять» вместо «Отбросить».",
+      "В записях оставлена одна кнопка создания клипа с согласованными ножницами; временная альтернатива с видеоплёнкой удалена.",
+      "Механика записи, приёма событий, поиска и мобильных уведомлений не менялась. Официальный Android-клиент остаётся версии 0.8.10."
     ],
     "zh-CN": [
-      "从 NAS 物理 LAN 及所选路由私有 IPv4 子网搜索摄像机，验证 ONVIF/RTSP 响应，限制任务规模并显示进度、支持停止。",
-      "ONVIF 和 RTSP 设置均可使用网络搜索，保留所选协议；显示已添加设备但不自动重复添加。",
-      "在存储页面统一编辑分段时长、保留天数和容量限额，支持共享值、权限校验和原子冲突检测，避免部分保存。",
-      "录像页面提供两个剪辑按钮图标供选择；顶部依次为事件、系统状态、存储和设置，不替换时间轴的剪辑按钮。",
-      "附带 Android 0.8.10，包含紧凑通知时段及不会随桌面单元格高度拉伸的小组件卡片。"
+      "压缩录像和保留规则窗口，数字居中，批量应用按钮放在分段时长、保留天数和限额三个输入框之后。",
+      "搜索使用监控摄像机图标；改进俄语中关闭但不保存、或不应用设备参数时的确认提示。",
+      "录像页面仅保留已确认的剪刀剪辑按钮，移除临时胶片图标备选按钮。",
+      "录像、事件接收、搜索及 Android 通知行为不变；官方 Android 客户端仍为 0.8.10。"
     ]
   }
 }
