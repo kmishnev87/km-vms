@@ -14,6 +14,26 @@ class EventsApiTest {
     private val id = "de5d0fb2-f7f4-4f0b-817a-94a4a567f746"
     private fun client(server: MockWebServer) = EventsApi(NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") })
 
+    @Test fun unreadFilterSearchesServerHistoryAndIsReversibleWithoutMarkingAnythingRead() = runBlocking {
+        MockWebServer().use { server ->
+            val api = client(server)
+            val filter = EventFilter(cameraId=3, kind=CameraEventKind.PERSON, days=30)
+            repeat(2) { server.enqueue(MockResponse().setBody("""{"items":[],"total":0,"timezone":"UTC"}""")) }
+            api.page(filter.copy(unread=true), 0)
+            val unread = server.takeRequest()
+            assertEquals("GET", unread.method)
+            assertEquals("true", unread.requestUrl!!.queryParameter("unread"))
+            assertEquals("0", unread.requestUrl!!.queryParameter("offset"))
+            assertEquals("3", unread.requestUrl!!.queryParameter("camera_id"))
+            assertEquals("person", unread.requestUrl!!.queryParameter("kind"))
+            api.page(filter, 0)
+            val all = server.takeRequest()
+            assertEquals("GET", all.method)
+            assertNull(all.requestUrl!!.queryParameter("unread"))
+            assertEquals(2, server.requestCount)
+        }
+    }
+
     @Test fun widgetChangesOnlyTheChosenFieldWithoutSendingOldSchedulesOrOtherChoices() = runBlocking {
         MockWebServer().use { server ->
             val api = client(server)

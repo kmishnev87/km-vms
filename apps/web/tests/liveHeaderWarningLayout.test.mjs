@@ -51,3 +51,11 @@ test("Live keeps the title size and gives all five icon actions equal width", ()
   assert.match(rule(".liveWorkspacePanelActions > button"), /width:\s*100%/);
   assert.match(rule(".liveWorkspacePanelHeader"), /justify-content:\s*center/);
 });
+
+test("Camera names in workspace tiles inherit the light header color, not the dark sidebar text", () => {
+  assert.match(rule(".liveWorkspaceTileBar"), /color:\s*#f8fafc/);
+  assert.match(rule(".liveWorkspaceTileTitle .liveWorkspaceCameraName"), /color:\s*inherit/);
+  assert.match(rule(".liveWorkspaceCameraName"), /color:\s*#0f172a/);
+  const tile = page.slice(page.indexOf('<div className={`liveWorkspaceTileBar'));
+  assert.match(tile, /className="liveWorkspaceTileTitle">\s*<span className="liveWorkspaceCameraName">\{camera\?\.name \|\| TEXT\.camera\}/);
+});

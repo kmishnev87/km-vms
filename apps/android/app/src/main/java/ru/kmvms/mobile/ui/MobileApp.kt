@@ -203,7 +203,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                     section == Section.LIVE -> model.api()?.let { api ->
                         key(state.active?.id, videoRequest?.key) { LiveScreen(api, state.cameras, state.ptz,
                             onMessage = { text -> uiScope.launch { snackbars.showSnackbar(text) } }, onImmersive = { immersive = it }, initial = videoRequest,
-                            profileId = state.active!!.id, onExit = {
+                            profileId = state.active!!.id, mayTalk = state.user?.can("talk_cameras") == true, onExit = {
                                 val destination = if (videoRequest?.returnToEvents == true) Section.EVENTS else Section.CAMERAS
                                 videoRequest = null; section = destination
                             }) }

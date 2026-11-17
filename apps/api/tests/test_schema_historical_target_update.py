@@ -53,7 +53,7 @@ def test_previous_signed_bootstrap_is_not_reinterpreted_as_current_schema(monkey
     assert restored == context
     assert shape == payload["control_shape_fingerprint"]
     assert payload["target_schema_version"] == 10
-    assert control.TARGET_SCHEMA_VERSION == 12
+    assert control.TARGET_SCHEMA_VERSION == 13
 
 
 def test_new_admission_does_not_accept_a_legacy_target(monkeypatch):

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.29",
-  "tag": "v0.9.29",
-  "title": "KM VMS 0.9.29 — Fast and Stable live viewing",
-  "summary": "Choose a shared NAS live-viewing mode in the web interface or Android 0.8.12: Fast uses continuous WebSocket/fMP4 for lower-delay online viewing, while Stable preserves buffered HLS and the existing PTZ fast path. Incompatible streams fall back individually to HLS with an explanation. This release also improves Android widget title fitting and adds concise mode descriptions with clearly separated detailed help.",
+  "version": "0.10.0",
+  "tag": "v0.10.0",
+  "title": "KM VMS 0.10.0 — Camera calls and smoother archive access",
+  "summary": "Android 0.8.13 adds capability-based camera calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit microphone permission, encrypted optional credentials and automatic call cleanup. Archive playback reuses scoped media access and prioritizes active timeline reads. Camera-event controls are more compact, and web Live tile names are readable again.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.29",
+  "source_ref": "v0.10.0",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -17,54 +17,58 @@
   "requires_migration": false,
   "schema_update": {
     "mode": "managed",
-    "target_version": 12
+    "target_version": 13
   },
   "changelog": [
-    "Add the shared NAS Live mode setting after recording format in web Settings and Android NAS settings, with Fast first, Stable second, and owner/administrator editing permissions.",
-    "Fast uses WebSocket/fMP4 for all online main/sub and fullscreen views. Stable remains the default: HLS, plus the existing low-latency PTZ route.",
-    "Only an incompatible stream falls back to HLS with an explanation; network errors reconnect normally. Recording and archive playback are unchanged.",
-    "Preserve the first socket failure so cancellation cannot hide a codec incompatibility, and avoid reconnecting an already-fast stream when PTZ controls are toggled.",
-    "Add concise selected-mode descriptions and separate Fast/Stable tooltip paragraphs in English, Russian and Simplified Chinese; keep Android help open long enough to read.",
-    "Fit the full Android notification-widget title on narrow launchers with smaller artwork, spacing and adaptive text, retaining existing actions and the quiet unread counter.",
-    "Apply the registered additive schema 11-to-12 migration with Stable as the stored default, and update Android release metadata, README and installation instructions."
+    "Add capability-based Android calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit unsupported-device explanations.",
+    "Use hold-to-speak for the standard adapter and mic mute for Tapo full duplex. Calls select fast video without changing the saved sound preference or active PTZ mode.",
+    "Require owner/admin rights, mic consent and scoped media authorization. Stop capture on backgrounding, exit, hang-up or failure; bound call duration and queued audio.",
+    "Encrypt optional Tapo call credentials on the NAS via additive schema 12-to-13 migration. Relay audio in memory only. Browser microphone calling is not included.",
+    "Reuse Android archive media authorization within a playback session, renew before expiry and retry one unauthorized request without weakening access checks.",
+    "Remove the extra three-read timeline bottleneck; prioritize foreground reads within the existing HTTP budget, with bounded prefetch and synchronized buffering.",
+    "Compact Android event filters, add an unread-only shortcut and align names/counts. Align the web filter row and New checkbox label.",
+    "Restore readable names in dark web Live tile headers. Publish signed Android 0.8.13 and update the English README and installation guidance."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.29 — Fast and Stable live viewing",
-    "ru": "KM VMS 0.9.29 — Быстрый и стабильный режимы онлайна",
-    "zh-CN": "KM VMS 0.9.29 — 快速与稳定实时预览模式"
+    "en": "KM VMS 0.10.0 — Camera calls and smoother archive access",
+    "ru": "KM VMS 0.10.0 — Звонок через камеру и работа с архивом",
+    "zh-CN": "KM VMS 0.10.0 — 摄像机对讲与档案访问优化"
   },
   "summary_i18n": {
-    "en": "Choose a shared NAS live-viewing mode in the web interface or Android 0.8.12: Fast uses continuous WebSocket/fMP4 for lower-delay online viewing, while Stable preserves buffered HLS and the existing PTZ fast path. Incompatible streams fall back individually to HLS with an explanation. This release also improves Android widget title fitting and adds concise mode descriptions with clearly separated detailed help.",
-    "ru": "Общий режим онлайна NAS выбирается в веб-настройках или Android 0.8.12: Быстрый использует непрерывный WebSocket/fMP4 с меньшей задержкой, Стабильный сохраняет HLS с буфером и прежнее быстрое управление PTZ. Несовместимый поток отдельно переключается на HLS с пояснением. Также исправлено размещение заголовков Android-виджетов, добавлены короткие описания и отдельные абзацы подробной подсказки для двух режимов.",
-    "zh-CN": "在网页设置或 Android 0.8.12 中选择 NAS 共用的实时模式：快速模式使用连续 WebSocket/fMP4 降低延迟，稳定模式保留缓冲 HLS 及原有 PTZ 快速通道。不兼容的视频流单独切换到 HLS 并显示原因。本次还改进了 Android 小部件标题适配，并为两种模式提供简短说明及分段的详细帮助。"
+    "en": "Android 0.8.13 adds capability-based camera calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit microphone permission, encrypted optional credentials and automatic call cleanup. Archive playback reuses scoped media access and prioritizes active timeline reads. Camera-event controls are more compact, and web Live tile names are readable again.",
+    "ru": "В Android 0.8.13 добавлен Звонок: стандартный ONVIF RTSP backchannel и адаптер локального протокола Tapo, проверка возможностей, разрешение микрофона, шифрование отдельного пароля и автоматическое завершение. Доступ к архиву повторно использует медиасеанс и отдаёт приоритет текущим чтениям хронологии. Уплотнены элементы событий, восстановлена читаемость названий плиток веб-онлайна.",
+    "zh-CN": "Android 0.8.13 新增基于能力检测的摄像机对讲，支持标准 ONVIF RTSP 反向音频和 Tapo 本地协议适配器，并提供麦克风授权、可选凭据加密和自动结束通话。档案回放复用限定范围的媒体授权并优先读取当前时间线。事件控件更紧凑，网页实时画面的名称恢复清晰显示。"
   },
   "changelog_i18n": {
     "en": [
-      "Add the shared NAS Live mode setting after recording format in web Settings and Android NAS settings, with Fast first, Stable second, and owner/administrator editing permissions.",
-      "Fast uses WebSocket/fMP4 for all online main/sub and fullscreen views. Stable remains the default: HLS, plus the existing low-latency PTZ route.",
-      "Only an incompatible stream falls back to HLS with an explanation; network errors reconnect normally. Recording and archive playback are unchanged.",
-      "Preserve the first socket failure so cancellation cannot hide a codec incompatibility, and avoid reconnecting an already-fast stream when PTZ controls are toggled.",
-      "Add concise selected-mode descriptions and separate Fast/Stable tooltip paragraphs in English, Russian and Simplified Chinese; keep Android help open long enough to read.",
-      "Fit the full Android notification-widget title on narrow launchers with smaller artwork, spacing and adaptive text, retaining existing actions and the quiet unread counter.",
-      "Apply the registered additive schema 11-to-12 migration with Stable as the stored default, and update Android release metadata, README and installation instructions."
+      "Add capability-based Android calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit unsupported-device explanations.",
+      "Use hold-to-speak for the standard adapter and mic mute for Tapo full duplex. Calls select fast video without changing the saved sound preference or active PTZ mode.",
+      "Require owner/admin rights, mic consent and scoped media authorization. Stop capture on backgrounding, exit, hang-up or failure; bound call duration and queued audio.",
+      "Encrypt optional Tapo call credentials on the NAS via additive schema 12-to-13 migration. Relay audio in memory only. Browser microphone calling is not included.",
+      "Reuse Android archive media authorization within a playback session, renew before expiry and retry one unauthorized request without weakening access checks.",
+      "Remove the extra three-read timeline bottleneck; prioritize foreground reads within the existing HTTP budget, with bounded prefetch and synchronized buffering.",
+      "Compact Android event filters, add an unread-only shortcut and align names/counts. Align the web filter row and New checkbox label.",
+      "Restore readable names in dark web Live tile headers. Publish signed Android 0.8.13 and update the English README and installation guidance."
     ],
     "ru": [
-      "Общий выбор Быстрый / Стабильный — после формата записи в вебе и Настройках NAS APK. Изменять его могут владелец и администратор.",
-      "Быстрый: WebSocket/fMP4 всех онлайн-камер, main/sub и fullscreen. Стабильный по умолчанию: HLS, быстрый маршрут при открытом пульте PTZ.",
-      "Только несовместимый поток переходит на HLS с пояснением у названия. Сетевой сбой не считается несовместимостью; запись и архив не меняются.",
-      "Первая ошибка WebSocket сохраняется: отмена не скрывает несовместимость кодека. Переключение пульта PTZ не перезапускает уже быстрый поток.",
-      "Короткая подпись выбранного режима и два абзаца подсказки на трёх языках. В APK подробную помощь можно прочитать без короткого таймера.",
-      "Улучшено размещение заголовков виджетов на узкой сетке: уменьшены поля и картинка, добавлена подстройка шрифта. Действия и счётчик сохранены.",
-      "Управляемая миграция 11 → 12 с режимом Стабильный по умолчанию. Обновлены данные APK, английский README и инструкция установки."
+      "Звонок в Android: стандартный ONVIF RTSP backchannel и адаптер локального протокола Tapo. Возможности проверяются, неподдерживаемые камера или кодек получают понятный статус.",
+      "Удержание для стандартного адаптера, выключение микрофона для полного дуплекса Tapo. Быстрый видеомаршрут на время звонка, сохранение настроек звука и режима PTZ.",
+      "Права владельца/администратора, разрешение микрофона, авторизация медиасеанса. Отключение при сворачивании, выходе и обрыве; ограничения длительности и очереди звука.",
+      "Отдельный пароль Tapo зашифрован на NAS; аддитивная миграция 12 → 13. Звук передаётся в памяти без записи в файлы. Браузерный звонок не входит в этот выпуск.",
+      "Медиадоступ к архиву Android повторно используется в сеансе, заранее обновляется, допускает один повтор после истечения авторизации без ослабления прав.",
+      "Убрано ограничение хронологии на три чтения: приоритет текущих запросов в прежнем HTTP-бюджете, ограниченная предзагрузка. Синхронизация и выбор камер сохранены.",
+      "Компактные фильтры событий APK, отдельная кнопка непрочитанных, выравнивание названий и счётчиков. В вебе выровнены фильтры и подпись Новые.",
+      "Светлые названия камер в тёмных заголовках плиток веб-онлайна. Подписанный APK 0.8.13, актуальные английские README и инструкция установки."
     ],
     "zh-CN": [
-      "在网页设置和 Android NAS 设置的录像格式之后加入 NAS 共用实时模式；快速在前、稳定在后，仅所有者和管理员可修改。",
-      "快速模式为所有在线摄像机、主辅码流及全屏使用连续 WebSocket/fMP4；稳定仍为默认模式，保留普通 HLS 和打开 PTZ 控制时的低延迟通道。",
-      "仅不兼容的视频流回退到 HLS，并在摄像机名称旁说明原因。网络中断不再被标为编解码不兼容，录像与历史回放不变。",
-      "保留 WebSocket 首个错误，避免取消连接掩盖编解码不兼容；开关 PTZ 控制不会重新连接已经使用快速通道的视频流。",
-      "三种语言均提供当前模式的简短说明，并将快速与稳定的详细帮助分成两段；Android 帮助不再因短计时自动消失。",
-      "缩小图标、留白并自动适配字体，使通知小部件标题在较窄桌面网格中完整显示，同时保留原有操作与低调未读数。",
-      "注册的数据库 11 → 12 增量迁移以稳定模式为默认值，并同步更新 APK 元数据、英文 README 和安装指南。"
+      "Android 新增标准 ONVIF RTSP 反向音频与基于能力检测的 Tapo 本地协议对讲适配器；不支持的设备或编解码格式会显示明确原因。",
+      "标准适配器使用按住说话，Tapo 全双工通道提供麦克风静音。通话期间使用低延迟视频，保留原有声音偏好和 PTZ 模式。",
+      "仅所有者和管理员可发起通话，需麦克风许可及绑定用户的短期媒体授权；进入后台、离开摄像机、挂断或连接中断时停止采集，并限制通话时长及音频队列。",
+      "通过注册的数据库 12 → 13 增量迁移，在 NAS 加密保存可选的独立 Tapo 对讲凭据；音频仅在内存转发，不写文件。本次不包含浏览器麦克风对讲。",
+      "Android 档案回放在当前会话中复用限定媒体授权，在过期前更新，并允许一次未授权请求重试，同时保留权限检查。",
+      "移除额外的三个时间线读取限制，在现有 HTTP 并发预算内优先处理当前读取并限制预取，保留同步缓冲及摄像机选择行为。",
+      "精简 Android 事件筛选器，增加未读快捷操作，对齐摄像机名称与选择计数；网页筛选行及新的复选框标签也已对齐。",
+      "恢复网页实时画面深色标题栏中清晰的浅色摄像机名称，并发布签名 Android 0.8.13 APK，更新英文 README 和安装说明。"
     ]
   }
 }

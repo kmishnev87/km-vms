@@ -19,6 +19,24 @@ import org.junit.Test
 import ru.kmvms.mobile.core.ServerAddress
 
 class NasApiTest {
+    @Test fun mediaScopeChangesWithTheSessionAndIsDisabledImmediatelyOnSignOut() = runBlocking {
+        MockWebServer().use { server ->
+            val api = client(server)
+            assertNull(api.mediaAuthorizationScope())
+            api.useSession("fixture-first")
+            val first = api.mediaAuthorizationScope()
+            assertNotNull(first)
+            assertSame(first, api.mediaAuthorizationScope())
+            api.useSession("fixture-second")
+            assertNotSame(first, api.mediaAuthorizationScope())
+            api.disableSessionRenewal()
+            assertNull(api.mediaAuthorizationScope())
+            api.useSession("fixture-third")
+            server.enqueue(MockResponse().setResponseCode(204))
+            api.logout()
+            assertNull(api.mediaAuthorizationScope())
+        }
+    }
     @Test fun foregroundEventLongPollHasABoundedDeadlineBeyondTheNasWait() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"items":[],"cursor":"fixture"}"""))

@@ -8,9 +8,12 @@ data class CameraPlayback(
     val stream: Stream = Stream.SUB,
     val sound: Boolean = false,
     val ptz: Boolean = false,
+    val talk: Boolean = false,
+    val talkDuck: Boolean = false,
 ) {
     init { require(cameraId > 0) }
-    val transport: LiveTransport get() = if (ptz) LiveTransport.WEBSOCKET_FMP4 else LiveTransport.HLS
+    val lowLatency: Boolean get() = ptz || talk
+    val transport: LiveTransport get() = if (lowLatency) LiveTransport.WEBSOCKET_FMP4 else LiveTransport.HLS
     fun selectStream(selected: Stream) = copy(stream = selected)
     fun setPtz(enabled: Boolean) = copy(ptz = enabled)
 }

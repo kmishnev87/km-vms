@@ -25,6 +25,7 @@ class Camera(Base):
 
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    talk_password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     rtsp_main_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     rtsp_sub_url: Mapped[str | None] = mapped_column(Text, nullable=True)

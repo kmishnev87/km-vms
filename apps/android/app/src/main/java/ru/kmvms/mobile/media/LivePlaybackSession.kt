@@ -61,7 +61,7 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
             .setPrioritizeTimeOverSizeThresholds(true).setBackBuffer(0, false).build())
         .build().apply {
             playWhenReady = true
-            volume = if (selection.sound) 1f else 0f
+            volume = if ((selection.sound || selection.talk) && !selection.talkDuck) 1f else 0f
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_BUFFERING) mutable.update { it.copy(status = VideoStatus.BUFFERING) }
@@ -97,11 +97,11 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
         if (released) return
         require(value.cameraId == selection.cameraId)
         val changed = value.stream != selection.stream ||
-            onlineTransport(onlineMode, value.ptz, value.stream in incompatibleStreams) !=
-            onlineTransport(onlineMode, selection.ptz, selection.stream in incompatibleStreams)
-        selection = value; player.volume = if (value.sound) 1f else 0f
+            onlineTransport(onlineMode, value.lowLatency, value.stream in incompatibleStreams) !=
+            onlineTransport(onlineMode, selection.lowLatency, selection.stream in incompatibleStreams)
+        selection = value; player.volume = if ((value.sound || value.talk) && !value.talkDuck) 1f else 0f
         if (changed) { player.stop(); start() }
-        else mutable.update { it.copy(hlsFallback = (onlineMode == OnlineMode.FAST || value.ptz) && value.stream in incompatibleStreams) }
+        else mutable.update { it.copy(hlsFallback = (onlineMode == OnlineMode.FAST || value.lowLatency) && value.stream in incompatibleStreams) }
     }
     fun retry() { if (!released) start() }
     private fun start() {
@@ -119,9 +119,9 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
                     debug("authorizing")
                     val lease = endpoint.authorize(own.cameraId, own.stream)
                     onlineMode = lease.onlineMode
-                    val lowLatency = onlineTransport(lease.onlineMode, own.ptz, own.stream in incompatibleStreams) == LiveTransport.WEBSOCKET_FMP4
+                    val lowLatency = onlineTransport(lease.onlineMode, own.lowLatency, own.stream in incompatibleStreams) == LiveTransport.WEBSOCKET_FMP4
                     usingSocket = lowLatency
-                    mutable.update { it.copy(hlsFallback = !lowLatency && (lease.onlineMode == OnlineMode.FAST || own.ptz) && own.stream in incompatibleStreams) }
+                    mutable.update { it.copy(hlsFallback = !lowLatency && (lease.onlineMode == OnlineMode.FAST || own.lowLatency) && own.stream in incompatibleStreams) }
                     if (!lowLatency) {
                         debug("opening-viewer"); viewer = endpoint.open(own.cameraId, own.stream)
                         debug("awaiting-source"); endpoint.awaitReady(own.cameraId, own.stream, viewer)
@@ -161,9 +161,9 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
                                 current = renew(own, current)
                                 debug("authority-renewed")
                                 onlineMode = current.onlineMode
-                                val nextTransport = onlineTransport(current.onlineMode, selection.ptz, own.stream in incompatibleStreams)
+                                val nextTransport = onlineTransport(current.onlineMode, selection.lowLatency, own.stream in incompatibleStreams)
                                 mutable.update { it.copy(hlsFallback = nextTransport == LiveTransport.HLS &&
-                                    (current.onlineMode == OnlineMode.FAST || selection.ptz) && own.stream in incompatibleStreams) }
+                                    (current.onlineMode == OnlineMode.FAST || selection.lowLatency) && own.stream in incompatibleStreams) }
                                 if ((nextTransport == LiveTransport.WEBSOCKET_FMP4) != lowLatency) reconnect.trySend(Unit)
                                 if (previousMode != current.onlineMode) { reconnect.trySend(Unit); return@launch }
                                 if (socketFactory != null && !socketFactory.refresh(current.token)) reconnect.trySend(Unit)

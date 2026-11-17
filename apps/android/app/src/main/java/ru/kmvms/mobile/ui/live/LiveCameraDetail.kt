@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
@@ -33,12 +34,18 @@ import ru.kmvms.mobile.media.LiveController
 import ru.kmvms.mobile.media.VideoStatus
 import ru.kmvms.mobile.ptz.PtzCapabilities
 import ru.kmvms.mobile.ptz.PtzHandle
+import ru.kmvms.mobile.talk.TalkController
 import kotlin.math.roundToInt
 
 @UnstableApi
 @Composable fun LiveCameraDetail(camera: Camera, capability: PtzCapabilities?, controller: LiveController,
                                  immersive: Boolean, fullscreen: () -> Unit, close: () -> Unit,
-                                 message: (String) -> Unit) {
+                                 message: (String) -> Unit, mayTalk: Boolean = false) {
+    val context = LocalContext.current
+    val talk = remember(controller, camera.id, mayTalk) {
+        if (mayTalk) TalkController(context.applicationContext, controller.api, camera.id) else null
+    }
+    if (talk != null) CameraCallLifecycle(talk) { enabled, duck -> controller.talk(camera.id, enabled, duck) }
     val sessions by controller.sessions.collectAsStateWithLifecycle()
     val selections by controller.playback.collectAsStateWithLifecycle()
     val session = sessions[camera.id]
@@ -81,6 +88,7 @@ import kotlin.math.roundToInt
                 }, modifier = Modifier.testTag("live-ptz")) {
                     PlayerGlyph(PlayerGlyph.PTZ, if (playback?.ptz == true) Color(0xFF60A5FA) else Color.White, stringResource(R.string.ptz_controls))
                 }
+                if (talk != null) CallButton(talk)
                 IconButton(onClick = { controller.sound(camera.id) }, modifier = Modifier.testTag("live-sound")) {
                     SpeakerIcon(playback?.sound == true, tint = Color.White)
                 }
@@ -93,6 +101,7 @@ import kotlin.math.roundToInt
             }
             if (immersive && handle != null) FloatingPtz(handle, collapsed, { collapsed = it }, mode,
                 { mode = it }, ready, panelAnchor, { panelAnchor = it })
+            if (talk != null) CallStatus(talk, Modifier.align(Alignment.BottomStart).padding(10.dp))
         }
         if (!immersive && handle != null) Box(Modifier.weight(1f).fillMaxWidth().padding(12.dp), contentAlignment = Alignment.TopCenter) {
             PtzControls(handle, mode, { mode = it }, Modifier.widthIn(max = 420.dp).fillMaxWidth(), ready = ready)

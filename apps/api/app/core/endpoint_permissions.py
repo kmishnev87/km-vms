@@ -10,6 +10,7 @@ from app.core.permissions import (
     PERMISSION_MANAGE_USERS,
     PERMISSION_RUN_DIAGNOSTICS,
     PERMISSION_VIEW_LIVE,
+    PERMISSION_TALK_CAMERAS,
     PERMISSION_VIEW_RECORDINGS,
     PERMISSION_VIEW_TIMELINE,
     ROLE_ADMIN,
@@ -48,6 +49,12 @@ class EndpointPermission:
 
 
 ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
+    EndpointPermission("camera-talk", "GET", "/talk/cameras/{camera_id}", PERMISSION_TALK_CAMERAS, "require_permission", "Read-only standard/protocol capability negotiation."),
+    EndpointPermission("camera-talk", "PUT", "/talk/cameras/{camera_id}/credentials", PERMISSION_TALK_CAMERAS, "require_permission", "Optional encrypted camera talk credential; never returned."),
+    EndpointPermission("camera-talk", "POST", "/talk/sessions", PERMISSION_TALK_CAMERAS, "require_permission", "Actor-bound bounded exclusive physical output reservation."),
+    EndpointPermission("camera-talk", "POST", "/talk/sessions/{session_id}/token", PERMISSION_TALK_CAMERAS, "require_permission + session ownership"),
+    EndpointPermission("camera-talk", "DELETE", "/talk/sessions/{session_id}", PERMISSION_TALK_CAMERAS, "require_permission + session ownership"),
+    EndpointPermission("camera-talk", "WEBSOCKET", "/talk/sessions/{session_id}/audio", PERMISSION_TALK_CAMERAS, "scoped media token + periodic user/source validation", "Native audio only; no URL credentials or audio persistence."),
     EndpointPermission("auth", "POST", "/auth/login", PUBLIC, "public route", "Requires username/password."),
     EndpointPermission("auth", "POST", "/auth/logout", PUBLIC, "public route", "Clears only this browser's Live cookie; no account mutation."),
     EndpointPermission("auth", "GET", "/auth/me", AUTHENTICATED, "get_current_user"),

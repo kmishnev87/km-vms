@@ -291,7 +291,7 @@ export default function CameraEventsHub({ currentUser }) {
       <label>{t("cameraEvents.camera")}<select disabled={busy} value={filters.camera} onChange={e => changeFilter("camera", e.target.value)}><option value="">{t("cameraEvents.allCameras")}</option>{cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.name}</option>)}</select></label>
       <label>{t("cameraEvents.type")}<select disabled={busy} value={filters.kind} onChange={e => changeFilter("kind", e.target.value)}><option value="">{t("cameraEvents.allTypes")}</option>{CAMERA_EVENT_KINDS.map(kind => <option key={kind} value={kind}>{t(`cameraEvents.kinds.${kind}`)}</option>)}</select></label>
       <label>{t("cameraEvents.period")}<select disabled={busy} value={filters.days} onChange={e => changeFilter("days", Number(e.target.value))}>{[1, 7, 30].map(day => <option key={day} value={day}>{t(`cameraEvents.days${day}`)}</option>)}</select></label>
-      <div className="cameraEventsFilterActions"><label className="cameraEventsCheck"><input type="checkbox" disabled={busy} checked={filters.unread} onChange={e => changeFilter("unread", e.target.checked)}/>{t("cameraEvents.unreadOnly")}</label>
+      <div className="cameraEventsFilterActions"><label className="cameraEventsCheck"><input type="checkbox" disabled={busy} checked={filters.unread} onChange={e => changeFilter("unread", e.target.checked)}/><span>{t("cameraEvents.unreadOnly")}</span></label>
       <button className="cameraEventsIconButton" title={t("cameraEvents.refresh")} aria-label={t("cameraEvents.refresh")} type="button" onClick={() => setRefresh(n => n + 1)} disabled={loading || busy}><EventActionIcon action="refresh"/></button>
       </div>
     </div>

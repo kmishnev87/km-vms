@@ -145,7 +145,7 @@ import kotlin.math.roundToInt
     }
 }
 
-enum class PlayerGlyph { PTZ, POINT, AREA, PRESETS }
+enum class PlayerGlyph { PTZ, POINT, AREA, PRESETS, CALL, HANGUP, MIC, MIC_OFF }
 
 @Composable fun PlayerGlyph(glyph: PlayerGlyph, color: Color, description: String? = null) {
     Canvas(Modifier.size(24.dp).semantics { if (description != null) contentDescription = description }) {
@@ -154,6 +154,24 @@ enum class PlayerGlyph { PTZ, POINT, AREA, PRESETS }
         val path = Path()
         fun line(x0: Float, y0: Float, x1: Float, y1: Float) { path.moveTo(x0*unit, y0*unit); path.lineTo(x1*unit, y1*unit) }
         when (glyph) {
+            PlayerGlyph.CALL -> {
+                path.moveTo(5f*unit,3f*unit); path.lineTo(9f*unit,3f*unit); path.lineTo(11f*unit,8f*unit)
+                path.lineTo(8f*unit,10f*unit); path.cubicTo(9f*unit,13f*unit,11f*unit,15f*unit,14f*unit,16f*unit)
+                path.lineTo(16f*unit,13f*unit); path.lineTo(21f*unit,15f*unit); path.lineTo(21f*unit,19f*unit)
+                path.cubicTo(21f*unit,25f*unit,0f*unit,13f*unit,3f*unit,5f*unit); path.close()
+            }
+            PlayerGlyph.HANGUP -> {
+                path.moveTo(3f*unit,14f*unit); path.cubicTo(5f*unit,6f*unit,19f*unit,6f*unit,21f*unit,14f*unit)
+                path.lineTo(17f*unit,17f*unit); path.lineTo(14f*unit,14f*unit); path.lineTo(14f*unit,11f*unit)
+                path.lineTo(10f*unit,11f*unit); path.lineTo(10f*unit,14f*unit); path.lineTo(7f*unit,17f*unit); path.close()
+            }
+            PlayerGlyph.MIC, PlayerGlyph.MIC_OFF -> {
+                path.moveTo(9f*unit,6f*unit); path.cubicTo(9f*unit,2f*unit,15f*unit,2f*unit,15f*unit,6f*unit)
+                path.lineTo(15f*unit,11f*unit); path.cubicTo(15f*unit,15f*unit,9f*unit,15f*unit,9f*unit,11f*unit); path.close()
+                path.moveTo(5f*unit,10f*unit); path.cubicTo(5f*unit,20f*unit,19f*unit,20f*unit,19f*unit,10f*unit)
+                line(12f,18f,12f,22f); line(8f,22f,16f,22f)
+                if (glyph == PlayerGlyph.MIC_OFF) line(3f,3f,21f,21f)
+            }
             PlayerGlyph.PRESETS -> {
                 path.moveTo(4f*unit,3f*unit); path.lineTo(17f*unit,3f*unit); path.lineTo(21f*unit,7f*unit)
                 path.lineTo(21f*unit,21f*unit); path.lineTo(3f*unit,21f*unit); path.lineTo(3f*unit,4f*unit); path.close()

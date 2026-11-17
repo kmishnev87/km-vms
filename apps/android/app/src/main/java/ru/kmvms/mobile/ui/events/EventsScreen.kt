@@ -105,12 +105,15 @@ import java.time.format.DateTimeFormatter
                     if(!preferencesOpen) {
                         IconButton(onClick={editedFilter=state.filter;filtersOpen=true},enabled=!state.busy,modifier=Modifier.testTag("events-open-filters")) {
                             Canvas(Modifier.size(22.dp).semantics { contentDescription=filtersLabel }) {
-                                val color=if(state.filter!=EventFilter())Accent else Muted
+                                val color=if(state.filter.copy(unread=false)!=EventFilter())Accent else Muted
                                 for((index,fraction)in listOf(.85f,.56f,.24f).withIndex()){
                                     val y=size.height*(.25f+index*.25f)
                                     drawLine(color,Offset(size.width*(1-fraction)/2,y),Offset(size.width*(1+fraction)/2,y),1.7.dp.toPx())
                                 }
                             }
+                        }
+                        EventUnreadFilter(state.filter.unread, !state.busy) {
+                            controller.filter(state.filter.copy(unread=it))
                         }
                         IconButton(onClick={preferencesOpen=true;controller.refreshSettings()},modifier=Modifier.testTag("events-alerts-tab")) {
                             Icon(painterResource(R.drawable.kmvms_menu_events),stringResource(R.string.events_alerts),tint=Color.Unspecified,modifier=Modifier.size(26.dp))
@@ -139,15 +142,8 @@ import java.time.format.DateTimeFormatter
                     TriStateCheckbox(state = if (allSelected) ToggleableState.On else if (state.selectedCount>0) ToggleableState.Indeterminate else ToggleableState.Off,
                         onClick = { controller.selectPage(!allSelected) }, enabled = !state.busy && page?.items?.isNotEmpty() == true,
                         modifier = Modifier.testTag("events-select-page"))
-                    Column(Modifier.weight(1f).fillMaxHeight().testTag("events-select-filtered").clickable(enabled=!state.busy&&(canSelectFiltered||state.selection!=null)){
+                    EventSelectionSummary(state, canSelectFiltered, Modifier.weight(1f).fillMaxHeight()) {
                         if(state.selection!=null)controller.clearSelection()else controller.selectFiltered()
-                    },verticalArrangement=Arrangement.Center) {
-                        Text(stringResource(if (state.selectedCount==0) R.string.events_found else R.string.events_selected,
-                            if (state.selectedCount==0) page?.total ?: 0 else state.selectedCount), style = MaterialTheme.typography.labelMedium, color = Muted,maxLines=1)
-                        Box(Modifier.height(16.dp)) {
-                            if(state.selection!=null)Text(stringResource(R.string.events_clear_selection),color=Accent,style=MaterialTheme.typography.labelSmall)
-                            else if(canSelectFiltered)Text(stringResource(R.string.events_select_filtered,page?.total?:0),color=Accent,style=MaterialTheme.typography.labelSmall)
-                        }
                     }
                     IconButton(onClick = controller::read, enabled = !state.busy && (state.selectedCount>0 || (page?.unread ?: 0) > 0),
                         modifier = Modifier.testTag("events-read")) { Icon(Icons.Default.Check, stringResource(if (state.selectedCount==0) R.string.events_read_all else R.string.events_read_selected)) }
@@ -177,7 +173,7 @@ import java.time.format.DateTimeFormatter
         Text(stringResource(R.string.events_filters),style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(horizontal=16.dp))
         EventFilters(state.copy(filter=editedFilter)){editedFilter=it}
         Row(Modifier.fillMaxWidth().padding(16.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick={editedFilter=EventFilter()},modifier=Modifier.weight(1f)){Text(stringResource(R.string.events_reset_filters))}
+            OutlinedButton(onClick={editedFilter=EventFilter(unread=editedFilter.unread)},modifier=Modifier.weight(1f)){Text(stringResource(R.string.events_reset_filters))}
             Button(onClick={controller.filter(editedFilter);filtersOpen=false},modifier=Modifier.weight(1f).testTag("events-apply-filters")){Text(stringResource(R.string.apply))}
         }
     }
@@ -187,7 +183,39 @@ import java.time.format.DateTimeFormatter
         dismissButton = { TextButton(onClick = { deletion = null }) { Text(stringResource(R.string.cancel)) } }) }
 }
 
-@Composable private fun EventRow(event: CameraEvent, state: EventsState, canArchive: Boolean, opening: Boolean,
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable internal fun EventUnreadFilter(checked: Boolean, enabled: Boolean, choose: (Boolean) -> Unit) {
+    TooltipBox(positionProvider=TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip={PlainTooltip { Text(stringResource(R.string.events_unread)) }}, state=rememberTooltipState()) {
+        IconToggleButton(checked=checked, onCheckedChange=choose, enabled=enabled,
+            modifier=Modifier.testTag("events-unread-only"),
+            colors=IconButtonDefaults.iconToggleButtonColors(contentColor=Muted,
+                checkedContentColor=Accent, checkedContainerColor=Accent.copy(alpha=.1f))) {
+            Icon(painterResource(R.drawable.ic_event_unread), stringResource(R.string.events_unread), modifier=Modifier.size(22.dp))
+        }
+    }
+}
+
+@Composable internal fun EventSelectionSummary(state: EventsState, canSelectFiltered: Boolean,
+                                               modifier: Modifier = Modifier, choose: () -> Unit) {
+    Row(modifier.testTag("events-selection-summary"), verticalAlignment=Alignment.CenterVertically,
+        horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(if(state.selectedCount==0)R.string.events_found else R.string.events_selected,
+            if(state.selectedCount==0)state.page?.total?:0 else state.selectedCount),
+            style=MaterialTheme.typography.labelMedium, color=Muted, maxLines=1,
+            modifier=Modifier.testTag("events-selection-count"))
+        if(state.selection!=null || canSelectFiltered) {
+            TextButton(onClick=choose, enabled=!state.busy&&!state.loading,
+                modifier=Modifier.weight(1f).fillMaxHeight().testTag("events-select-filtered"),
+                contentPadding=PaddingValues(0.dp)) {
+                Text(stringResource(if(state.selection!=null)R.string.events_clear_selection else R.string.events_select_filtered,
+                    state.page?.total?:0), style=MaterialTheme.typography.labelSmall, maxLines=1, overflow=TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable internal fun EventRow(event: CameraEvent, state: EventsState, canArchive: Boolean, opening: Boolean,
                                   select: (Boolean) -> Unit, open: (EventAction) -> Unit) {
     val color = if (event.read) Muted else MaterialTheme.colorScheme.onSurface
     Surface(color = Color.White) {
@@ -195,15 +223,17 @@ import java.time.format.DateTimeFormatter
             Checkbox(state.isSelected(event.id), select, enabled = !state.busy && state.canSelect(event.id), modifier = Modifier.testTag("event-check-${event.id}"))
             Column(Modifier.weight(1f).clickable(enabled = !opening && event.cameraId != null && !event.ambiguous) { open(if (canArchive) EventAction.OPEN else EventAction.LIVE) }
                 .padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(Modifier.size(6.dp).background(if (event.read) Color.Transparent else Accent, CircleShape))
-                    Text(event.camera, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                Box(Modifier.fillMaxWidth()) {
+                    Box(Modifier.align(Alignment.CenterStart).offset(x=(-9).dp).size(5.dp)
+                        .background(if (event.read) Color.Transparent else Accent, CircleShape))
+                    Text(event.camera, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium, modifier=Modifier.testTag("event-camera-${event.id}"))
                 }
                 val kinds = listOf(event.kind) + event.objects.filter { it != event.kind }
                 val labels = kinds.map { stringResource(it.label()) }
                 Text(labels.joinToString(" · "),maxLines=2,overflow=TextOverflow.Ellipsis,
-                    color = color, style = MaterialTheme.typography.bodySmall)
-                Text(event.occurred.atZone(state.page?.zone ?: java.time.ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")), color = Muted, style = MaterialTheme.typography.labelSmall)
+                    color = color, style = MaterialTheme.typography.bodySmall, modifier=Modifier.testTag("event-kind-${event.id}"))
+                Text(event.occurred.atZone(state.page?.zone ?: java.time.ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")), color = Muted, style = MaterialTheme.typography.labelSmall, modifier=Modifier.testTag("event-time-${event.id}"))
                 if (event.ambiguous) Text(stringResource(R.string.events_source_unknown), color = Muted, style = MaterialTheme.typography.labelSmall)
             }
             IconButton(onClick = { open(EventAction.LIVE) }, enabled = !opening && !state.busy && event.cameraId != null && !event.ambiguous,
@@ -214,10 +244,10 @@ import java.time.format.DateTimeFormatter
     }
 }
 
-@Composable private fun EventFilters(state: EventsState, choose: (EventFilter) -> Unit) {
+@Composable internal fun EventFilters(state: EventsState, choose: (EventFilter) -> Unit) {
     val filter = state.filter
     Surface(color = Color.White) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 EventChoice(state.cameras.find { it.id == filter.cameraId }?.name ?: stringResource(R.string.all_cameras),
                     listOf("" to stringResource(R.string.all_cameras)) + state.cameras.map { it.id.toString() to it.name }, Modifier.weight(1f), "events-filter-camera") {
@@ -228,14 +258,8 @@ import java.time.format.DateTimeFormatter
                     choose(filter.copy(kind = it.takeIf(String::isNotBlank)?.let(CameraEventKind::parse)))
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val days = listOf("1" to stringResource(R.string.events_day), "7" to stringResource(R.string.events_week), "30" to stringResource(R.string.events_month))
-                EventChoice(days.first { it.first == filter.days.toString() }.second, days, Modifier.weight(1f), "events-filter-days") { choose(filter.copy(days = it.toInt())) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(filter.unread, { choose(filter.copy(unread = it)) }, modifier = Modifier.testTag("events-unread-only"))
-                    Text(stringResource(R.string.events_unread), style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            val days = listOf("1" to stringResource(R.string.events_day), "7" to stringResource(R.string.events_week), "30" to stringResource(R.string.events_month))
+            EventChoice(days.first { it.first == filter.days.toString() }.second, days, Modifier.fillMaxWidth(), "events-filter-days") { choose(filter.copy(days = it.toInt())) }
         }
     }
 }
@@ -243,7 +267,7 @@ import java.time.format.DateTimeFormatter
 @Composable private fun EventChoice(current: String, options: List<Pair<String, String>>, modifier: Modifier, tag: String, choose: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag(tag), contentPadding = PaddingValues(horizontal = 10.dp)) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp).testTag(tag), contentPadding = PaddingValues(horizontal = 10.dp)) {
             Text(current, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
         }
         DropdownMenu(expanded, { expanded = false }, modifier = Modifier.heightIn(max = 360.dp)) {

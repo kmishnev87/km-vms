@@ -75,6 +75,7 @@ def actual_app_routes():
 
 def test_role_permissions_matrix():
     expected_admin = {
+        "talk_cameras",
         "admin_access",
         "delete_recordings",
         "export_recordings",
@@ -83,6 +84,7 @@ def test_role_permissions_matrix():
         "manage_users",
         "run_diagnostics",
         "view_live",
+        "talk_cameras",
         "view_recordings",
         "view_timeline",
     }

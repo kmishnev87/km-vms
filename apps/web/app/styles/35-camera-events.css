@@ -11,9 +11,10 @@
 .cameraEventsTabs button { border: 1px solid transparent; border-radius: 7px; background: transparent; padding: 8px 12px; color: #64748b; font: inherit; cursor: pointer; }
 .cameraEventsTabs button.isActive { border-color: #c5d8e8; background: #eaf3fb; color: #315c80; }
 .cameraEventsWorkbench { --camera-events-row-padding: 14px; --camera-events-columns: 18px 8px minmax(0, 1fr) 160px 80px; --camera-events-gap: 12px; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px 18px 12px; gap: 10px; }
-.cameraEventsFilters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 12px; padding: 0 calc(var(--camera-events-row-padding) + 1px + var(--camera-events-scrollbar, 0px)) 0 calc(var(--camera-events-row-padding) + 1px); flex-shrink: 0; }
+.cameraEventsFilters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 12px; padding: 0 calc(var(--camera-events-row-padding) + 1px + var(--camera-events-scrollbar, 0px)) 0 0; flex-shrink: 0; }
 .cameraEventsFilterActions { display: grid; grid-template-columns: minmax(84px, max-content) 36px; align-items: center; justify-content: end; gap: 12px; height: 36px; }
-.cameraEventsFilterActions .cameraEventsCheck { white-space: nowrap; }
+.cameraEventsFilterActions .cameraEventsCheck { white-space: nowrap; height: 36px; min-height: 36px; line-height: 16px; }
+.cameraEventsFilterActions .cameraEventsCheck > span { display: block; line-height: 16px; }
 .cameraEventsFilters label, .cameraEventsDetectorChooser > label { min-width: 0; display: grid; gap: 5px; color: #64748b; font-size: 12px; }
 .cameraEventsFilters select, .cameraEventsDetectorChooser select, .cameraEventsSchedule input[type="time"] { width: 100%; min-width: 0; height: 36px; border: 1px solid #cbd7e4; border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 13px; background: #fff; color: #172238; }
 .cameraEventsCheck { display: inline-flex !important; align-items: center; gap: 8px; font-size: 13px; color: #334155; min-height: 34px; }

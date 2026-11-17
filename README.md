@@ -56,11 +56,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.29](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.29)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.10.0](https://github.com/kmishnev87/km-vms/releases/tag/v0.10.0)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.29/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.29
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.10.0/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.10.0
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -117,6 +117,17 @@ Owners and administrators change this shared NAS setting; all viewers use it. Co
 
 A fixed panoramic lens does not gain PTZ because another lens in the same device can move. Controls follow the selected channel's actual capabilities.
 
+### Talk through a supported camera
+
+From an individual live view in Android, an owner or administrator can start a **camera call** without leaving the picture. KM VMS checks for a standard **ONVIF RTSP audio backchannel** or a compatible **Tapo local-protocol** interface rather than enabling talk solely from a brand or model name.
+
+- Hold to speak through the standard backchannel adapter; compatible Tapo sessions provide a full-duplex path with a microphone mute control.
+- Use low-latency video while the call is active, preserving the existing PTZ and sound preferences afterward.
+- Grant Android microphone permission explicitly. Leaving the camera, backgrounding the app, hanging up or losing the connection stops capture; calls do not keep a microphone service running in the background.
+- If Tapo requires a separate account password for local talk authentication, save it encrypted on the NAS rather than on the phone. Audio is forwarded in memory, not saved as a call recording.
+
+Two-way audio is device- and firmware-dependent: a camera microphone, speaker or ONVIF logo alone does not guarantee a compatible return-audio path. The initial standard adapter supports mono 8 kHz G.711 A-law/µ-law. Physical speaker/microphone performance and echo handling need validation on the actual camera and phone. **Browser microphone calling is not included in this release.**
+
 ### Recording and playback
 
 - Record to your NAS/server, inspect Recorder state, and recover after temporary camera or network failures.
@@ -135,6 +146,7 @@ A fixed panoramic lens does not gain PTZ because another lens in the same device
 - Pan across calendar days on Android, with archive ranges loaded for the visible dates in the NAS timezone.
 - Start available recordings together and pause the group when buffering is required.
 - Adapt the recovery buffer after real data starvation without imposing a fixed extra delay on a fast first start.
+- On Android, prioritize current playback reads over speculative prefetch and reuse scoped media authorization within a playback session, without a separate three-camera/read bottleneck.
 - Hold the last frame while the next segment loads.
 - Navigate event markers and manually add removed cameras with retained recordings.
 
@@ -199,6 +211,7 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - English, Simplified Chinese, and Russian.
 - Multiple saved NAS connections with independent sessions.
 - A live camera feed list, fullscreen viewing, main/sub selection, audio, and pinch/pan image gestures.
+- Capability-based camera calls for owners and administrators, with explicit microphone permission and automatic cleanup when leaving or backgrounding the live view.
 - Tap a camera-card preview to watch only that camera. Rotation and fullscreen keep the single-camera session until you leave Live.
 - Choose a subset of live cameras in a compact, dismissible panel. Selection numbers and drag-to-reorder control the viewing order; each saved NAS/account connection keeps its normal set independently of temporary single-camera viewing.
 - Fast/Stable live mode shared with the browser, editable in **NAS settings** under the same server-enforced permissions; supported PTZ still uses low-latency viewing during control.

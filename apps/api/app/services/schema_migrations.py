@@ -2034,7 +2034,7 @@ def validate_current_target_schema(db: Session) -> dict[str, Any]:
         or state.status not in SAFE_STATUSES
     ):
         raise RuntimeError("current_target_schema_state_invalid")
-    return _online_mode_verify(db)
+    return _camera_talk_verify(db)
 
 
 STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
@@ -2210,6 +2210,43 @@ ONLINE_MODE_MIGRATION = MigrationDefinition(
 )
 
 
+def _camera_talk_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.schema_version != 12 or state.status not in SAFE_STATUSES:
+        raise RuntimeError("camera_talk_source_schema_invalid")
+    _online_mode_verify(db)
+    return {"source_schema_version": 12}
+
+
+def _camera_talk_apply(db: Session) -> dict[str, Any]:
+    columns = {str(column["name"]) for column in inspect(db.connection()).get_columns("cameras")}
+    added = "talk_password_encrypted" not in columns
+    if added:
+        db.execute(text("ALTER TABLE cameras ADD COLUMN talk_password_encrypted TEXT NULL"))
+    return {"column_added": added}
+
+
+def _camera_talk_verify(db: Session) -> dict[str, Any]:
+    result = _online_mode_verify(db)
+    column = next((item for item in inspect(db.connection()).get_columns("cameras") if item["name"] == "talk_password_encrypted"), None)
+    if column is None or not column["nullable"] or str(column["type"]).upper() != "TEXT":
+        raise RuntimeError("camera_talk_column_invalid")
+    return {**result, "schema_version": 13, "camera_talk": "encrypted_optional_credential"}
+
+
+CAMERA_TALK_MIGRATION = MigrationDefinition(
+    migration_id="camera_talk_schema_v13", from_version=12, to_version=13,
+    description="Optional encrypted camera talk credential; existing camera configuration is preserved.",
+    risk=RISK_ADDITIVE_SAFE, transaction_mode="session_transaction",
+    preflight=_camera_talk_preflight, apply=_camera_talk_apply, verify=_camera_talk_verify,
+    safe_failure_summary="Camera talk credential migration failed safely.",
+    rollback_note="Nullable additive column; previous writers remain compatible and footage is unchanged.",
+    runtime_compatibility_floor=12,
+    definition_material={"source_schema_version": 12, "target_schema_version": 13, "table": "cameras",
+                         "column": "talk_password_encrypted", "ddl": "TEXT NULL", "existing_rows_preserved": True},
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -2223,6 +2260,7 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE1375_FORMAT_CHANGE_MIGRATION,
         STAGE172_EVENT_RECEIVING_MIGRATION,
         ONLINE_MODE_MIGRATION,
+        CAMERA_TALK_MIGRATION,
     ),
     published_variants=(
         STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,

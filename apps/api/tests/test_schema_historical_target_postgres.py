@@ -48,7 +48,7 @@ def historical_install(db, monkeypatch, tmp_path):
     receipt = control.CONTROL_BOOTSTRAP_RECEIPT_PATH.read_bytes()
     shape = control.database_shape_fingerprint(db)
     values = dict(installed_version="0.9.11", installed_commit=control.SOURCE_TAG_COMMITS["0.9.11"],
-        source_schema_version=10, source_shape_fingerprint=shape, target_release="0.9.29", target_commit="f"*40)
+        source_schema_version=10, source_shape_fingerprint=shape, target_release="0.10.0", target_commit="f"*40)
     new = control.UpdateContext(request={}, request_id="update-" + "3"*32,
         admission_attempt_id="migration-attempt-" + "4"*32, registry_fingerprint=control.REGISTRY_FINGERPRINT,
         plan_fingerprint=control.plan_fingerprint(**values), **values)
@@ -79,12 +79,13 @@ def test_real_bootstrap_9_to_10_then_current_schema_preserves_signed_history(for
     assert control.bootstrap_or_resume_control(db, context=new,
         actor_user_id=1, actor_subject="preserved-test-user", actor_role="owner") == 2
     complete_transition(db, new, generation, 11, terminal=False)
-    complete_transition(db, new, generation, 12)
+    complete_transition(db, new, generation, 12, terminal=False)
+    complete_transition(db, new, generation, 13)
     control.validate_exact_target_noop(db)
     control._validate_persistent_bootstrap_evidence(db, proof, current_generation=2)
     assert business_snapshot(db) == before
     row = db.get(SchemaMigrationControl, "current")
-    assert row.target_schema_version == 12 and row.target_release == new.target_release
+    assert row.target_schema_version == 13 and row.target_release == new.target_release
     assert db.execute(text("SELECT events_enabled FROM cameras WHERE id=1")).scalar_one() is False
 
 

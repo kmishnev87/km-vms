@@ -267,7 +267,7 @@
     <string name="events_day">За сутки</string>
     <string name="events_week">За неделю</string>
     <string name="events_month">За 30 дней</string>
-    <string name="events_unread">Только новые</string>
+    <string name="events_unread">Только непросмотренные</string>
     <string name="events_source_unknown">Не удалось определить объектив.</string>
     <string name="events_video_unavailable">Видео этого события недоступно.</string>
     <string name="events_live_fallback">Запись пока недоступна. Открыт онлайн-просмотр.</string>
@@ -442,4 +442,21 @@
     <string name="widget_update_nas">Обновите KM VMS на этом NAS для управления из виджета.</string>
     <string name="widget_pin_manual">Нажмите и удерживайте пустое место рабочего стола, откройте «Виджеты» и выберите KM VMS → «Виджет оповещений».</string>
     <string name="widget_no_servers">Сначала добавьте подключение к NAS в приложении.</string>
+    <string name="camera_call">Позвонить в камеру</string>
+    <string name="call_password">Пароль аккаунта Tapo</string>
+    <string name="call_password_help">Камера использует отдельный протокол разговора. Введите пароль аккаунта Tapo, не пароль подключения камеры. Он хранится зашифрованным только на NAS.</string>
+    <string name="call_save_connect">Сохранить и позвонить</string>
+    <string name="call_mute">Выключить микрофон</string>
+    <string name="call_unmute">Включить микрофон</string>
+    <string name="call_mic_on">Микрофон включён</string>
+    <string name="call_mic_off">Микрофон выключен</string>
+    <string name="call_hold">Удерживайте для разговора</string>
+    <string name="call_connecting">Подключение…</string>
+    <string name="call_end">Завершить звонок</string>
+    <string name="call_busy">Динамик камеры занят. Повторите чуть позже.</string>
+    <string name="call_bad_password">Проверьте пароль аккаунта Tapo и повторите звонок.</string>
+    <string name="call_camera_auth">Проверьте данные подключения камеры.</string>
+    <string name="call_unsupported">Совместимый канал разговора не найден.</string>
+    <string name="call_permission">Микрофон недоступен. Разрешите доступ к нему в настройках Android.</string>
+    <string name="call_failed">Звонок завершён. Проверьте соединение и повторите.</string>
 </resources>

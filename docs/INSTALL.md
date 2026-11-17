@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.9.29](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.29)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.10.0](https://github.com/kmishnev87/km-vms/releases/tag/v0.10.0)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.29/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.29
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.10.0/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.10.0
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.29 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.10.0 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.29 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.10.0 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -137,6 +137,14 @@ Open **Settings → Live mode**, immediately after the recording format. The sam
 In Fast mode, a confirmed unsupported stream/client combination switches only that stream to HLS and shows an incompatibility explanation beside its camera name. The other cameras and the shared setting remain unchanged. Network interruptions use reconnection, not an incompatibility label. Main/sub selection, fullscreen and audio controls remain available. These modes do not change recording, clips, archive playback or chronology.
 
 New or resumed viewing uses the current setting, and an already-open view receives changes through its normal media-authority renewal. Reopen another device's existing view to apply a change immediately. No separate continuous settings polling is introduced. The managed updater adds the shared setting with Stable as its default; no manual database changes are needed.
+
+## Camera calls on Android
+
+Open one camera in Android Live and use the handset control. Only owners and administrators can initiate calls. Grant microphone permission when prompted; talk is never started automatically from an event or notification. Compatible ONVIF RTSP backchannels use hold-to-speak; the Tapo local adapter provides a full-duplex path with a microphone mute control.
+
+The initial standard adapter supports mono 8 kHz G.711 A-law/µ-law. A speaker/microphone or ONVIF support alone does not guarantee a compatible backchannel. An unsupported device shows a reason rather than silently reporting a connected call. If Tapo requests its separate account password for local call authentication, it is encrypted on the NAS, not saved on the phone. It may differ from the camera account used for RTSP/ONVIF.
+
+Calls temporarily use the low-latency video path and preserve the saved sound/PTZ choices. Backgrounding the app, leaving the camera, ending a call or losing the connection stops microphone capture; there is no background microphone service. One call per physical camera host and a bounded call duration prevent an abandoned session from holding the speaker indefinitely. Audio is relayed in memory, not recorded as a call file. Physical acoustic quality needs testing with the actual phone and camera. Browser microphone calling and special HTTPS setup are outside this release.
 
 ## Native Android client
 

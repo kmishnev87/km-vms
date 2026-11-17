@@ -23,6 +23,7 @@ from app.routers.cameras import router as cameras_router, viewer_router as viewe
 from app.routers.chronology import router as chronology_router
 from app.routers.hardware import router as hardware_router
 from app.routers.live import router as live_router
+from app.routers.talk import router as talk_router
 from app.routers.maintenance import migrations_router, overview_router as maintenance_overview_router, restore_router, router as maintenance_router
 from app.routers.previews import router as previews_router
 from app.routers.recordings import router as recordings_router
@@ -246,4 +247,11 @@ app.include_router(recordings_router)
 app.include_router(storage_router)
 app.include_router(hardware_router)
 app.include_router(live_router)
+app.include_router(talk_router)
 app.include_router(chronology_router)
+
+
+@app.on_event("shutdown")
+async def shutdown_camera_calls():
+    from app.services.camera_talk.service import manager as talk_manager
+    await talk_manager.shutdown()

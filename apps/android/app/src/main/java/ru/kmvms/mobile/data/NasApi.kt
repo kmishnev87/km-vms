@@ -45,15 +45,22 @@ class NasApi(val address: ServerAddress) {
         .connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS).build()
     internal val longPollClient = mediaClient.newBuilder().readTimeout(35, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build()
     @Volatile private var access: String? = null
+    // Opaque, in-memory boundary for scoped media leases; never expose the bearer.
+    @Volatile private var mediaAuthority: Any? = null
     private class Renewal(val load: () -> SavedSignIn?, val persist: (String, String) -> Boolean)
     @Volatile private var renewal: Renewal? = null
     @Volatile private var renewalRejected = false
     private val renewalLock = Mutex()
-    fun useSession(value: String) { access = value; renewalRejected = false }
+    fun useSession(value: String) {
+        mediaAuthority = null
+        access = value; renewalRejected = false
+        mediaAuthority = Any()
+    }
+    internal fun mediaAuthorizationScope(): Any? = mediaAuthority
     fun allowSessionRenewal(load: () -> SavedSignIn?, persist: (String, String) -> Boolean) {
         renewal = Renewal(load, persist); renewalRejected = false
     }
-    fun disableSessionRenewal() { renewal = null; renewalRejected = true }
+    fun disableSessionRenewal() { mediaAuthority = null; renewal = null; renewalRejected = true }
     suspend fun login(username: String, password: String): String {
         val body = JSONObject().put("username", username).put("password", password).put("stay_signed_in", false)
         val result = request("api/auth/login", "POST", body, authenticated = false) as JSONObject
@@ -92,7 +99,7 @@ class NasApi(val address: ServerAddress) {
     suspend fun logout() {
         disableSessionRenewal()
         try { request("api/auth/logout", "POST", JSONObject(), authenticated = false) }
-        finally { access = null; cookies.clear() }
+        finally { mediaAuthority = null; access = null; cookies.clear() }
     }
     suspend fun json(path: String, method: String = "GET", body: JSONObject? = null): Any? = request(path, method, body)
     suspend fun cameraPreview(cameraId: Long, mayRenew: Boolean = true): ByteArray = withContext(Dispatchers.IO) {
@@ -179,10 +186,10 @@ class NasApi(val address: ServerAddress) {
         try {
             val token = login(username, saved.password)
             if (renewal !== configuration || !configuration.persist(saved.access, token)) {
-                access = null; throw NasException(ApiProblem.AUTHENTICATION)
+                mediaAuthority = null; access = null; throw NasException(ApiProblem.AUTHENTICATION)
             }
         } catch (error: NasException) {
-            if (error.problem == ApiProblem.AUTHENTICATION) renewalRejected = true
+            if (error.problem == ApiProblem.AUTHENTICATION) { mediaAuthority = null; renewalRejected = true }
             throw error
         }
     }

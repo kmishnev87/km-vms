@@ -7,8 +7,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import ru.kmvms.mobile.core.GroupTimeline
 import ru.kmvms.mobile.core.TimelinePhase
 import ru.kmvms.mobile.core.TimelineSample
@@ -47,7 +45,7 @@ class ChronologyController(private val context: Context, private val api: Chrono
     private val prefetches = mutableMapOf<Long, Job>()
     private val prefetchAttempted = mutableMapOf<Long, String>()
     private val emptyProbeAfter = mutableMapOf<Long, Long>()
-    private val reads = Semaphore(3)
+    private val reads = ChronologyReadQueue(api.api.mediaClient.dispatcher.maxRequestsPerHost)
     private var rangesJob: Job? = null
     private var epoch = 0L
     private var active = true
@@ -163,7 +161,7 @@ class ChronologyController(private val context: Context, private val api: Chrono
         track.resolving()
         lookups[id] = scope.launch {
             try {
-                val result = reads.withPermit { api.resolve(id, position) }
+                val result = reads.foreground { api.resolve(id, position) }
                 if (own != epoch || tracks[id] !== track || !active) return@launch
                 when (result) {
                     is TimelineLookup.Video -> { emptyProbeAfter.remove(id); track.load(result.source, position) }
@@ -182,7 +180,7 @@ class ChronologyController(private val context: Context, private val api: Chrono
         val own = epoch
         prefetches[id] = scope.launch {
             try {
-                val next = reads.withPermit { api.resolve(id, source.end + 1) }
+                val next = reads.prefetch { api.resolve(id, source.end + 1) }
                 if (own == epoch && tracks[id] === track && track.source()?.key == source.key && next is TimelineLookup.Video) {
                     track.append(next.source, source.end)
                 }

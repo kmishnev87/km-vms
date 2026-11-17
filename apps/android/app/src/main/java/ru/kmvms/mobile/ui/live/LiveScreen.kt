@@ -60,7 +60,7 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
 @UnstableApi
 @Composable fun LiveScreen(api: NasApi, cameras: List<Camera>, capabilities: Map<Long, PtzCapabilities>,
                            onMessage: (String) -> Unit, onImmersive: (Boolean) -> Unit, initial: MobileVideoRequest? = null,
-                           profileId: String, onExit: () -> Unit = {}) {
+                           profileId: String, mayTalk: Boolean = false, onExit: () -> Unit = {}) {
     val context = LocalContext.current
     val controller = remember(api) { LiveController(context.applicationContext, api) }
     val sessions by controller.sessions.collectAsStateWithLifecycle()
@@ -155,7 +155,7 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
         }
     } else {
         key(selected.id) { LiveCameraDetail(selected, capabilities[selected.id], controller, immersive,
-            { dismissedLandscapeFullscreen = false; requestedFullscreen = true }, closeDetail, onMessage) }
+            { dismissedLandscapeFullscreen = false; requestedFullscreen = true }, closeDetail, onMessage, mayTalk) }
     }
     if (choosing && singleId == null) LiveCameraPicker(cameras, viewingIds, { choosing = false }) { ids ->
         savedOrder = ids; preferences.save(profileId, ids); choosing = false
