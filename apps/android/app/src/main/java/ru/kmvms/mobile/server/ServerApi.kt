@@ -41,16 +41,19 @@ data class SystemView(val severity:String,val problems:Int,val warnings:Int,val 
     }}
 }
 data class ServerSettings(val language:String,val timezone:String,val format:String,val backend:String,val autoCleanup:Boolean,
-                          val acknowledgementRequired:Boolean,val terms:String) {
+                          val acknowledgementRequired:Boolean,val terms:String,val onlineMode:String="stable") {
     companion object {fun from(value:JSONObject)=ServerSettings(value.getString("language"),value.getString("timezone"),value.getString("recording_format"),
-        value.text("hardware_preferred_backend")?:"auto",value.optBoolean("auto_free_space_cleanup_enabled"),value.optBoolean("auto_free_space_acknowledgement_required"),value.optString("auto_free_space_terms_version"))}
+        value.text("hardware_preferred_backend")?:"auto",value.optBoolean("auto_free_space_cleanup_enabled"),value.optBoolean("auto_free_space_acknowledgement_required"),value.optString("auto_free_space_terms_version"),
+        if(value.optString("online_mode")=="fast")"fast" else "stable")}
     fun diff(baseline:ServerSettings,acknowledged:Boolean):JSONObject {
         require(language==baseline.language||language in setOf("ru","en","zh-CN"))
         require(timezone==baseline.timezone||timezone in ZoneId.getAvailableZoneIds())
         require(format==baseline.format||format in setOf("mp4","mkv"))
         require(backend==baseline.backend||backend in setOf("auto","cpu","qsv","vaapi","nvenc","amf"))
+        require(onlineMode in setOf("fast","stable"))
         return JSONObject().apply{
             if(language!=baseline.language)put("language",language)
+            if(onlineMode!=baseline.onlineMode)put("online_mode",onlineMode)
             if(timezone!=baseline.timezone)put("timezone",timezone)
             if(backend!=baseline.backend)put("hardware_preferred_backend",backend)
             if(format!=baseline.format){put("recording_format",format);put("recording_format_apply_mode","after_segment");put("expected_recording_format",baseline.format)}

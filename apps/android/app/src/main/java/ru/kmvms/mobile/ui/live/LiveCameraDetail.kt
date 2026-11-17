@@ -73,6 +73,7 @@ import kotlin.math.roundToInt
                 aspect = if (playback?.stream == Stream.MAIN) camera.mainAspect else camera.subAspect,
                 onPoint = { x, y -> if (ready) handle?.point(x, y) },
                 onArea = { left, top, right, bottom -> if (ready) handle?.area(left, top, right, bottom) })
+            LiveCameraCaption(camera.name, video?.hlsFallback == true, Modifier.align(Alignment.CenterStart))
             Row(Modifier.align(Alignment.TopEnd).padding(10.dp).background(Color(0xB3233044), RoundedCornerShape(12.dp)).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 if (capability?.supported == true) IconButton(onClick = {

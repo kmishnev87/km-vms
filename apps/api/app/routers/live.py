@@ -392,7 +392,11 @@ def issue_live_media_token(
         secure=request.url.scheme == "https", samesite="strict",
         max_age=token_response["expires_in"],
     )
-    return token_response
+    # Viewer-safe configuration rides the existing media authorization; no
+    # settings permission, additional startup request or polling is required.
+    from app.services.system_settings import get_system_settings_read_only
+    mode = getattr(get_system_settings_read_only(db), "online_mode", None)
+    return {**token_response, "online_mode": mode if mode in {"fast", "stable"} else "stable"}
 
 
 @router.get("/debug/{camera_id}/{stream}")

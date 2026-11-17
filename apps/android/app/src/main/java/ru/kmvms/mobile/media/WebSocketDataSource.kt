@@ -20,6 +20,8 @@ import ru.kmvms.mobile.BuildConfig
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+internal class LiveTransportIncompatibleException : IOException("Live source codec is incompatible")
+
 /** NAS-native fMP4 over WS, fed directly to Media3, not through a WebView. */
 @UnstableApi
 class WebSocketDataSource(private val api: NasApi, private val cameraId: Long, private val stream: Stream,
@@ -50,13 +52,17 @@ class WebSocketDataSource(private val api: NasApi, private val cameraId: Long, p
                                 initialized = true; audioAvailable(value.optBoolean("audio_available"))
                             }
                             "error" -> {
+                                if (value.optString("code") == "mse_codec_unsupported") throw LiveTransportIncompatibleException()
                                 val code = value.optString("code").takeIf { it in setOf("mse_access_denied", "mse_stream_failed", "mse_slow_viewer", "mse_stream_closed") } ?: "unknown"
                                 debug("server-error=$code")
                                 throw IOException("Live source unavailable")
                             }
                             else -> throw IOException("Invalid live control packet")
                         }
-                    } catch (_: Exception) { pipe.fail(IOException("Live source unavailable")); webSocket.cancel() }
+                    } catch (error: Exception) {
+                        pipe.fail(if (error is LiveTransportIncompatibleException) error else IOException("Live source unavailable"))
+                        webSocket.cancel()
+                    }
                 }
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                     if (!initialized || !pipe.offer(bytes.toByteArray())) {

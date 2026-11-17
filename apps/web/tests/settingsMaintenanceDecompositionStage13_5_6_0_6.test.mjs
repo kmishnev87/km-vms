@@ -576,7 +576,7 @@ assert.match(
 );
 
 const expectedProtected = {
-  "apps/web/lib/settingsPageHelpers.js": "adece850f2f049b7b535817c2fad8ec9cc7099d7abdfa0b52d129c909c1eee7c",
+  "apps/web/lib/settingsPageHelpers.js": "6848f5ede6de208954f5a5525db3b7a17f1644d76ff0153df66dd1e996e640e0",
   "apps/web/lib/settingsPageSharedHelpers.js": "8b277ff76692f76da62111f830a57bc93898d4a39c8e88afc92a4098d76dd678"
 };
 // Presentation, shared feedback and phase labels are now explicitly in scope;
@@ -585,6 +585,8 @@ const expectedProtected = {
 // The two new dependency-error translations have executable coverage in
 // stage14ArchiveProbeDependency; the helper dependency boundary stays frozen.
 // Ignore Git checkout line endings; they do not change the helper contract.
+// The approved NAS-wide online mode deliberately extends the settings draft;
+// its defaults, dirty tracking and payload are covered by settingsPageHelpersStage14.
 for (const [relative, expectedHash] of Object.entries(expectedProtected)) {
   const protectedSource = readProductSourceFile(resolve(repoRoot, relative), "utf8").replace(/\r\n/g, "\n");
   assert.equal(sha256(protectedSource), expectedHash, `${relative} changed outside scope`);

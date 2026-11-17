@@ -11,8 +11,8 @@ android {
         applicationId = "ru.kmvms.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("kmvms.versionCode").orElse("811").get().toInt()
-        versionName = providers.gradleProperty("kmvms.versionName").orElse("0.8.11").get()
+        versionCode = providers.gradleProperty("kmvms.versionCode").orElse("812").get().toInt()
+        versionName = providers.gradleProperty("kmvms.versionName").orElse("0.8.12").get()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -81,4 +81,5 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

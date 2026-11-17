@@ -10,6 +10,18 @@ import ru.kmvms.mobile.core.Stream
 import ru.kmvms.mobile.data.NasApi
 
 class LiveEndpointTest {
+    @Test fun theNasModeArrivesWithExistingViewerAuthorization() = runBlocking {
+        MockWebServer().use { server ->
+            listOf("fast", "stable", "future").forEach { mode -> server.enqueue(MockResponse()
+                .setBody("""{"media_token":"fixture","expires_in":300,"online_mode":"$mode"}""")) }
+            val api=NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") }
+            val endpoint=LiveEndpoint(api)
+            assertEquals(ru.kmvms.mobile.core.OnlineMode.FAST,endpoint.authorize(12,Stream.MAIN).onlineMode)
+            repeat(2){assertEquals(ru.kmvms.mobile.core.OnlineMode.STABLE,endpoint.authorize(12,Stream.SUB).onlineMode)}
+            assertEquals(3,server.requestCount)
+            repeat(3){assertEquals("/api/live/media-token",server.takeRequest().path)}
+        }
+    }
     @Test fun ownViewerCanBeReleasedWithoutStoppingOtherUsers() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"viewer_id":"fixture-viewer-1","ok":true}"""))

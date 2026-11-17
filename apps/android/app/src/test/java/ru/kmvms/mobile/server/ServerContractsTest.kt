@@ -5,6 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ServerContractsTest {
+    @Test fun theModePatchDoesNotAccidentallyChangeRecordingSettings() {
+        val baseline=ServerSettings("en","UTC","mkv","auto",false,false,"")
+        val changed=baseline.copy(onlineMode="fast").diff(baseline,false)
+        assertEquals(setOf("online_mode"),changed.keys().asSequence().toSet())
+        assertEquals("fast",changed.getString("online_mode"))
+        assertEquals("stable",ServerSettings.from(JSONObject("""{"language":"en","timezone":"UTC","recording_format":"mkv"}""")).onlineMode)
+    }
     private fun baseline()=ServerSettings("ru","Etc/GMT-5","mkv","auto",false,true,"fixture-terms")
     @Test fun changingLanguageDoesNotResubmitOtherServerSettings(){
         val current=baseline()

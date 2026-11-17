@@ -6,6 +6,7 @@ import CompactVideoCanvas from "./CompactVideoCanvas";
 import VideoZoomPanSurface from "./VideoZoomPanSurface";
 import PtzPointSurface from "./cameras/PtzPointSurface";
 import { createLiveMsePlayer } from "../lib/liveMsePlayer";
+import { isMseCompatibilityFailure, wantsFastOnline } from "../lib/onlineMode";
 import { apiFetch, captureAuthSession, issueLiveMediaTokenInfo } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { liveFailureMessage, liveRecoveryDelay, notifyLiveRuntimeChanged } from "../lib/livePlaybackRecovery";
@@ -66,6 +67,7 @@ export default function TilePlayer({
   onAreaZoom,
   onPtzAimCancel,
   onLowLatencyUnavailable,
+  onTransportFallback,
 }) {
   const { text } = useI18n();
   const videoRef = useRef(null);
@@ -74,6 +76,13 @@ export default function TilePlayer({
   const mseRef = useRef(null);
   const lowLatencyUnavailableRef = useRef(onLowLatencyUnavailable);
   lowLatencyUnavailableRef.current = onLowLatencyUnavailable;
+  const fallbackRef = useRef(onTransportFallback);
+  fallbackRef.current = onTransportFallback;
+  const ptzIntentRef = useRef(lowLatency);
+  const previousPtzIntent = useRef(lowLatency);
+  const nasModeRef = useRef("stable");
+  const [ptzTransportRevision, setPtzTransportRevision] = useState(0);
+  ptzIntentRef.current = lowLatency;
   const [transport, setTransport] = useState("hls");
   const retryTimerRef = useRef(null);
   const mediaTokenRefreshTimerRef = useRef(null);
@@ -309,6 +318,12 @@ export default function TilePlayer({
   }, [cameraId, stream]);
 
   useEffect(() => {
+    if (previousPtzIntent.current === lowLatency) return;
+    previousPtzIntent.current = lowLatency;
+    if (nasModeRef.current !== "fast") setPtzTransportRevision(value => value + 1);
+  }, [lowLatency]);
+
+  useEffect(() => {
     let cancelled = false;
     let recoveryAttempt = 0;
     let recoveryScheduled = false;
@@ -323,11 +338,16 @@ export default function TilePlayer({
     let currentViewerId = null;
     let viewerTouchTimer = null;
     let audioAllowedByConfig = true;
+    let selectedMode = "stable";
+    let compatibilityFallback = false;
+    let initialCredential = null;
+    let startingTransport = false;
     const sourceKey = {
       cameraId: cameraId ? Number(cameraId) : null,
       stream: stream || null,
     };
     setCanvasFrame({ ready: false, generation: "", reason: "source-change", error: "" });
+    fallbackRef.current?.(false);
 
     async function closeViewer() {
       if (viewerTouchTimer) {
@@ -436,13 +456,14 @@ export default function TilePlayer({
         }
         retryTimerRef.current = null;
         recoveryScheduled = false;
-        if (!cancelled) void startPlayback();
+        if (!cancelled) void startTransport();
       };
       retryTimerRef.current = setTimeout(retry, delay);
     }
 
     async function buildPlaylistUrl() {
-      const tokenInfo = await issueLiveMediaTokenInfo(sourceKey.cameraId, sourceKey.stream);
+      const tokenInfo = initialCredential || await issueLiveMediaTokenInfo(sourceKey.cameraId, sourceKey.stream);
+      initialCredential = null;
       if (!tokenInfo.mediaToken) throw new Error(TEXT.failedPlay);
       return {
         url: `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8`,
@@ -705,21 +726,45 @@ export default function TilePlayer({
         failWithMessage(liveFailureMessage("stream_stalled", everPlayed));
       }
     }, 10000);
-    const onResume = () => {
-      if (!cancelled && !document.hidden && (hlsRef.current || nativeHlsCleanupRef.current)) {
-        void refreshPlaylistSource().then((ok) => { if (!ok) failWithMessage(TEXT.failedPlay, lastTokenError); });
-      }
+    const onResume = async () => {
+      if (cancelled || document.hidden || startingTransport || starting) return;
+      try {
+        const info = await issueLiveMediaTokenInfo(sourceKey.cameraId, sourceKey.stream);
+        if (cancelled) return;
+        if (info.onlineMode !== selectedMode) {
+          await closeViewer();
+          if (!cancelled) { destroyPlayer(); void startTransport(info); }
+        } else if (hlsRef.current || nativeHlsCleanupRef.current) scheduleMediaTokenRefresh(info.expiresIn);
+      } catch (cause) { if (!cancelled) failWithMessage(TEXT.failedPlay, cause); }
     };
     window.addEventListener("online", onResume);
     document.addEventListener("visibilitychange", onResume);
-    if (lowLatency) {
+    async function startTransport(credential = null) {
+      if (cancelled || startingTransport || starting || !sourceKey.cameraId || !sourceKey.stream) return;
+      startingTransport = true;
       const ownSession = captureAuthSession();
-      destroyPlayer();
-      setTransport("mse");
-      setStatus("loading"); setError("");
-      const mse = createLiveMsePlayer({
+      try {
+        const info = credential || await issueLiveMediaTokenInfo(sourceKey.cameraId, sourceKey.stream);
+        if (cancelled || !ownSession()) return;
+        selectedMode = info.onlineMode || "stable";
+        nasModeRef.current = selectedMode;
+        initialCredential = info;
+        if (!wantsFastOnline(selectedMode, ptzIntentRef.current) || compatibilityFallback) {
+          setTransport("hls");
+          fallbackRef.current?.(compatibilityFallback && wantsFastOnline(selectedMode, ptzIntentRef.current));
+          void startPlayback();
+          return;
+        }
+        destroyPlayer();
+        setTransport("mse");
+        setStatus("loading"); setError("");
+        const mse = createLiveMsePlayer({
         video: videoRef.current, cameraId, stream,
-        requestToken: issueLiveMediaTokenInfo,
+        requestToken: async (id, key) => {
+          const next = initialCredential || await issueLiveMediaTokenInfo(id, key);
+          initialCredential = null;
+          return next;
+        },
         isCurrent: () => !cancelled && ownSession(),
         onPlaying: () => {
           if (cancelled) return;
@@ -734,18 +779,29 @@ export default function TilePlayer({
             failWithMessage(TEXT.failedPlay, cause);
             return;
           }
+          if (isMseCompatibilityFailure(cause)) {
+            compatibilityFallback = true;
+            fallbackRef.current?.(true);
+          } else if (selectedMode === "fast") {
+            failWithMessage(liveFailureMessage(null, everPlayed), cause);
+            return;
+          } else {
+            // Preserve the existing stable/PTZ recovery for other failures;
+            // do not label a network interruption as incompatibility.
+            lowLatencyUnavailableRef.current?.();
+          }
           mseRef.current?.destroy(); mseRef.current = null;
           setTransport("hls");
-          lowLatencyUnavailableRef.current?.();
           void startPlayback();
         },
       });
       mseRef.current = mse;
       void mse.start();
-    } else {
-      setTransport("hls");
-      startPlayback();
+      } catch (cause) {
+        if (!cancelled && ownSession()) failWithMessage(TEXT.failedStart, cause);
+      } finally { startingTransport = false; }
     }
+    void startTransport();
 
     function dispose() {
       cancelled = true;
@@ -763,7 +819,7 @@ export default function TilePlayer({
       window.removeEventListener("km-vms-before-logout", beforeLogout);
       dispose();
     };
-  }, [cameraId, stream, lowLatency]);
+  }, [cameraId, stream, ptzTransportRevision]);
 
   useEffect(() => {
     audioStatusChangeRef.current = onAudioStatusChange;

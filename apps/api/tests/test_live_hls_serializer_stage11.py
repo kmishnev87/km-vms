@@ -428,7 +428,8 @@ def test_live_media_token_and_hls_access_contract(client, api_db):
     token_response = client.post("/live/media-token", json={"camera_id": camera.id, "stream": "sub"}, headers=auth_headers(operator))
     assert token_response.status_code == 200
     token_body = token_response.json()
-    assert set(token_body) == {"media_token", "token_type", "expires_at", "expires_in"}
+    assert set(token_body) == {"media_token", "token_type", "expires_at", "expires_in", "online_mode"}
+    assert token_body["online_mode"] == "stable"
     assert token_body["token_type"] == "media"
     assert isinstance(token_body["expires_in"], int)
 

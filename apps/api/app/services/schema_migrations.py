@@ -2034,7 +2034,7 @@ def validate_current_target_schema(db: Session) -> dict[str, Any]:
         or state.status not in SAFE_STATUSES
     ):
         raise RuntimeError("current_target_schema_state_invalid")
-    return _stage172_event_receiving_target_verify(db)
+    return _online_mode_verify(db)
 
 
 STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
@@ -2164,6 +2164,52 @@ STAGE172_EVENT_RECEIVING_MIGRATION = MigrationDefinition(
 )
 
 
+def _online_mode_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.schema_version != 11 or state.status not in SAFE_STATUSES:
+        raise RuntimeError("online_mode_source_schema_invalid")
+    _stage172_event_receiving_target_verify(db)
+    return {"source_schema_version": 11}
+
+
+def _online_mode_apply(db: Session) -> dict[str, Any]:
+    columns = {str(column["name"]) for column in inspect(db.connection()).get_columns("system_settings")}
+    added = "online_mode" not in columns
+    if added:
+        db.execute(text("ALTER TABLE system_settings ADD COLUMN online_mode VARCHAR(16) NOT NULL DEFAULT 'stable'"))
+    return {"column_added": added}
+
+
+def _online_mode_verify(db: Session) -> dict[str, Any]:
+    result = _stage172_event_receiving_target_verify(db)
+    column = next((item for item in inspect(db.connection()).get_columns("system_settings") if item["name"] == "online_mode"), None)
+    if column is None or column["nullable"] or str(column["type"]).upper() != "VARCHAR(16)":
+        raise RuntimeError("online_mode_column_invalid")
+    if str(column.get("default") or "").split("::")[0].strip("()'\"") != "stable":
+        raise RuntimeError("online_mode_default_invalid")
+    if db.execute(text("SELECT COUNT(*) FROM system_settings WHERE online_mode NOT IN ('fast', 'stable')")).scalar_one():
+        raise RuntimeError("online_mode_values_invalid")
+    return {**result, "schema_version": 12, "online_mode": "nas_shared_default_stable"}
+
+
+ONLINE_MODE_MIGRATION = MigrationDefinition(
+    migration_id="online_mode_schema_v12",
+    from_version=11,
+    to_version=12,
+    description="Persist the NAS-wide live viewing mode, preserving the stable default.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_online_mode_preflight,
+    apply=_online_mode_apply,
+    verify=_online_mode_verify,
+    safe_failure_summary="Live viewing mode migration failed safely.",
+    rollback_note="Additive settings column with a server default; existing settings, footage and old writers are preserved.",
+    runtime_compatibility_floor=10,
+    definition_material={"source_schema_version": 11, "target_schema_version": 12, "table": "system_settings",
+                         "column": "online_mode", "ddl": "VARCHAR(16) NOT NULL DEFAULT 'stable'", "existing_rows_preserved": True},
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -2176,6 +2222,7 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION,
         STAGE1375_FORMAT_CHANGE_MIGRATION,
         STAGE172_EVENT_RECEIVING_MIGRATION,
+        ONLINE_MODE_MIGRATION,
     ),
     published_variants=(
         STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,

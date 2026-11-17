@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.9.28](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.28)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[0.9.29](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.29)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.28/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.28
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.29/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.29
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.28 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v0.9.29 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.9.28 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v0.9.29 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -127,9 +127,20 @@ Use the eye/check icon above history to mark selected events, or all retained ev
 
 With camera-management permission, the adjacent trash icon deletes selected events or the full retained snapshot after confirmation. After selecting the current page, **Select all matching** freezes the filtered selection across pages and permits individual exclusions. Newer arrivals are not silently added. Deletion affects shared event history and its read markers, not video files, camera configuration, personal notification settings or administrative audit history.
 
+## Live mode: Fast or Stable
+
+Open **Settings → Live mode**, immediately after the recording format. The same setting is available in Android **Settings → NAS settings**. An owner or administrator changes it for the whole NAS, not just the current account or phone.
+
+- **Fast** sends live video continuously over WebSocket/fMP4 instead of waiting for HLS segments. It reduces viewing delay and usually improves startup, but provides less protection against connection interruptions.
+- **Stable** is the default on new installations and upgrades. It preserves the existing HLS viewing path; opening a PTZ control panel enables the fast path for that camera only.
+
+In Fast mode, a confirmed unsupported stream/client combination switches only that stream to HLS and shows an incompatibility explanation beside its camera name. The other cameras and the shared setting remain unchanged. Network interruptions use reconnection, not an incompatibility label. Main/sub selection, fullscreen and audio controls remain available. These modes do not change recording, clips, archive playback or chronology.
+
+New or resumed viewing uses the current setting, and an already-open view receives changes through its normal media-authority renewal. Reopen another device's existing view to apply a change immediately. No separate continuous settings polling is introduced. The managed updater adds the shared setting with Stable as its default; no manual database changes are needed.
+
 ## Native Android client
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.11.apk** from the [0.9.28 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.28). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.12.apk** from the [0.9.29 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.29). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.

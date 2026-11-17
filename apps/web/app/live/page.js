@@ -7,6 +7,7 @@ import { useAuthSession } from "../../lib/useAuthSession";
 import useCameraEventHandoff from "../../lib/useCameraEventHandoff";
 import { cameraEventId, eventErrorKey } from "../../lib/cameraEvents";
 import { cameraPreviewId } from "../../lib/cameraPreviewLive";
+import { onlineModeCopy } from "../../lib/onlineMode";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationToast } from "../../components/OperationFeedback";
@@ -245,7 +246,8 @@ function defaultAudioFact() {
 }
 
 export default function LivePage() {
-  const { text, t } = useI18n();
+  const { text, t, locale } = useI18n();
+  const onlineCopy = onlineModeCopy(locale);
   const TEXT = useMemo(
     () => Object.fromEntries(Object.entries(LIVE_TEXT).map(([key, value]) => [key, text(value)])),
     [text]
@@ -299,6 +301,7 @@ export default function LivePage() {
   const [activeAudioTileId, setActiveAudioTileId] = useState("");
   const [audioRequestId, setAudioRequestId] = useState(0);
   const [audioFactsByTileId, setAudioFactsByTileId] = useState({});
+  const [hlsFallbacks, setHlsFallbacks] = useState({});
   const { controller: pointController } = usePtzController(ptzCameraId,
     ptzCapabilities[ptzCameraId]?.profile_token, () => showWorkspaceError(t("ptz.commandFailed")));
 
@@ -1401,7 +1404,11 @@ export default function LivePage() {
                 }}
               >
                 <div className={`liveWorkspaceTileBar ${ptzCapabilities[camera?.id]?.supported ? "hasPtz" : ""}`}>
-                  <div className="liveWorkspaceTileTitle">{camera?.name || TEXT.camera}</div>
+                  <div className="liveWorkspaceTileTitle">
+                    <span className="liveWorkspaceCameraName">{camera?.name || TEXT.camera}</span>
+                    {hlsFallbacks[tile.id] === `${camera?.id}:${tile.stream}` ? <span className="liveHlsFallback"
+                      title={onlineCopy.fallback} role="status">{onlineCopy.fallback}</span> : null}
+                  </div>
                   {camera ? <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
                     expanded={ptzCameraId === camera.id}
                     onClick={() => { setIsSidebarCollapsed(false); togglePtz(camera.id); }} /> : null}
@@ -1455,6 +1462,10 @@ export default function LivePage() {
                       cameraId={camera.id}
                       stream={stream}
                       lowLatency={ptzCameraId === camera.id}
+                      onTransportFallback={(active) => setHlsFallbacks(current => {
+                        const next = active ? `${camera.id}:${tile.stream}` : null;
+                        return current[tile.id] === next ? current : { ...current, [tile.id]: next };
+                      })}
                       pointActive={ptzCameraId === camera.id && ptzPointCameraId === camera.id && ptzCapabilities[camera.id]?.can_point}
                       onPoint={point => pointController.point(point)}
                       areaZoomActive={ptzCameraId === camera.id && ptzAreaCameraId === camera.id && ptzCapabilities[camera.id]?.can_area_zoom}

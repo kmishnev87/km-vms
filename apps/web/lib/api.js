@@ -388,5 +388,6 @@ export async function issueLiveMediaTokenInfo(cameraId, stream) {
     mediaToken: data?.media_token || "",
     expiresAt: data?.expires_at || null,
     expiresIn: Number(data?.expires_in || 0),
+    onlineMode: data?.online_mode === "fast" ? "fast" : "stable",
   };
 }

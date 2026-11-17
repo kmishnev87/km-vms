@@ -1,0 +1,9 @@
+<resources>
+    <string name="online_mode">Режим онлайн</string>
+    <string name="online_mode_fast">Быстрый</string>
+    <string name="online_mode_stable">Стабильный</string>
+    <string name="online_mode_fast_summary">Меньше задержка, чувствительнее к перебоям связи.</string>
+    <string name="online_mode_stable_summary">Больше задержка, устойчивее к перебоям связи.</string>
+    <string name="online_mode_help">Быстрый: меньше задержка видео и обычно быстрее появляется картинка; чувствительнее к перебоям связи. Несовместимый поток перейдёт на HLS с пояснением.\n\nСтабильный: больше запас видео и задержка; открытие пульта PTZ по-прежнему включает быстрый маршрут. Общая настройка веб-версии и Android для этого NAS; запись не меняется.</string>
+    <string name="live_hls_fallback">Включён режим HLS\nиз-за несовместимости</string>
+</resources>

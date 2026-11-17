@@ -56,6 +56,23 @@ def test_live_mse_uses_copy_and_short_fragments_without_hls_or_gpu():
     assert "-an" in command and "hls" not in command and "libx264" not in command
 
 
+@pytest.mark.parametrize("error,expected", [(ValueError("mse_codec_unsupported"), "mse_codec_unsupported"), (OSError("synthetic network failure"), "mse_stream_failed")])
+def test_only_a_confirmed_codec_mismatch_is_exposed_as_incompatible(monkeypatch,error,expected):
+    from app.services.live_engine import mse
+    async def process(*args,**kwargs):
+        return NS(stdout=asyncio.StreamReader(),returncode=0)
+    async def read(*args):
+        raise error
+    monkeypatch.setattr(mse.asyncio,"create_subprocess_exec",process)
+    monkeypatch.setattr(mse,"read_box",read)
+    async def run():
+        stream=MseStream(NS(id=1,rtsp_transport="tcp"),"sub","rtsp://unit.invalid/stream","synthetic")
+        peer=stream.subscribe()
+        await stream.run()
+        assert (await peer.receive())["code"]==expected
+    asyncio.run(run())
+
+
 def test_slow_peer_is_disconnected_and_memory_is_released():
     async def run():
         peer = MsePeer()

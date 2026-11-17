@@ -144,9 +144,9 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
             items(viewingCameras, key = { it.id }) { camera ->
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).testTag("live-tile-${camera.id}")) {
                     CameraVideo(sessions[camera.id], Modifier.fillMaxSize(), crop = true, onTap = { selectedId = camera.id })
-                    Text(camera.name, color=Color.White.copy(alpha=.82f), maxLines=2, overflow=TextOverflow.Ellipsis,
-                        style=TextStyle(fontSize=12.sp,shadow=Shadow(Color.Black.copy(alpha=.85f),Offset(0f,1f),3f)),
-                        modifier=Modifier.align(Alignment.CenterStart).padding(horizontal=10.dp).widthIn(max=220.dp).testTag("live-name-${camera.id}"))
+                    val video = sessions[camera.id]?.state?.collectAsStateWithLifecycle()?.value
+                    LiveCameraCaption(camera.name, video?.hlsFallback == true,
+                        Modifier.align(Alignment.CenterStart).testTag("live-name-${camera.id}"))
                 }
             }
         }

@@ -173,6 +173,7 @@ export function settingsDraftFromApi(data) {
     timezone: data?.timezone || "UTC",
     language: normalizeLocaleImpl(data?.language),
     recordingProfile: profileFromFormat(data?.recording_format),
+    online_mode: data?.online_mode === "fast" ? "fast" : "stable",
     hardware_preferred_backend: data?.hardware_preferred_backend || null,
   };
 }
@@ -182,6 +183,7 @@ export function payloadFromDraft(draft) {
     timezone: timezoneValueForSettings(draft.timezone),
     language: draft.language,
     recording_format: recordingFormatForProfile(draft.recordingProfile),
+    online_mode: draft.online_mode === "fast" ? "fast" : "stable",
     hardware_preferred_backend: draft.hardware_preferred_backend || null,
   };
 }

@@ -70,15 +70,19 @@ const draft = settingsDraftFromApi(apiSettings);
 assert.equal(Object.hasOwn(draft, "system_name"), false);
 assert.equal(Object.hasOwn(draft, "archive_primary_path"), false);
 assert.equal(draft.recordingProfile, "compatibility");
+assert.equal(draft.online_mode, "stable");
 assert.equal(languageOf(draft), "en");
 assert.deepEqual(payloadFromDraft(draft), {
   timezone: "Europe/Moscow",
   language: "en",
   recording_format: "mp4",
+  online_mode: "stable",
   hardware_preferred_backend: "qsv",
 });
 assert.equal(samePayload(draft, { ...draft }), true);
 assert.equal(samePayload(draft, { ...draft, recordingProfile: "reliability" }), false);
+assert.equal(samePayload(draft, { ...draft, online_mode: "fast" }), false);
+assert.equal(settingsDraftFromApi({ ...apiSettings, online_mode: "fast" }).online_mode, "fast");
 
 assert.equal(formatBytes(-1), "-");
 assert.equal(formatBytes(1024 ** 3), "1.0 GB");

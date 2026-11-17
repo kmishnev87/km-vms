@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.9.28",
-  "tag": "v0.9.28",
-  "title": "KM VMS 0.9.28 — Android widgets with quiet unread counts",
-  "summary": "Android 0.8.11 adds two home-screen notification widgets: compact 2x1 controls and a 3x1 version with the NAS unread-event count. Tap the number to open the bound NAS history, or the rest to change personal camera alerts. Silent push keeps the count in sync after new, read and deleted events without periodic NAS polling. Schedules, old unread events, recording and event reception keep their existing rules.",
+  "version": "0.9.29",
+  "tag": "v0.9.29",
+  "title": "KM VMS 0.9.29 — Fast and Stable live viewing",
+  "summary": "Choose a shared NAS live-viewing mode in the web interface or Android 0.8.12: Fast uses continuous WebSocket/fMP4 for lower-delay online viewing, while Stable preserves buffered HLS and the existing PTZ fast path. Incompatible streams fall back individually to HLS with an explanation. This release also improves Android widget title fitting and adds concise mode descriptions with clearly separated detailed help.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.9.28",
+  "source_ref": "v0.9.29",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -17,46 +17,54 @@
   "requires_migration": false,
   "schema_update": {
     "mode": "managed",
-    "target_version": 11
+    "target_version": 12
   },
   "changelog": [
-    "Choose compact 2x1 notification controls or a 3x1 widget with an unread count from Android Settings; standard launcher configuration is also supported.",
-    "Show the real NAS unread count, including zero, as a quiet gray number. Tap it to open event history for the widget's saved NAS/account.",
-    "Synchronize new, read and deleted event counts through silent push, without sounds, tray notifications or periodic NAS polling.",
-    "Keep phone notification delivery independent. Personal camera choices still respect schedules and never acknowledge the old unread backlog.",
-    "Preserve existing widgets and reject stale count packets. Sign-out clears the local count; removing the last count widget disables its silent channel."
+    "Add the shared NAS Live mode setting after recording format in web Settings and Android NAS settings, with Fast first, Stable second, and owner/administrator editing permissions.",
+    "Fast uses WebSocket/fMP4 for all online main/sub and fullscreen views. Stable remains the default: HLS, plus the existing low-latency PTZ route.",
+    "Only an incompatible stream falls back to HLS with an explanation; network errors reconnect normally. Recording and archive playback are unchanged.",
+    "Preserve the first socket failure so cancellation cannot hide a codec incompatibility, and avoid reconnecting an already-fast stream when PTZ controls are toggled.",
+    "Add concise selected-mode descriptions and separate Fast/Stable tooltip paragraphs in English, Russian and Simplified Chinese; keep Android help open long enough to read.",
+    "Fit the full Android notification-widget title on narrow launchers with smaller artwork, spacing and adaptive text, retaining existing actions and the quiet unread counter.",
+    "Apply the registered additive schema 11-to-12 migration with Stable as the stored default, and update Android release metadata, README and installation instructions."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.9.28 — Android widgets with quiet unread counts",
-    "ru": "KM VMS 0.9.28 — Два Android-виджета и спокойный счётчик событий",
-    "zh-CN": "KM VMS 0.9.28 — 两种 Android 小部件与低调的未读数"
+    "en": "KM VMS 0.9.29 — Fast and Stable live viewing",
+    "ru": "KM VMS 0.9.29 — Быстрый и стабильный режимы онлайна",
+    "zh-CN": "KM VMS 0.9.29 — 快速与稳定实时预览模式"
   },
   "summary_i18n": {
-    "en": "Android 0.8.11 adds two home-screen notification widgets: compact 2x1 controls and a 3x1 version with the NAS unread-event count. Tap the number to open the bound NAS history, or the rest to change personal camera alerts. Silent push keeps the count in sync after new, read and deleted events without periodic NAS polling. Schedules, old unread events, recording and event reception keep their existing rules.",
-    "ru": "В Android 0.8.11 доступны два виджета: компактный 2x1 и 3x1 со счётчиком непросмотренных событий NAS. Нажатие на число открывает историю выбранного для виджета NAS, остальная область — управление личными оповещениями. Тихие push обновляют число после новых событий, просмотра и удаления, без периодического опроса NAS. Расписания, прежние непросмотренные, запись и приём событий сохраняют свои правила.",
-    "zh-CN": "Android 0.8.11 提供两种桌面通知小部件：紧凑的 2x1 控制和带 NAS 未读事件数的 3x1 版本。点击数字打开绑定 NAS 的事件历史，点击其余区域调整个人通知。静默推送在新增、已读和删除事件后更新数字，无需定期轮询 NAS。时间表、既有未读事件、录像及事件接收规则保持不变。"
+    "en": "Choose a shared NAS live-viewing mode in the web interface or Android 0.8.12: Fast uses continuous WebSocket/fMP4 for lower-delay online viewing, while Stable preserves buffered HLS and the existing PTZ fast path. Incompatible streams fall back individually to HLS with an explanation. This release also improves Android widget title fitting and adds concise mode descriptions with clearly separated detailed help.",
+    "ru": "Общий режим онлайна NAS выбирается в веб-настройках или Android 0.8.12: Быстрый использует непрерывный WebSocket/fMP4 с меньшей задержкой, Стабильный сохраняет HLS с буфером и прежнее быстрое управление PTZ. Несовместимый поток отдельно переключается на HLS с пояснением. Также исправлено размещение заголовков Android-виджетов, добавлены короткие описания и отдельные абзацы подробной подсказки для двух режимов.",
+    "zh-CN": "在网页设置或 Android 0.8.12 中选择 NAS 共用的实时模式：快速模式使用连续 WebSocket/fMP4 降低延迟，稳定模式保留缓冲 HLS 及原有 PTZ 快速通道。不兼容的视频流单独切换到 HLS 并显示原因。本次还改进了 Android 小部件标题适配，并为两种模式提供简短说明及分段的详细帮助。"
   },
   "changelog_i18n": {
     "en": [
-      "Choose compact 2x1 notification controls or a 3x1 widget with an unread count from Android Settings; standard launcher configuration is also supported.",
-      "Show the real NAS unread count, including zero, as a quiet gray number. Tap it to open event history for the widget's saved NAS/account.",
-      "Synchronize new, read and deleted event counts through silent push, without sounds, tray notifications or periodic NAS polling.",
-      "Keep phone notification delivery independent. Personal camera choices still respect schedules and never acknowledge the old unread backlog.",
-      "Preserve existing widgets and reject stale count packets. Sign-out clears the local count; removing the last count widget disables its silent channel."
+      "Add the shared NAS Live mode setting after recording format in web Settings and Android NAS settings, with Fast first, Stable second, and owner/administrator editing permissions.",
+      "Fast uses WebSocket/fMP4 for all online main/sub and fullscreen views. Stable remains the default: HLS, plus the existing low-latency PTZ route.",
+      "Only an incompatible stream falls back to HLS with an explanation; network errors reconnect normally. Recording and archive playback are unchanged.",
+      "Preserve the first socket failure so cancellation cannot hide a codec incompatibility, and avoid reconnecting an already-fast stream when PTZ controls are toggled.",
+      "Add concise selected-mode descriptions and separate Fast/Stable tooltip paragraphs in English, Russian and Simplified Chinese; keep Android help open long enough to read.",
+      "Fit the full Android notification-widget title on narrow launchers with smaller artwork, spacing and adaptive text, retaining existing actions and the quiet unread counter.",
+      "Apply the registered additive schema 11-to-12 migration with Stable as the stored default, and update Android release metadata, README and installation instructions."
     ],
     "ru": [
-      "Из настроек Android добавляются компактный виджет 2x1 или 3x1 со счётчиком. Поддержано и стандартное добавление через оболочку телефона.",
-      "Спокойное серое число показывает реальные непросмотренные события NAS, включая ноль. Нажатие открывает историю привязанного NAS и пользователя.",
-      "Новые события, просмотр и удаление обновляют число тихими push: без звука, уведомления в шторке и периодического опроса NAS.",
-      "Доставка обычных уведомлений на телефон независима. Переключатели камер соблюдают расписания и не делают старые непросмотренные события прочитанными.",
-      "Прежние виджеты сохранены, устаревшие пакеты не откатывают число. Выход очищает счётчик; удаление последнего большого виджета отключает тихий канал."
+      "Общий выбор Быстрый / Стабильный — после формата записи в вебе и Настройках NAS APK. Изменять его могут владелец и администратор.",
+      "Быстрый: WebSocket/fMP4 всех онлайн-камер, main/sub и fullscreen. Стабильный по умолчанию: HLS, быстрый маршрут при открытом пульте PTZ.",
+      "Только несовместимый поток переходит на HLS с пояснением у названия. Сетевой сбой не считается несовместимостью; запись и архив не меняются.",
+      "Первая ошибка WebSocket сохраняется: отмена не скрывает несовместимость кодека. Переключение пульта PTZ не перезапускает уже быстрый поток.",
+      "Короткая подпись выбранного режима и два абзаца подсказки на трёх языках. В APK подробную помощь можно прочитать без короткого таймера.",
+      "Улучшено размещение заголовков виджетов на узкой сетке: уменьшены поля и картинка, добавлена подстройка шрифта. Действия и счётчик сохранены.",
+      "Управляемая миграция 11 → 12 с режимом Стабильный по умолчанию. Обновлены данные APK, английский README и инструкция установки."
     ],
     "zh-CN": [
-      "在 Android 设置中选择紧凑的 2x1 通知控制或带未读数的 3x1 小部件，也可通过桌面启动器添加。",
-      "以低调灰色数字显示 NAS 的真实未读数，包括零；点击数字打开小部件所绑定 NAS 和账户的事件历史。",
-      "新增、已读和删除事件通过静默推送更新数字，不播放声音、不显示通知栏消息，也不定期轮询 NAS。",
-      "手机普通通知独立控制；个人摄像机选择仍遵守时间表，不会将原有未读事件标记为已读。",
-      "保留已有小部件并拒绝过期计数包。退出登录清除本地计数；删除最后一个计数小部件将关闭其静默通道。"
+      "在网页设置和 Android NAS 设置的录像格式之后加入 NAS 共用实时模式；快速在前、稳定在后，仅所有者和管理员可修改。",
+      "快速模式为所有在线摄像机、主辅码流及全屏使用连续 WebSocket/fMP4；稳定仍为默认模式，保留普通 HLS 和打开 PTZ 控制时的低延迟通道。",
+      "仅不兼容的视频流回退到 HLS，并在摄像机名称旁说明原因。网络中断不再被标为编解码不兼容，录像与历史回放不变。",
+      "保留 WebSocket 首个错误，避免取消连接掩盖编解码不兼容；开关 PTZ 控制不会重新连接已经使用快速通道的视频流。",
+      "三种语言均提供当前模式的简短说明，并将快速与稳定的详细帮助分成两段；Android 帮助不再因短计时自动消失。",
+      "缩小图标、留白并自动适配字体，使通知小部件标题在较窄桌面网格中完整显示，同时保留原有操作与低调未读数。",
+      "注册的数据库 11 → 12 增量迁移以稳定模式为默认值，并同步更新 APK 元数据、英文 README 和安装指南。"
     ]
   }
 }

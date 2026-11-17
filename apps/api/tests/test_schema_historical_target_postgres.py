@@ -12,7 +12,7 @@ from test_format_schema_stage1375_postgres import format_database, business_snap
 from test_schema_historical_target_update import legacy_context
 
 
-def complete_transition(db, context, generation, target):
+def complete_transition(db, context, generation, target, terminal=True):
     migration = PRODUCTION_MIGRATIONS.canonical_for_edge(target - 1, target)
     attempt, status = control.start_attempt(db, context=context, generation=generation,
         transition_id=migration.migration_id, previous_version=target-1, target_version=target,
@@ -23,7 +23,8 @@ def complete_transition(db, context, generation, target):
     execute_migration_plan(db, target_version=target)
     control.finish_attempt(db, attempt_id=attempt, status="applied",
         after_shape_fingerprint=control.database_shape_fingerprint(db), details={"schema_verified": True})
-    control.update_control_state(db, context=context, generation=generation, state="completed")
+    if terminal:
+        control.update_control_state(db, context=context, generation=generation, state="completed")
     db.commit()
 
 
@@ -47,7 +48,7 @@ def historical_install(db, monkeypatch, tmp_path):
     receipt = control.CONTROL_BOOTSTRAP_RECEIPT_PATH.read_bytes()
     shape = control.database_shape_fingerprint(db)
     values = dict(installed_version="0.9.11", installed_commit=control.SOURCE_TAG_COMMITS["0.9.11"],
-        source_schema_version=10, source_shape_fingerprint=shape, target_release="0.9.14", target_commit="f"*40)
+        source_schema_version=10, source_shape_fingerprint=shape, target_release="0.9.29", target_commit="f"*40)
     new = control.UpdateContext(request={}, request_id="update-" + "3"*32,
         admission_attempt_id="migration-attempt-" + "4"*32, registry_fingerprint=control.REGISTRY_FINGERPRINT,
         plan_fingerprint=control.plan_fingerprint(**values), **values)
@@ -59,7 +60,7 @@ def historical_install(db, monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("prepared_receipt", [False, True])
-def test_real_bootstrap_9_to_10_then_10_to_11_preserves_signed_history(format_database, monkeypatch, tmp_path, prepared_receipt):
+def test_real_bootstrap_9_to_10_then_current_schema_preserves_signed_history(format_database, monkeypatch, tmp_path, prepared_receipt):
     _engine, db = format_database
     before = business_snapshot(db)
     old, new, original_receipt = historical_install(db, monkeypatch, tmp_path)
@@ -77,12 +78,13 @@ def test_real_bootstrap_9_to_10_then_10_to_11_preserves_signed_history(format_da
     # Idempotent same-admission restart does not create another generation.
     assert control.bootstrap_or_resume_control(db, context=new,
         actor_user_id=1, actor_subject="preserved-test-user", actor_role="owner") == 2
-    complete_transition(db, new, generation, 11)
+    complete_transition(db, new, generation, 11, terminal=False)
+    complete_transition(db, new, generation, 12)
     control.validate_exact_target_noop(db)
     control._validate_persistent_bootstrap_evidence(db, proof, current_generation=2)
     assert business_snapshot(db) == before
     row = db.get(SchemaMigrationControl, "current")
-    assert row.target_schema_version == 11 and row.target_release == new.target_release
+    assert row.target_schema_version == 12 and row.target_release == new.target_release
     assert db.execute(text("SELECT events_enabled FROM cameras WHERE id=1")).scalar_one() is False
 
 

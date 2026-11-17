@@ -211,6 +211,10 @@
   transition: opacity 0.12s ease, transform 0.12s ease;
 }
 
+.settingsInfoBubble.settingsInfoBubbleParagraphs {
+  white-space: pre-line;
+}
+
 .settingsInfoBubble::after {
   content: "";
   position: absolute;

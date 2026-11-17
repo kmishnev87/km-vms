@@ -4,6 +4,7 @@ import org.json.JSONObject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import ru.kmvms.mobile.core.Stream
+import ru.kmvms.mobile.core.OnlineMode
 import ru.kmvms.mobile.data.NasApi
 
 /** The same viewer/cookie protocol used by web; no global stream-stop operation. */
@@ -36,13 +37,13 @@ class LiveEndpoint(private val api: NasApi) {
     }
     suspend fun authorize(cameraId: Long, stream: Stream): MediaLease {
         val value = api.json("api/live/media-token", "POST", request(cameraId, stream)) as JSONObject
-        return MediaLease(value.getString("media_token"), value.getLong("expires_in"))
+        return MediaLease(value.getString("media_token"), value.getLong("expires_in"), OnlineMode.from(value.optString("online_mode")))
     }
     private fun request(id: Long, stream: Stream) = JSONObject().put("camera_id", id).put("stream", stream.apiKey)
 }
 
 /** Avoid generated toString containing the short-lived credential. */
-class MediaLease(val token: String, val lifetimeSeconds: Long) {
+class MediaLease(val token: String, val lifetimeSeconds: Long, val onlineMode: OnlineMode = OnlineMode.STABLE) {
     private val issuedNanos = System.nanoTime()
     init { require(lifetimeSeconds in 1..86400) }
     val renewAfterMillis: Long get() = ((lifetimeSeconds - 45).coerceAtLeast(1)) * 1000

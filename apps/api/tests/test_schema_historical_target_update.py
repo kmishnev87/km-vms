@@ -53,7 +53,7 @@ def test_previous_signed_bootstrap_is_not_reinterpreted_as_current_schema(monkey
     assert restored == context
     assert shape == payload["control_shape_fingerprint"]
     assert payload["target_schema_version"] == 10
-    assert control.TARGET_SCHEMA_VERSION == 11
+    assert control.TARGET_SCHEMA_VERSION == 12
 
 
 def test_new_admission_does_not_accept_a_legacy_target(monkeypatch):
@@ -62,7 +62,7 @@ def test_new_admission_does_not_accept_a_legacy_target(monkeypatch):
         control._validate_bootstrap_receipt(payload, context=context)
 
 
-@pytest.mark.parametrize("field,value", [("target_schema_version", 12), ("target_schema_version", True),
+@pytest.mark.parametrize("field,value", [("target_schema_version", control.TARGET_SCHEMA_VERSION + 1), ("target_schema_version", True),
     ("target_commit", "f" * 40), ("plan_fingerprint", "f" * 64), ("registry_fingerprint", "f" * 64)])
 def test_historical_receipt_does_not_admit_changed_bindings(monkeypatch, field, value):
     _context, payload, _attempt, db = legacy_proof(monkeypatch)

@@ -53,6 +53,11 @@ class LiveBytePipe(private val capacity: Int = 16 * 1024 * 1024,
         count
     }
     fun fail(error: IOException) = lock.withLock { failLocked(error) }
-    private fun failLocked(error: IOException) { failure = error; packets.clear(); buffered = 0; available.signalAll() }
+    private fun failLocked(error: IOException) {
+        // Cancelling an incompatible socket also raises a generic network error.
+        // Preserve the first cause so the player can choose the correct fallback.
+        if (failure == null) failure = error
+        packets.clear(); buffered = 0; available.signalAll()
+    }
     fun close() = lock.withLock { closed = true; packets.clear(); buffered = 0; available.signalAll() }
 }

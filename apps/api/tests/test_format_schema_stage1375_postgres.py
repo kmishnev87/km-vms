@@ -19,6 +19,7 @@ from app.services.schema_migrations import (
     MigrationRegistry,
     STAGE1375_FORMAT_CHANGE_MIGRATION,
     STAGE172_EVENT_RECEIVING_MIGRATION,
+    ONLINE_MODE_MIGRATION,
     SchemaMigrationBlocked,
     execute_migration_plan,
 )
@@ -40,7 +41,7 @@ def format_database(monkeypatch):
         monkeypatch.setattr(bootstrap, "engine", engine)
         bootstrap.init_db()
         with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE system_settings DROP COLUMN recording_format_apply_mode, DROP COLUMN recording_format_requested_at"))
+            connection.execute(text("ALTER TABLE system_settings DROP COLUMN recording_format_apply_mode, DROP COLUMN recording_format_requested_at, DROP COLUMN online_mode"))
             connection.execute(text("TRUNCATE schema_version_state, schema_migration_history"))
         with Session(engine) as db:
             seed_state(db, version=9)
@@ -70,6 +71,7 @@ def business_snapshot(db):
             row.pop("recording_format_apply_mode", None)
             row.pop("recording_format_requested_at", None)
             row.pop("events_enabled", None)
+            row.pop("online_mode", None)
         result[table] = rows
     return hashlib.sha256(json.dumps(result, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -84,7 +86,7 @@ def test_registered_format_and_receiving_migrations_preserve_rows_and_are_idempo
     assert source in control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.8.22"]
     before = business_snapshot(db)
     first = execute_migration_plan(db)
-    assert first["executed_migrations"] == [STAGE1375_FORMAT_CHANGE_MIGRATION.migration_id, STAGE172_EVENT_RECEIVING_MIGRATION.migration_id]
+    assert first["executed_migrations"] == [STAGE1375_FORMAT_CHANGE_MIGRATION.migration_id, STAGE172_EVENT_RECEIVING_MIGRATION.migration_id, ONLINE_MODE_MIGRATION.migration_id]
     assert control.target_shape_is_exact(db)[0] is True
     assert business_snapshot(db) == before
     assert db.execute(text("SELECT recording_format_apply_mode, recording_format_requested_at FROM system_settings WHERE id=1")).one() == (None, None)
@@ -107,7 +109,7 @@ def test_failed_verification_rolls_back_columns_state_and_preserves_rows(format_
     assert "recording_format_apply_mode" not in {col["name"] for col in inspect(db.connection()).get_columns("system_settings")}
 
 
-def test_older_prepared_runtime_can_boot_read_write_and_keep_true_schema11(format_database, monkeypatch, tmp_path):
+def test_older_prepared_runtime_can_boot_read_write_and_keep_true_schema12(format_database, monkeypatch, tmp_path):
     from app.services import schema_runtime_compatibility as compat
     from app.services import schema_versioning, schema_migrations
     engine, db = format_database
@@ -127,7 +129,7 @@ def test_older_prepared_runtime_can_boot_read_write_and_keep_true_schema11(forma
     assert control.resolve_schema_execution_mode(db) == "exact_target_noop"
     db.execute(text("UPDATE system_settings SET timezone='Europe/London' WHERE id=1"))
     db.commit()
-    assert schema_versioning.schema_version_status(db)["schema_version"] == 11
+    assert schema_versioning.schema_version_status(db)["schema_version"] == 12
     assert control.canonical_schema_history_fingerprint(db) == history_before
     assert control.database_shape_fingerprint(db) == shape_before
     db.execute(text("ALTER TABLE system_settings ADD COLUMN unregistered_change INTEGER NULL"))
@@ -145,7 +147,7 @@ def test_update_after_application_rollback_binds_real_schema_not_old_tag_number(
     before = control.canonical_schema_history_fingerprint(db)
     installed, commit, actual, shape = control.validate_source_lineage(db, request_id="update-" + "1" * 32, target_release="0.9.13", target_commit="b" * 40)
     assert installed == "0.9.11" and commit == "a" * 40
-    assert actual == 11 and shape in control.TARGET_SHAPE_FINGERPRINTS
+    assert actual == 12 and shape in control.TARGET_SHAPE_FINGERPRINTS
     assert control.canonical_schema_history_fingerprint(db) == before
     state = db.get(compat.SchemaVersionState, "current")
     state.drift_classification = {}

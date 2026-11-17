@@ -31,6 +31,7 @@ LANGUAGE_ALIASES = {
     "chinese": LANGUAGE_ZH_CN,
 }
 HARDWARE_BACKENDS = {"auto", "cpu", "qsv", "vaapi", "nvenc", "amf"}
+ONLINE_MODES = {"fast", "stable"}
 ACTIVE_RECORDING_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
 AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT = 10.0
 AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT = 5.0
@@ -50,6 +51,7 @@ def _default_system_settings() -> SystemSettings:
         language=LANGUAGE_RU,
         storage_path=settings.storage_root,
         recording_format="mkv",
+        online_mode="stable",
         auto_free_space_cleanup_enabled=False,
         recording_suspended_by_low_disk=False,
     )
@@ -83,6 +85,7 @@ def serialize_settings(row: SystemSettings) -> dict:
         "storage_contract": contract,
         **contract,
         "recording_format": row.recording_format,
+        "online_mode": getattr(row, "online_mode", None) or "stable",
         "recording_format_apply_mode": getattr(row, "recording_format_apply_mode", None),
         "recording_format_requested_at": getattr(row, "recording_format_requested_at", None),
         "recording_profile": format_contract["recording_profile"],
@@ -161,6 +164,12 @@ def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
         if recording_format not in RECORDING_FORMATS:
             raise ValueError("recording_format must be mkv or mp4")
         data["recording_format"] = recording_format
+
+    if "online_mode" in payload:
+        online_mode = payload.get("online_mode")
+        if online_mode not in ONLINE_MODES:
+            raise ValueError("online_mode must be fast or stable")
+        data["online_mode"] = online_mode
 
     if "hardware_preferred_backend" in payload:
         value = payload.get("hardware_preferred_backend")

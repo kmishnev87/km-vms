@@ -556,6 +556,9 @@
 }
 
 .liveWorkspaceTileTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -563,6 +566,9 @@
   font-size: 13px;
   font-weight: 800;
 }
+
+.liveWorkspaceCameraName { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.liveHlsFallback { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 400; color: #cbd5e1; }
 
 .liveWorkspaceTileSelect {
   position: relative;

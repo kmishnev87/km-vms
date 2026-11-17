@@ -1,0 +1,9 @@
+<resources>
+    <string name="online_mode">Live mode</string>
+    <string name="online_mode_fast">Fast</string>
+    <string name="online_mode_stable">Stable</string>
+    <string name="online_mode_fast_summary">Lower delay; more sensitive to connection interruptions.</string>
+    <string name="online_mode_stable_summary">More delay; more resilient to connection interruptions.</string>
+    <string name="online_mode_help">Fast: lower video delay and usually faster startup; more sensitive to connection interruptions. Incompatible streams use HLS with an explanation.\n\nStable: more buffering and a longer delay; opening PTZ controls still enables the fast route. Shared by the web and Android clients of this NAS; recording is unchanged.</string>
+    <string name="live_hls_fallback">HLS enabled due\nto incompatibility</string>
+</resources>

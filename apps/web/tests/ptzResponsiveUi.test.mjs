@@ -36,7 +36,9 @@ test("only the selected PTZ camera changes transport and ordinary HLS remains un
   assert.match(live,/lowLatency=\{ptzCameraId === camera.id\}/);
   assert.match(live,/speed=\{ptzPreferences\[camera.id\]\?\.speed\}/);
   assert.match(player,/liveSyncDurationCount: 2/);
-  assert.match(player,/\[cameraId, stream, lowLatency\]/);
+  assert.match(player,/\[cameraId, stream, ptzTransportRevision\]/);
+  assert.match(player,/nasModeRef.current !== "fast"/);
+  assert.match(player,/wantsFastOnline\(selectedMode, ptzIntentRef.current\)/);
   assert.match(player,/mseRef.current\?\.destroy\(\)/);
   assert.match(player,/data-live-transport=\{transport\}/);
 });

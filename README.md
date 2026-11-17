@@ -38,6 +38,10 @@ The browser provides a spacious surveillance workspace; Android provides touch-o
 
 Supported PTZ controls appear after normal camera setup. Move the camera, adjust zoom and speed, or select a saved position without leaving the live view. During control, a compatible stream uses the low-latency video path so the picture can follow your actions more closely.
 
+### Choose the live-view experience for your connection
+
+Use **Fast** for lower-latency multi-camera viewing, or **Stable** for a larger video buffer when the connection is uneven. One NAS-wide choice serves both the browser and Android app. An incompatible stream falls back individually to HLS with a clear explanation; it does not force every camera back to the slower path or change your recording settings.
+
 ### Storage management belongs inside the VMS
 
 Configure retention and archive limits, inspect usage by camera, check integrity, and resolve findings individually or in batches. System Health distinguishes current recording problems from findings about older files.
@@ -52,11 +56,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.9.28](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.28)**, run in the server terminal:
+For a **new installation** of published KM VMS **[0.9.29](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.29)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.28/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.9.28
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.9.29/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v0.9.29
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -95,6 +99,13 @@ Camera controls are grounded in what the device reports. Supported settings can 
 - Open individual fullscreen views with main/sub selection and audio controls.
 - Double-click a camera preview to open its own frame-fitted live view without replacing your saved workspace.
 - Recover viewing after temporary connection interruptions.
+
+Select **Live mode** immediately after the recording format in web Settings or Android **NAS settings**:
+
+- **Fast:** continuous **WebSocket/fMP4** delivery for live cameras and main/sub streams, including fullscreen. It avoids waiting for HLS video segments, reducing video delay and usually shortening startup; it is more sensitive to connection interruptions.
+- **Stable — the default:** the existing buffered **HLS** route for ordinary viewing, with the low-latency route enabled for the camera whose PTZ controls are open.
+
+Owners and administrators change this shared NAS setting; all viewers use it. Confirmed client/stream incompatibility enables HLS only for the affected stream, with an explanation beside its camera name. A temporary network error is not mislabeled as incompatibility. Recording, archive playback and synchronized chronology are independent of this choice.
 
 ### Capability-based PTZ
 
@@ -190,7 +201,7 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - A live camera feed list, fullscreen viewing, main/sub selection, audio, and pinch/pan image gestures.
 - Tap a camera-card preview to watch only that camera. Rotation and fullscreen keep the single-camera session until you leave Live.
 - Choose a subset of live cameras in a compact, dismissible panel. Selection numbers and drag-to-reorder control the viewing order; each saved NAS/account connection keeps its normal set independently of temporary single-camera viewing.
-- Supported PTZ with low-latency viewing during control.
+- Fast/Stable live mode shared with the browser, editable in **NAS settings** under the same server-enforced permissions; supported PTZ still uses low-latency viewing during control.
 - Recordings, clips, synchronized chronology, camera management, events, storage, server health, and NAS maintenance.
 - Select timeline cameras in the order you need, then drag to reorder them; retained archives of deleted cameras remain available for manual selection.
 - Access camera presets in fullscreen PTZ control. Swipe recordings to reveal deletion; confirm removal individually or for the selected group.

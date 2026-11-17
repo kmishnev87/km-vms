@@ -9,9 +9,35 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import ru.kmvms.mobile.R
 import android.widget.TextView
+import android.content.res.Configuration
+import android.view.LayoutInflater
+import java.util.Locale
 
 @RunWith(AndroidJUnit4::class)
 class AlertWidgetLayoutTest {
+    @Test fun fullTitleFitsBothMinimumWidthsAndLargerSystemFontsInAllLanguages() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val base = instrumentation.targetContext
+            for (language in listOf("ru", "en", "zh-CN")) for (scale in listOf(1f, 1.3f, 1.6f)) {
+                val context = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
+                    setLocale(Locale.forLanguageTag(language)); fontScale = scale
+                })
+                val density = context.resources.displayMetrics.density
+                for ((layout, width) in listOf(R.layout.alert_widget to 110, R.layout.alert_widget_count to 180)) {
+                    val root = LayoutInflater.from(context).inflate(layout, null)
+                    root.measure(View.MeasureSpec.makeMeasureSpec((width * density).toInt(), View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec((100 * density).toInt(), View.MeasureSpec.EXACTLY))
+                    root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+                    val title = root.findViewById<TextView>(R.id.alert_widget_title)
+                    val detail = "$language scale=$scale width=$width title=${title.text}"
+                    assertEquals(detail, context.getString(R.string.widget_alerts), title.text.toString())
+                    assertTrue(detail, title.paint.measureText(title.text.toString()) <= title.width - title.paddingLeft - title.paddingRight + .5f)
+                    assertEquals(detail, 0, title.layout.getEllipsisCount(0))
+                }
+            }
+        }
+    }
     @Test fun largeLauncherCellDoesNotStretchTheVisibleWidgetCard() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {

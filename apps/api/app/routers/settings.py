@@ -129,6 +129,7 @@ class SettingsUpdateRequest(BaseModel):
     language: str | None = None
     storage_path: str | None = None
     recording_format: str | None = None
+    online_mode: Literal["fast", "stable"] | None = None
     recording_format_apply_mode: Literal["after_segment", "immediate"] | None = None
     expected_recording_format: Literal["mkv", "mp4"] | None = None
     hardware_preferred_backend: str | None = None
@@ -827,6 +828,8 @@ def patch_settings(
         ("timezone", "settings.timezone_changed", "Часовой пояс", "timezone"),
         ("hardware_preferred_backend", "settings.hardware_backend_changed", "Аппаратное ускорение", "hardware backend"),
         ("recording_format", "settings.recording_format_changed", "Формат записи", "recording format"),
+        ("online_mode", "settings.online_mode_changed", "Режим онлайн", "live mode"),
+        ("online_mode", "settings.online_mode_changed", "Режим онлайн", "live viewing mode"),
     ]
     changed = {}
     for key, event_type, label_ru, label_en in setting_events:

@@ -112,7 +112,9 @@ export function createLiveMsePlayer({ video, cameraId, stream, requestToken, isC
         healthySince ||= Date.now();
         onPlaying();
       });
-      listen(video, "error", () => { if (alive(own)) fail("mse_video_failed"); });
+      listen(video, "error", () => {
+        if (alive(own)) fail([3, 4].includes(video.error?.code) ? "mse_decode_unsupported" : "mse_video_failed", [3, 4].includes(video.error?.code));
+      });
       video.src = objectUrl;
       const endpoint = new URL(`/api/live/${encodeURIComponent(cameraId)}/${encodeURIComponent(stream)}/mse`, location.href);
       endpoint.protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -126,7 +128,8 @@ export function createLiveMsePlayer({ video, cameraId, stream, requestToken, isC
           try { message = JSON.parse(event.data); } catch (_) { fail("mse_invalid_data", true); return; }
           if (message.type === "error") {
             const denied = message.code === "mse_access_denied";
-            fail(denied ? message.code : "mse_stream_failed", denied, denied ? 403 : null);
+            const incompatible = message.code === "mse_codec_unsupported";
+            fail(denied || incompatible ? message.code : "mse_stream_failed", denied || incompatible, denied ? 403 : null);
           } else if (message.type === "init" && typeof message.mime === "string" && message.mime.length < 256) {
             mime = message.mime;
             onAudio(message);

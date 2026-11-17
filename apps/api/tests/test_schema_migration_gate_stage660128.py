@@ -65,10 +65,10 @@ def test_current_schema_accepts_only_verified_exact_shapes(
     assert control.target_shape_is_exact(object()) == (False, unknown)
 
 
-def test_schema_v11_exact_fingerprints_match_validated_postgres_paths() -> None:
+def test_schema_v12_exact_fingerprints_match_validated_postgres_paths() -> None:
     assert control.TARGET_SHAPE_FINGERPRINTS == {
-        "7ded3cceb1ba021580147717e3a32be9ddef3ccbd4280ff5049056f7a8fb7e3e",
-        "1e0f3f7ea11c642132459faa5958faaa67397dbcfc3b46c5402f046864e379e3",
+        "66a3fc267ca22a706a4bd5552fe9f7435be7236d3b09a035d93a57a466701a8a",
+        "f2dc9e082535f5bf5115c4987eea83d43b3eef602c6a4ac6bb26660ea76d5917",
     }
 
 

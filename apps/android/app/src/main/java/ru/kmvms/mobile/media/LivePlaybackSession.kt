@@ -26,6 +26,9 @@ import kotlinx.coroutines.flow.update
 import ru.kmvms.mobile.core.CameraPlayback
 import ru.kmvms.mobile.BuildConfig
 import ru.kmvms.mobile.core.LiveTransport
+import ru.kmvms.mobile.core.OnlineMode
+import ru.kmvms.mobile.core.Stream
+import ru.kmvms.mobile.core.onlineTransport
 import ru.kmvms.mobile.core.lowLatencyPlaybackRate
 import ru.kmvms.mobile.data.ApiProblem
 import ru.kmvms.mobile.data.NasApi
@@ -34,7 +37,7 @@ import ru.kmvms.mobile.diagnostics.*
 
 enum class VideoStatus { CONNECTING, BUFFERING, PLAYING, RECONNECTING, FAILED }
 data class VideoState(val status: VideoStatus = VideoStatus.CONNECTING, val audio: Boolean? = null, val accessDenied: Boolean = false,
-                      val unsupportedCodec: Boolean = false)
+                      val unsupportedCodec: Boolean = false, val hlsFallback: Boolean = false)
 
 /** One owner, even while moving between feed, portrait detail and fullscreen. */
 @UnstableApi
@@ -48,6 +51,9 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
     private var task: Job? = null
     private var released = false
     private var codecFailure = false
+    private var usingSocket = false
+    private var onlineMode = OnlineMode.STABLE
+    private val incompatibleStreams = mutableSetOf<Stream>()
     val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext)
         // A ceiling is not a target latency. A 500ms ceiling stalls progressive
         // MP4 extraction while the socket is still producing interdependent data.
@@ -72,7 +78,14 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
                     AppDiagnostics.record(DiagnosticCode.LIVE_FAILED, DiagnosticArea.LIVE, camera = selection.cameraId, number = error.errorCode)
                     val http = generateSequence(error.cause) { it.cause }.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.responseCode
                     codecFailure = error.errorCode in setOf(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
-                            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES)
+                            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES, PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED) ||
+                        (usingSocket && error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED) ||
+                        generateSequence(error.cause) { it.cause }.any { it is LiveTransportIncompatibleException }
+                    if (usingSocket && codecFailure && http !in setOf(401, 403, 404)) {
+                        incompatibleStreams.add(selection.stream)
+                        codecFailure = false
+                        mutable.update { it.copy(status = VideoStatus.CONNECTING, hlsFallback = true, unsupportedCodec = false) }
+                    }
                     if (codecFailure) mutable.update { it.copy(status = VideoStatus.FAILED, unsupportedCodec = true) }
                     debug("player=${error.errorCodeName} http=$http"); reconnect.trySend(Unit)
                 }
@@ -83,9 +96,12 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
     fun configure(value: CameraPlayback) {
         if (released) return
         require(value.cameraId == selection.cameraId)
-        val changed = value.stream != selection.stream || value.transport != selection.transport
+        val changed = value.stream != selection.stream ||
+            onlineTransport(onlineMode, value.ptz, value.stream in incompatibleStreams) !=
+            onlineTransport(onlineMode, selection.ptz, selection.stream in incompatibleStreams)
         selection = value; player.volume = if (value.sound) 1f else 0f
         if (changed) { player.stop(); start() }
+        else mutable.update { it.copy(hlsFallback = (onlineMode == OnlineMode.FAST || value.ptz) && value.stream in incompatibleStreams) }
     }
     fun retry() { if (!released) start() }
     private fun start() {
@@ -98,10 +114,14 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
                 var viewer: String? = null
                 try {
                     while (reconnect.tryReceive().isSuccess) { }
-                    mutable.value = VideoState(if (attempt == 0) VideoStatus.CONNECTING else VideoStatus.RECONNECTING)
+                    mutable.value = VideoState(if (attempt == 0) VideoStatus.CONNECTING else VideoStatus.RECONNECTING,
+                        hlsFallback = own.stream in incompatibleStreams && mutable.value.hlsFallback)
                     debug("authorizing")
                     val lease = endpoint.authorize(own.cameraId, own.stream)
-                    val lowLatency = own.transport == LiveTransport.WEBSOCKET_FMP4
+                    onlineMode = lease.onlineMode
+                    val lowLatency = onlineTransport(lease.onlineMode, own.ptz, own.stream in incompatibleStreams) == LiveTransport.WEBSOCKET_FMP4
+                    usingSocket = lowLatency
+                    mutable.update { it.copy(hlsFallback = !lowLatency && (lease.onlineMode == OnlineMode.FAST || own.ptz) && own.stream in incompatibleStreams) }
                     if (!lowLatency) {
                         debug("opening-viewer"); viewer = endpoint.open(own.cameraId, own.stream)
                         debug("awaiting-source"); endpoint.awaitReady(own.cameraId, own.stream, viewer)
@@ -117,7 +137,7 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
                         .setContinueLoadingCheckIntervalBytes(32 * 1024)
                         .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(0)).createMediaSource(item)
                     else HlsMediaSource.Factory(InstallationDataSource.Factory(api)).createMediaSource(item)
-                    debug("preparing-${own.transport}")
+                    debug("preparing-${if (lowLatency) LiveTransport.WEBSOCKET_FMP4 else LiveTransport.HLS}")
                     player.setPlaybackSpeed(1f)
                     player.setMediaSource(source); player.prepare(); player.play()
                     coroutineScope {
@@ -137,8 +157,15 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
                             while (isActive) {
                                 delay(current.renewAfterMillis)
                                 // A healthy player is not reset when its five-minute authority is renewed.
+                                val previousMode = current.onlineMode
                                 current = renew(own, current)
                                 debug("authority-renewed")
+                                onlineMode = current.onlineMode
+                                val nextTransport = onlineTransport(current.onlineMode, selection.ptz, own.stream in incompatibleStreams)
+                                mutable.update { it.copy(hlsFallback = nextTransport == LiveTransport.HLS &&
+                                    (current.onlineMode == OnlineMode.FAST || selection.ptz) && own.stream in incompatibleStreams) }
+                                if ((nextTransport == LiveTransport.WEBSOCKET_FMP4) != lowLatency) reconnect.trySend(Unit)
+                                if (previousMode != current.onlineMode) { reconnect.trySend(Unit); return@launch }
                                 if (socketFactory != null && !socketFactory.refresh(current.token)) reconnect.trySend(Unit)
                             }
                         }

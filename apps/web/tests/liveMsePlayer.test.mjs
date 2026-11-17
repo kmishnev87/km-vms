@@ -89,3 +89,13 @@ test("destroy cancels reconnection and late work cannot reopen a source",async()
   h.player.destroy();await old();await settle();
   assert.equal(h.sockets.length,1);assert.equal(h.timers.size,0);assert.equal(h.failures.length,0);
 });
+test("a server-confirmed codec mismatch keeps its compatibility reason",async()=>{
+  const h=harness();await h.player.start();await settle();h.sockets[0].open();
+  h.sockets[0].message(JSON.stringify({type:"error",code:"mse_codec_unsupported"}));
+  assert.equal(h.failures.length,1);assert.equal(h.failures[0].code,"mse_codec_unsupported");assert.equal(h.timers.size,0);
+});
+test("a browser decoder rejection is incompatible, not a network interruption",async()=>{
+  const h=harness();await h.player.start();await settle();h.sockets[0].open();
+  h.video.error={code:3};h.video.dispatchEvent(new Event("error"));
+  assert.equal(h.failures[0].code,"mse_decode_unsupported");assert.equal(h.timers.size,0);
+});

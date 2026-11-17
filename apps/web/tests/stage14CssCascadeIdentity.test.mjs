@@ -13,8 +13,9 @@ const baseline = {
   // the right edge (Screenshot_27). Management stays full width.
   // Stylesheet identity and import order remain enforced.
   "40-storage-records-shared.css": "11ca83ba9ea3d59ee00ec05cf9d6632b3aead76733eb6a60d14c655604ebf007",
-  // Existing published Settings layout: no Settings styles changed in 0.9.26.
-  "20-settings-maintenance.css": "9f5a510c7e61bc71dd11199ba384af0a9123b503f6dcdfce66a96f3b72b6fabc"
+  // Owner-requested online-mode help: preserve paragraph breaks in this
+  // tooltip only. Existing row dimensions, other tips and import order stay.
+  "20-settings-maintenance.css": "e9f61a2e6d18c4a98e70741d47cc96ac2cfe658a144c6184fef795b43de87587"
 };
 for (const [logical, files] of Object.entries(CSS_OWNERS)) {
   test(`CSS: ${logical} matches its approved baseline and preserves import order`, () => {

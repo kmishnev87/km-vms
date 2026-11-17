@@ -83,7 +83,8 @@ import ru.kmvms.mobile.core.gmtTimezoneLabel
                     val formats=listOf("mkv" to "MKV","mp4" to "MP4")
                     val labels=(backends+value.backend).distinct().map{it to when(it){"auto"->stringResource(R.string.automatic);"cpu"->stringResource(R.string.cpu_only);else->it.uppercase()}}
                     SettingsFields(first={LabeledChoice(stringResource(R.string.recording_format),value.format.uppercase(),formats,!loading&&!saving,"nas-recording-format"){edited=value.copy(format=it)}},
-                        second={LabeledChoice(stringResource(R.string.hardware_acceleration),labels.find{it.first==value.backend}?.second.orEmpty(),labels,!loading&&!saving,"nas-hardware"){edited=value.copy(backend=it)}})
+                        second={OnlineModeChoice(value.onlineMode,!loading&&!saving&&actor.role in setOf("owner","admin")){edited=value.copy(onlineMode=it)}})
+                    LabeledChoice(stringResource(R.string.hardware_acceleration),labels.find{it.first==value.backend}?.second.orEmpty(),labels,!loading&&!saving,"nas-hardware"){edited=value.copy(backend=it)}
                     Text(stringResource(R.string.format_next_segment),color=Muted,style=MaterialTheme.typography.bodySmall)
                 }
                 Panel{

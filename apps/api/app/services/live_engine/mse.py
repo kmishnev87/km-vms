@@ -109,10 +109,10 @@ class MseStream:
                     fragment = b""
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # Device diagnostics/credentials/FFmpeg command lines never cross
             # the media boundary. Ordinary HLS remains the user's fallback.
-            self.failure = "mse_stream_failed"
+            self.failure = "mse_codec_unsupported" if isinstance(exc, ValueError) and str(exc) == "mse_codec_unsupported" else "mse_stream_failed"
             for peer in tuple(self.peers):
                 peer.fail(self.failure)
         finally:

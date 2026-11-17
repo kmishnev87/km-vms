@@ -1,0 +1,9 @@
+<resources>
+    <string name="online_mode">实时模式</string>
+    <string name="online_mode_fast">快速</string>
+    <string name="online_mode_stable">稳定</string>
+    <string name="online_mode_fast_summary">延迟较低，但对网络中断更敏感。</string>
+    <string name="online_mode_stable_summary">延迟较长，但更能应对网络中断。</string>
+    <string name="online_mode_help">快速：视频延迟较低，通常启动更快，但对网络中断更敏感。不兼容的视频流会切换到 HLS 并显示说明。\n\n稳定：缓冲更多、延迟较长；打开 PTZ 控制仍会启用快速传输。此设置由本 NAS 的网页和 Android 客户端共用，不影响录像。</string>
+    <string name="live_hls_fallback">已启用 HLS\n由于视频流不兼容</string>
+</resources>

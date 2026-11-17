@@ -9,6 +9,7 @@ import useSettingsUsersController from "../../lib/useSettingsUsersController";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import { OperationDialog, OperationToast, OperationRefreshButton, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import RecordingFormatChangeStatus from "../../components/RecordingFormatChangeStatus";
+import { onlineModeCopy } from "../../lib/onlineMode";
 import SupportReportForm from "../../components/SupportReportForm";
 import { recordingFormatCopy, recordingFormatError, recordingFormatNotice, recordingFormatNotificationKey, shouldWatchRecordingFormat } from "../../lib/recordingFormatChange";
 import {
@@ -2113,12 +2114,12 @@ function normalizedError(err, lang, context = "generic") {
   return { variant: "error", title: t.toasts.networkTitle, text: humanErrorText(message, t.toasts.networkText) };
 }
 
-function InfoTip({ text }) {
+function InfoTip({ text, paragraphs = false }) {
   if (!text) return null;
   return (
     <span className="settingsInfoTip" tabIndex="0" aria-label={text}>
       i
-      <span className="settingsInfoBubble" role="tooltip">{text}</span>
+      <span className={`settingsInfoBubble${paragraphs ? " settingsInfoBubbleParagraphs" : ""}`} role="tooltip">{text}</span>
     </span>
   );
 }
@@ -2150,6 +2151,7 @@ export default function SettingsPage() {
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
   const anyBusy = saving || hardwareChecking || Boolean(formatChoice);
   const formatCopy = recordingFormatCopy(lang);
+  const onlineCopy = onlineModeCopy(lang);
   const canManageMaintenance = Boolean(currentUser?.permissions?.includes("manage_settings"));
   const { users, setUsers, usersLoading, setUsersLoading, userBusy, setUserBusy, usersModalOpen, setUsersModalOpen, userModal, setUserModal, userDeleteTarget, setUserDeleteTarget, loadUsers, canManageUsers, sortedUsers, openUsersModal, openCreateUser, openEditUser, patchUserModal, rejectUserPassword, submitUserModal, toggleUserActive, requestDeleteUser, deleteUser } = useSettingsUsersController({
     currentUser, lang, t, showToast, normalizedError, router,
@@ -2503,6 +2505,21 @@ export default function SettingsPage() {
                     <select id="settings-recording" className="select settingsSelect" value={draft.recordingProfile} onChange={(event) => patch("recordingProfile", event.target.value)} disabled={saving}>
                       <option value="reliability">{t.reliability}</option>
                       <option value="compatibility">{t.compatibility}</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="settingsRow settingsRowCompactSelect" data-settings-online-mode="true">
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/live.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-online-mode">{onlineCopy.title}<InfoTip text={onlineCopy.help} paragraphs /></label>
+                    <span>{draft.online_mode === "fast" ? onlineCopy.fastSummary : onlineCopy.stableSummary}</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select id="settings-online-mode" className="select settingsSelect" value={draft.online_mode}
+                      onChange={(event) => patch("online_mode", event.target.value)} disabled={saving || !canManageMaintenance}>
+                      <option value="fast">{onlineCopy.fast}</option>
+                      <option value="stable">{onlineCopy.stable}</option>
                     </select>
                   </div>
                 </div>
