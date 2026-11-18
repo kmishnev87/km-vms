@@ -89,8 +89,10 @@ import kotlin.math.roundToInt
                     PlayerGlyph(PlayerGlyph.PTZ, if (playback?.ptz == true) Color(0xFF60A5FA) else Color.White, stringResource(R.string.ptz_controls))
                 }
                 if (talk != null) CallButton(talk)
-                IconButton(onClick = { controller.sound(camera.id) }, modifier = Modifier.testTag("live-sound")) {
-                    SpeakerIcon(playback?.sound == true, tint = Color.White)
+                IconButton(onClick = { controller.sound(camera.id) }, enabled = playback?.talkDuck != true,
+                    modifier = Modifier.testTag("live-sound")) {
+                    SpeakerIcon(playback?.audible == true,
+                        tint = if (playback?.talkDuck == true) Color(0xFF94A3B8) else Color.White)
                 }
                 TextButton(onClick = { handle?.stop(); controller.selectStream(camera.id,
                     if (playback?.stream == Stream.MAIN && camera.hasSub) Stream.SUB else Stream.MAIN) },

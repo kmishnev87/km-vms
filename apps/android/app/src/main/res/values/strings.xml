@@ -444,8 +444,8 @@
     <string name="widget_no_servers">Add a NAS connection in the app first.</string>
     <string name="camera_call">Call camera</string>
     <string name="call_password">Tapo account password</string>
-    <string name="call_password_help">This camera uses a separate local talk protocol. Enter the password of your Tapo account, not the camera RTSP account. It is stored encrypted only on your NAS, not on this phone.</string>
-    <string name="call_save_connect">Save and call</string>
+    <string name="call_password_help">Enter the TP-Link ID password used to sign in to Tapo. The RTSP/ONVIF camera account is a separate setting. The password stays encrypted on your NAS.</string>
+    <string name="call_save_connect">Verify and call</string>
     <string name="call_mute">Mute microphone</string>
     <string name="call_unmute">Enable microphone</string>
     <string name="call_mic_on">Microphone on</string>
@@ -454,7 +454,8 @@
     <string name="call_connecting">Connecting…</string>
     <string name="call_end">End call</string>
     <string name="call_busy">Camera speaker is busy. Try again shortly.</string>
-    <string name="call_bad_password">Check the Tapo account password and try again.</string>
+    <string name="call_bad_password">The camera rejected sign-in. Check the Tapo ID password and Tapo → Me → Third-Party Services → Third-Party Compatibility.</string>
+    <string name="call_password_save_failed">Could not verify and save the password. Check the NAS and camera connection, then retry.</string>
     <string name="call_camera_auth">Check the camera connection credentials.</string>
     <string name="call_unsupported">No compatible camera talk channel was found.</string>
     <string name="call_permission">Microphone is unavailable. Allow microphone access in Android settings.</string>

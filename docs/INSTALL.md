@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[0.10.0](https://github.com/kmishnev87/km-vms/releases/tag/v0.10.0)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[1.0.1](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.1)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.10.0/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.10.0
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.1/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.1
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v0.10.0 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v1.0.1 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v0.10.0 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v1.0.1 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -144,11 +144,15 @@ Open one camera in Android Live and use the handset control. Only owners and adm
 
 The initial standard adapter supports mono 8 kHz G.711 A-law/µ-law. A speaker/microphone or ONVIF support alone does not guarantee a compatible backchannel. An unsupported device shows a reason rather than silently reporting a connected call. If Tapo requests its separate account password for local call authentication, it is encrypted on the NAS, not saved on the phone. It may differ from the camera account used for RTSP/ONVIF.
 
+For Tapo, enter the password of the **TP-Link ID used to sign in to the Tapo app**. On firmware that restricts third-party access, check **Tapo → Me → Third-Party Services → Third-Party Compatibility**. This permission is separate from enabling the RTSP/ONVIF camera account. Enable it only if you want third-party applications to access the device; TP-Link notes that this can reduce its default security protections. A camera's sign-in rejection can mean either incorrect credentials or denied third-party access.
+
 Calls temporarily use the low-latency video path and preserve the saved sound/PTZ choices. Backgrounding the app, leaving the camera, ending a call or losing the connection stops microphone capture; there is no background microphone service. One call per physical camera host and a bounded call duration prevent an abandoned session from holding the speaker indefinitely. Audio is relayed in memory, not recorded as a call file. Physical acoustic quality needs testing with the actual phone and camera. Browser microphone calling and special HTTPS setup are outside this release.
 
 ## Native Android client
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.12.apk** from the [0.9.29 release](https://github.com/kmishnev87/km-vms/releases/tag/v0.9.29). The NAS release includes its matching APK information; no separate web release check is required.
+KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up. The standard adapter continues to use hold-to-speak.
+
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.14.apk** from the [1.0.1 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.1). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.

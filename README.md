@@ -56,11 +56,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[0.10.0](https://github.com/kmishnev87/km-vms/releases/tag/v0.10.0)**, run in the server terminal:
+For a **new installation** of published KM VMS **[1.0.1](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.1)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v0.10.0/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v0.10.0
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.1/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.1
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -124,7 +124,10 @@ From an individual live view in Android, an owner or administrator can start a *
 - Hold to speak through the standard backchannel adapter; compatible Tapo sessions provide a full-duplex path with a microphone mute control.
 - Use low-latency video while the call is active, preserving the existing PTZ and sound preferences afterward.
 - Grant Android microphone permission explicitly. Leaving the camera, backgrounding the app, hanging up or losing the connection stops capture; calls do not keep a microphone service running in the background.
-- If Tapo requires a separate account password for local talk authentication, save it encrypted on the NAS rather than on the phone. Audio is forwarded in memory, not saved as a call recording.
+- Listen automatically when a call starts, mute listening when needed, and return to the previous listening preference on hang-up. Hold-to-speak temporarily silences incoming audio to reduce feedback.
+- If Tapo requires a separate account password for local talk authentication, KM VMS verifies it before saving it encrypted on the NAS rather than on the phone. A rejected sign-in allows another attempt. Audio is forwarded in memory, not saved as a call recording.
+
+For the Tapo local adapter, use the **TP-Link ID password used to sign in to Tapo**, not the separate RTSP/ONVIF camera account. Some firmware also requires **Tapo → Me → Third-Party Services → Third-Party Compatibility** to be enabled. A rejected sign-in does not by itself prove the password is wrong; camera access policy can also block it.
 
 Two-way audio is device- and firmware-dependent: a camera microphone, speaker or ONVIF logo alone does not guarantee a compatible return-audio path. The initial standard adapter supports mono 8 kHz G.711 A-law/µ-law. Physical speaker/microphone performance and echo handling need validation on the actual camera and phone. **Browser microphone calling is not included in this release.**
 

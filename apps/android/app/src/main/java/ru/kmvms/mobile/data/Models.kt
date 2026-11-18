@@ -41,4 +41,4 @@ class SavedSignIn(val password: String, val access: String) {
     override fun toString() = "SavedSignIn([redacted])"
 }
 enum class ApiProblem { ADDRESS, AUTHENTICATION, FORBIDDEN, RATE_LIMIT, CONNECTION, SERVER, SAVED_SIGN_IN }
-class NasException(val problem: ApiProblem, val httpStatus: Int? = null) : Exception(problem.name)
+class NasException(val problem: ApiProblem, val httpStatus: Int? = null, val publicReason: String? = null) : Exception(problem.name)

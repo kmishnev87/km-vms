@@ -444,8 +444,8 @@
     <string name="widget_no_servers">请先在应用中添加 NAS 连接。</string>
     <string name="camera_call">摄像机通话</string>
     <string name="call_password">Tapo 账户密码</string>
-    <string name="call_password_help">此摄像机使用独立的本地通话协议。请输入 Tapo 账户密码，而非摄像机连接密码。密码仅加密保存在 NAS 上。</string>
-    <string name="call_save_connect">保存并通话</string>
+    <string name="call_password_help">请输入登录 Tapo 的 TP-Link ID 密码。RTSP/ONVIF 摄像机账户是另一项设置。密码仅加密保存在 NAS 上。</string>
+    <string name="call_save_connect">验证并通话</string>
     <string name="call_mute">关闭麦克风</string>
     <string name="call_unmute">打开麦克风</string>
     <string name="call_mic_on">麦克风已开启</string>
@@ -454,7 +454,8 @@
     <string name="call_connecting">正在连接…</string>
     <string name="call_end">结束通话</string>
     <string name="call_busy">摄像机扬声器正忙，请稍后重试。</string>
-    <string name="call_bad_password">请检查 Tapo 账户密码并重试。</string>
+    <string name="call_bad_password">摄像机拒绝了登录。请检查 Tapo ID 密码，以及 Tapo → 我的 → 第三方服务 → 第三方兼容性。</string>
+    <string name="call_password_save_failed">无法验证并保存密码。请检查 NAS 和摄像机连接后重试。</string>
     <string name="call_camera_auth">请检查摄像机连接凭据。</string>
     <string name="call_unsupported">未找到兼容的摄像机通话通道。</string>
     <string name="call_permission">麦克风不可用。请在 Android 设置中允许麦克风访问。</string>

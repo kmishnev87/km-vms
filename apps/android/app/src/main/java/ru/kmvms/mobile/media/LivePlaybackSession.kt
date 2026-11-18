@@ -61,7 +61,7 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
             .setPrioritizeTimeOverSizeThresholds(true).setBackBuffer(0, false).build())
         .build().apply {
             playWhenReady = true
-            volume = if ((selection.sound || selection.talk) && !selection.talkDuck) 1f else 0f
+            volume = if (selection.audible) 1f else 0f
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_BUFFERING) mutable.update { it.copy(status = VideoStatus.BUFFERING) }
@@ -99,7 +99,7 @@ class LivePlaybackSession(context: Context, private val api: NasApi, initial: Ca
         val changed = value.stream != selection.stream ||
             onlineTransport(onlineMode, value.lowLatency, value.stream in incompatibleStreams) !=
             onlineTransport(onlineMode, selection.lowLatency, selection.stream in incompatibleStreams)
-        selection = value; player.volume = if ((value.sound || value.talk) && !value.talkDuck) 1f else 0f
+        selection = value; player.volume = if (value.audible) 1f else 0f
         if (changed) { player.stop(); start() }
         else mutable.update { it.copy(hlsFallback = (onlineMode == OnlineMode.FAST || value.lowLatency) && value.stream in incompatibleStreams) }
     }

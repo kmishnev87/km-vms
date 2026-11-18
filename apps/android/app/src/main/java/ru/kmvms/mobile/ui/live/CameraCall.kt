@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -54,6 +56,13 @@ import ru.kmvms.mobile.talk.TalkController
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) talk.start() else denied = true
     }
+    LaunchedEffect(state.phase, state.reason) {
+        if (capability.credentials && state.phase == CallPhase.FAILED &&
+            state.reason in setOf("talk_authentication_failed", "talk_access_denied", "talk_credentials_required")) {
+            talk.editCredential()
+            credentials = true
+        }
+    }
     fun connect() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) talk.start()
         else launcher.launch(Manifest.permission.RECORD_AUDIO)
@@ -62,7 +71,9 @@ import ru.kmvms.mobile.talk.TalkController
         when {
             state.phase in setOf(CallPhase.CONNECTING, CallPhase.ACTIVE) -> talk.end()
             !capability.available -> information = true
-            capability.credentials && (!capability.saved || state.reason == "talk_authentication_failed") -> credentials = true
+            capability.credentials && (!capability.saved || state.reason in setOf("talk_authentication_failed", "talk_access_denied", "talk_credentials_required")) -> {
+                talk.editCredential(); credentials = true
+            }
             else -> connect()
         }
     }, enabled = capability.status != "loading", modifier = modifier.testTag("live-call")) {
@@ -74,17 +85,22 @@ import ru.kmvms.mobile.talk.TalkController
     }
     if (credentials) {
         var secret by remember { mutableStateOf("") }
-        var saving by remember { mutableStateOf(false) }
-        LaunchedEffect(state.phase) { if (state.phase == CallPhase.FAILED) saving = false }
+        val credential by talk.credential.collectAsStateWithLifecycle()
+        val saving = credential.saving
+        val failure = credential.reason.ifBlank { if (state.phase == CallPhase.FAILED) state.reason else "" }
         AlertDialog(onDismissRequest = { if (!saving) { secret = ""; credentials = false } },
             title = { Text(stringResource(R.string.call_password)) },
-            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.call_password_help))
                 OutlinedTextField(secret, { secret = it }, label = { Text(stringResource(R.string.call_password)) },
-                    singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("call-password"))
+                    enabled = !saving, isError = failure.isNotBlank(), singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("call-password"))
+                if (failure.isNotBlank()) Text(stringResource(callReason(failure)), color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("call-password-error"))
+                if (saving) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("call-password-checking"))
             } },
-            confirmButton = { TextButton(onClick = { saving = true; talk.saveCredential(secret) { secret = ""; credentials = false; connect() } },
-                enabled = secret.isNotBlank() && !saving) { Text(stringResource(R.string.call_save_connect)) } },
+            confirmButton = { TextButton(onClick = { talk.saveCredential(secret) { secret = ""; credentials = false; connect() } },
+                modifier = Modifier.testTag("call-password-connect"), enabled = secret.isNotBlank() && !saving) { Text(stringResource(R.string.call_save_connect)) } },
             dismissButton = { TextButton(onClick = { secret = ""; credentials = false }, enabled = !saving) { Text(stringResource(R.string.cancel)) } })
     }
     if (information || denied) AlertDialog(onDismissRequest = { information = false; denied = false },
@@ -133,7 +149,8 @@ import ru.kmvms.mobile.talk.TalkController
 
 private fun callReason(reason: String): Int = when (reason) {
     "camera_busy", "server_busy", "discovery_busy" -> R.string.call_busy
-    "talk_credentials_required", "talk_authentication_failed", "credential_save_failed" -> R.string.call_bad_password
+    "talk_credentials_required", "talk_authentication_failed", "talk_access_denied" -> R.string.call_bad_password
+    "credential_save_failed" -> R.string.call_password_save_failed
     "camera_authentication_failed" -> R.string.call_camera_auth
     "backchannel_unsupported", "codec_unsupported", "transport_unsupported" -> R.string.call_unsupported
     "microphone_failed" -> R.string.call_permission

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.10.0",
-  "tag": "v0.10.0",
-  "title": "KM VMS 0.10.0 — Camera calls and smoother archive access",
-  "summary": "Android 0.8.13 adds capability-based camera calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit microphone permission, encrypted optional credentials and automatic call cleanup. Archive playback reuses scoped media access and prioritizes active timeline reads. Camera-event controls are more compact, and web Live tile names are readable again.",
+  "version": "1.0.1",
+  "tag": "v1.0.1",
+  "title": "KM VMS 1.0.1 — Recoverable camera sign-in and call audio",
+  "summary": "Android 0.8.14 lets you retry rejected camera-call credentials, verifies a new Tapo password before saving it, and restores listening when calls start while respecting speaker mute and the previous sound preference. Standard hold-to-speak is unchanged. NAS and Android live-buffer settings are unchanged.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.10.0",
+  "source_ref": "v1.0.1",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,55 +20,44 @@
     "target_version": 13
   },
   "changelog": [
-    "Add capability-based Android calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit unsupported-device explanations.",
-    "Use hold-to-speak for the standard adapter and mic mute for Tapo full duplex. Calls select fast video without changing the saved sound preference or active PTZ mode.",
-    "Require owner/admin rights, mic consent and scoped media authorization. Stop capture on backgrounding, exit, hang-up or failure; bound call duration and queued audio.",
-    "Encrypt optional Tapo call credentials on the NAS via additive schema 12-to-13 migration. Relay audio in memory only. Browser microphone calling is not included.",
-    "Reuse Android archive media authorization within a playback session, renew before expiry and retry one unauthorized request without weakening access checks.",
-    "Remove the extra three-read timeline bottleneck; prioritize foreground reads within the existing HTTP budget, with bounded prefetch and synchronized buffering.",
-    "Compact Android event filters, add an unread-only shortcut and align names/counts. Align the web filter row and New checkbox label.",
-    "Restore readable names in dark web Live tile headers. Publish signed Android 0.8.13 and update the English README and installation guidance."
+    "Allow repeated camera-call credential entry with inline error feedback, including after a stored password is rejected or the app is reopened.",
+    "Verify a new Tapo call password before encrypted NAS storage. Clear only the confirmed rejected stored value; network failures and access denials do not erase it.",
+    "Enable listening during calls, respect manual mute through stream/PTZ changes, and restore the prior listening preference on hang-up.",
+    "Match the speaker icon to actual output; disable it temporarily during hold-to-speak. Existing talk modes and live-buffer thresholds are unchanged.",
+    "Publish signed Android 0.8.14 and update English installation/Tapo guidance. NAS numbering advances to 1.0.1; v0.10.0 is immutable. Database schema remains 13."
   ],
   "title_i18n": {
-    "en": "KM VMS 0.10.0 — Camera calls and smoother archive access",
-    "ru": "KM VMS 0.10.0 — Звонок через камеру и работа с архивом",
-    "zh-CN": "KM VMS 0.10.0 — 摄像机对讲与档案访问优化"
+    "en": "KM VMS 1.0.1 — Recoverable camera sign-in and call audio",
+    "ru": "KM VMS 1.0.1 — Повторный вход в камеру и звук звонка",
+    "zh-CN": "KM VMS 1.0.1 — 摄像机登录重试与通话声音修复"
   },
   "summary_i18n": {
-    "en": "Android 0.8.13 adds capability-based camera calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit microphone permission, encrypted optional credentials and automatic call cleanup. Archive playback reuses scoped media access and prioritizes active timeline reads. Camera-event controls are more compact, and web Live tile names are readable again.",
-    "ru": "В Android 0.8.13 добавлен Звонок: стандартный ONVIF RTSP backchannel и адаптер локального протокола Tapo, проверка возможностей, разрешение микрофона, шифрование отдельного пароля и автоматическое завершение. Доступ к архиву повторно использует медиасеанс и отдаёт приоритет текущим чтениям хронологии. Уплотнены элементы событий, восстановлена читаемость названий плиток веб-онлайна.",
-    "zh-CN": "Android 0.8.13 新增基于能力检测的摄像机对讲，支持标准 ONVIF RTSP 反向音频和 Tapo 本地协议适配器，并提供麦克风授权、可选凭据加密和自动结束通话。档案回放复用限定范围的媒体授权并优先读取当前时间线。事件控件更紧凑，网页实时画面的名称恢复清晰显示。"
+    "en": "Android 0.8.14 lets you retry rejected camera-call credentials, verifies a new Tapo password before saving it, and restores listening when calls start while respecting speaker mute and the previous sound preference. Standard hold-to-speak is unchanged. NAS and Android live-buffer settings are unchanged.",
+    "ru": "В Android 0.8.14 можно повторно ввести отклонённый пароль звонка. Новый пароль Tapo проверяется до сохранения. Прослушивание включается на время звонка, ручное отключение звука работает, после завершения возвращается прежняя настройка. Удержание микрофона и буферизация онлайна не менялись.",
+    "zh-CN": "Android 0.8.14 允许重试被拒绝的摄像机对讲凭据，并在保存前验证新的 Tapo 密码。通话开始时临时开启监听，尊重扬声器静音，并在挂断后恢复原有声音偏好。标准按住说话模式和实时缓冲设置保持不变。"
   },
   "changelog_i18n": {
     "en": [
-      "Add capability-based Android calls through standard ONVIF RTSP backchannel and a Tapo local-protocol adapter, with explicit unsupported-device explanations.",
-      "Use hold-to-speak for the standard adapter and mic mute for Tapo full duplex. Calls select fast video without changing the saved sound preference or active PTZ mode.",
-      "Require owner/admin rights, mic consent and scoped media authorization. Stop capture on backgrounding, exit, hang-up or failure; bound call duration and queued audio.",
-      "Encrypt optional Tapo call credentials on the NAS via additive schema 12-to-13 migration. Relay audio in memory only. Browser microphone calling is not included.",
-      "Reuse Android archive media authorization within a playback session, renew before expiry and retry one unauthorized request without weakening access checks.",
-      "Remove the extra three-read timeline bottleneck; prioritize foreground reads within the existing HTTP budget, with bounded prefetch and synchronized buffering.",
-      "Compact Android event filters, add an unread-only shortcut and align names/counts. Align the web filter row and New checkbox label.",
-      "Restore readable names in dark web Live tile headers. Publish signed Android 0.8.13 and update the English README and installation guidance."
+      "Allow repeated camera-call credential entry with inline error feedback, including after a stored password is rejected or the app is reopened.",
+      "Verify a new Tapo call password before encrypted NAS storage. Clear only the confirmed rejected stored value; network failures and access denials do not erase it.",
+      "Enable listening during calls, respect manual mute through stream/PTZ changes, and restore the prior listening preference on hang-up.",
+      "Match the speaker icon to actual output; disable it temporarily during hold-to-speak. Existing talk modes and live-buffer thresholds are unchanged.",
+      "Publish signed Android 0.8.14 and update English installation/Tapo guidance. NAS numbering advances to 1.0.1; v0.10.0 is immutable. Database schema remains 13."
     ],
     "ru": [
-      "Звонок в Android: стандартный ONVIF RTSP backchannel и адаптер локального протокола Tapo. Возможности проверяются, неподдерживаемые камера или кодек получают понятный статус.",
-      "Удержание для стандартного адаптера, выключение микрофона для полного дуплекса Tapo. Быстрый видеомаршрут на время звонка, сохранение настроек звука и режима PTZ.",
-      "Права владельца/администратора, разрешение микрофона, авторизация медиасеанса. Отключение при сворачивании, выходе и обрыве; ограничения длительности и очереди звука.",
-      "Отдельный пароль Tapo зашифрован на NAS; аддитивная миграция 12 → 13. Звук передаётся в памяти без записи в файлы. Браузерный звонок не входит в этот выпуск.",
-      "Медиадоступ к архиву Android повторно используется в сеансе, заранее обновляется, допускает один повтор после истечения авторизации без ослабления прав.",
-      "Убрано ограничение хронологии на три чтения: приоритет текущих запросов в прежнем HTTP-бюджете, ограниченная предзагрузка. Синхронизация и выбор камер сохранены.",
-      "Компактные фильтры событий APK, отдельная кнопка непрочитанных, выравнивание названий и счётчиков. В вебе выровнены фильтры и подпись Новые.",
-      "Светлые названия камер в тёмных заголовках плиток веб-онлайна. Подписанный APK 0.8.13, актуальные английские README и инструкция установки."
+      "Повторный ввод пароля звонка с ошибкой прямо в окне: после отказа сохранённого пароля и после повторного открытия приложения.",
+      "Пароль звонка Tapo проверяется до шифрованного сохранения на NAS. Стирается только подтверждённо отклонённый старый пароль, без потери параллельно сохранённого нового.",
+      "Сетевой сбой и запрет доступа не стирают пароль. Уточнено различие TP-Link ID и RTSP-пароля, добавлена подсказка о разрешении стороннего доступа.",
+      "Автоматическое прослушивание на время звонка, рабочее ручное отключение динамика при смене потока и PTZ, возврат прежнего состояния звука после завершения.",
+      "Значок динамика соответствует звуку и временно неактивен при удержании микрофона. Режим разговора и пороги буферизации онлайна сохранены.",
+      "Подписанный APK 0.8.14, актуальные английские README и INSTALL. Версия NAS — 1.0.1, опубликованный v0.10.0 не изменён. Схема БД остаётся 13."
     ],
     "zh-CN": [
-      "Android 新增标准 ONVIF RTSP 反向音频与基于能力检测的 Tapo 本地协议对讲适配器；不支持的设备或编解码格式会显示明确原因。",
-      "标准适配器使用按住说话，Tapo 全双工通道提供麦克风静音。通话期间使用低延迟视频，保留原有声音偏好和 PTZ 模式。",
-      "仅所有者和管理员可发起通话，需麦克风许可及绑定用户的短期媒体授权；进入后台、离开摄像机、挂断或连接中断时停止采集，并限制通话时长及音频队列。",
-      "通过注册的数据库 12 → 13 增量迁移，在 NAS 加密保存可选的独立 Tapo 对讲凭据；音频仅在内存转发，不写文件。本次不包含浏览器麦克风对讲。",
-      "Android 档案回放在当前会话中复用限定媒体授权，在过期前更新，并允许一次未授权请求重试，同时保留权限检查。",
-      "移除额外的三个时间线读取限制，在现有 HTTP 并发预算内优先处理当前读取并限制预取，保留同步缓冲及摄像机选择行为。",
-      "精简 Android 事件筛选器，增加未读快捷操作，对齐摄像机名称与选择计数；网页筛选行及新的复选框标签也已对齐。",
-      "恢复网页实时画面深色标题栏中清晰的浅色摄像机名称，并发布签名 Android 0.8.13 APK，更新英文 README 和安装说明。"
+      "摄像机对讲凭据被拒绝后可重新输入，并在窗口内显示错误；已保存密码失效或重新打开应用后也能再次输入。",
+      "新的 Tapo 本地对讲密码先验证再加密保存至 NAS。仅清除确认被拒绝的同一份旧凭据，保留并发更新的新密码；网络失败和访问策略拒绝不会删除密码。",
+      "通话期间自动开启监听，切换码流或 PTZ 时保留手动扬声器静音，挂断后恢复通话前的声音偏好。",
+      "扬声器图标反映实际音频输出，标准按住说话抑制回声时暂时禁用。现有对讲模式及实时缓冲阈值不变。",
+      "发布签名 Android 0.8.14，更新英文 README 及 Tapo 第三方访问说明；NAS 版本推进至 1.0.1，不改写已发布的 v0.10.0，数据库架构仍为 13。"
     ]
   }
 }

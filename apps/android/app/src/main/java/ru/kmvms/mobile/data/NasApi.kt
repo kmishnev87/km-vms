@@ -148,9 +148,23 @@ class NasApi(val address: ServerAddress) {
                     renewSession(ownAccess ?: throw NasException(ApiProblem.AUTHENTICATION))
                     return@withContext request(path, method, body, authenticated, mayRenew = false, longOperation = longOperation, longPolling = longPolling)
                 }
-                if (!response.isSuccessful) throw NasException(when (response.code) {
-                    401 -> ApiProblem.AUTHENTICATION; 403 -> ApiProblem.FORBIDDEN; 429 -> ApiProblem.RATE_LIMIT; else -> ApiProblem.SERVER
-                }, response.code)
+                if (!response.isSuccessful) {
+                    // Only known non-sensitive talk reason codes cross this
+                    // boundary. Never expose arbitrary server error bodies.
+                    val publicReason = if (path.startsWith("api/talk/")) runCatching {
+                        val source = response.body?.source() ?: return@runCatching null
+                        if (source.request(8193)) return@runCatching null
+                        JSONObject(source.readUtf8()).optString("detail").takeIf { it in setOf(
+                            "talk_authentication_failed", "talk_access_denied", "talk_credentials_required",
+                            "camera_unavailable", "camera_configuration_changed", "camera_busy", "server_busy",
+                            "discovery_busy", "camera_timeout", "camera_rejected_call", "authentication_unsupported",
+                            "backchannel_unsupported", "invalid_camera_response",
+                        ) }
+                    }.getOrNull() else null
+                    throw NasException(when (response.code) {
+                        401 -> ApiProblem.AUTHENTICATION; 403 -> ApiProblem.FORBIDDEN; 429 -> ApiProblem.RATE_LIMIT; else -> ApiProblem.SERVER
+                    }, response.code, publicReason)
+                }
                 if (response.code == 204) return@withContext null
                 val source = response.body?.source() ?: throw NasException(ApiProblem.SERVER)
                 if (source.request(2L * 1024 * 1024 + 1)) throw NasException(ApiProblem.SERVER)

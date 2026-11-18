@@ -27,6 +27,7 @@ data class TalkCapability(val status: String = "loading", val reason: String = "
 }
 enum class CallPhase { IDLE, CONNECTING, ACTIVE, FAILED }
 data class CallState(val phase: CallPhase = CallPhase.IDLE, val microphone: Boolean = false, val reason: String = "")
+data class CredentialState(val saving: Boolean = false, val reason: String = "")
 
 /** Per-open-camera controller. No background service, file recording or persistent audio queue. */
 class TalkController(context: Context, private val api: NasApi, private val cameraId: Long) {
@@ -36,6 +37,8 @@ class TalkController(context: Context, private val api: NasApi, private val came
     val state = mutable.asStateFlow()
     private val capabilityState = MutableStateFlow(TalkCapability())
     val capability = capabilityState.asStateFlow()
+    private val credentialState = MutableStateFlow(CredentialState())
+    val credential = credentialState.asStateFlow()
     @Volatile private var epoch = 0
     @Volatile private var socket: WebSocket? = null
     private var sessionId: String? = null
@@ -64,15 +67,22 @@ class TalkController(context: Context, private val api: NasApi, private val came
     }
 
     fun saveCredential(password: String?, after: () -> Unit) {
+        if (closed || credentialState.value.saving) return
+        credentialState.value = CredentialState(saving = true)
         scope.launch {
             try {
                 api.json("api/talk/cameras/$cameraId/credentials", "PUT", JSONObject().put("password", password ?: JSONObject.NULL))
                 capabilityState.value = capabilityState.value.copy(status = "supported", saved = password != null)
-                after()
+                credentialState.value = CredentialState()
+                if (!closed) after()
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { fail("credential_save_failed") }
+            catch (error: Exception) {
+                credentialState.value = CredentialState(reason = (error as? NasException)?.publicReason ?: "credential_save_failed")
+            }
         }
     }
+
+    fun editCredential() { if (!credentialState.value.saving) credentialState.value = CredentialState() }
 
     fun start() {
         if (closed || mutable.value.phase in setOf(CallPhase.CONNECTING, CallPhase.ACTIVE)) return
@@ -117,7 +127,7 @@ class TalkController(context: Context, private val api: NasApi, private val came
                 delay(12_000)
                 if (own == epoch && mutable.value.phase == CallPhase.CONNECTING) fail("connection_timeout")
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { if (own == epoch) fail(if (error is NasException && error.httpStatus == 409) "camera_busy" else "call_failed") }
+            catch (error: Exception) { if (own == epoch) fail((error as? NasException)?.publicReason ?: "call_failed") }
         }
     }
 
@@ -183,7 +193,13 @@ class TalkController(context: Context, private val api: NasApi, private val came
         if (own != null) scope.launch(NonCancellable + Dispatchers.IO) { own.close() }
     }
 
-    private fun fail(reason: String) { end(); mutable.value = CallState(CallPhase.FAILED, reason = reason) }
+    private fun fail(reason: String) {
+        if (capabilityState.value.credentials && reason in setOf("talk_authentication_failed", "talk_credentials_required")) {
+            capabilityState.value = capabilityState.value.copy(status = "needs_credentials", saved = false)
+        }
+        end()
+        mutable.value = CallState(CallPhase.FAILED, reason = reason)
+    }
 
     fun end() {
         ++epoch

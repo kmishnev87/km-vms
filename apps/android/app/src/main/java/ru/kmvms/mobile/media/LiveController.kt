@@ -37,13 +37,14 @@ class LiveController(private val context: Context, val api: NasApi) {
     fun focus(id: Long?) {
         if (id == null) focused?.let { previous ->
             selections.update { old -> old[previous]?.let { value -> old + (previous to value.copy(
-                stream = if (cameras[previous]?.hasSub == true) Stream.SUB else Stream.MAIN, sound = false, ptz = false, talk = false, talkDuck = false)) } ?: old }
+                stream = if (cameras[previous]?.hasSub == true) Stream.SUB else Stream.MAIN,
+                sound = false, ptz = false, talk = false, talkDuck = false, soundBeforeCall = null)) } ?: old }
         }
         focused = id; reconcile()
     }
     fun selectStream(id: Long, stream: Stream) = change(id) { it.selectStream(stream) }
     fun sound(id: Long) = change(id) { it.copy(sound = !it.sound) }
-    fun talk(id: Long, enabled: Boolean, duck: Boolean = false) = change(id) { it.copy(talk = enabled, talkDuck = enabled && duck) }
+    fun talk(id: Long, enabled: Boolean, duck: Boolean = false) = change(id) { it.setTalk(enabled, duck) }
     fun ptz(id: Long, enabled: Boolean) = change(id) { it.setPtz(enabled) }
     private fun change(id: Long, change: (CameraPlayback) -> CameraPlayback) {
         selections.update { old -> old[id]?.let { old + (id to change(it)) } ?: old }

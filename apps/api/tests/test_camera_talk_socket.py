@@ -1,4 +1,6 @@
 import asyncio
+import time
+from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
@@ -55,6 +57,11 @@ def test_native_socket_starts_relays_one_exact_frame_and_always_releases(harness
         assert ws.receive_json()["type"] == "ready"
         ws.send_bytes(bytes(640))
         ws.send_json({"type": "authorization", "media_token": h.token()})
+    # Socket teardown closes the blocking camera transport on a worker thread.
+    # The TestClient context may return just before that thread finishes.
+    deadline = time.monotonic() + 2
+    while (not h.transport.closed or h.manager.sessions) and time.monotonic() < deadline:
+        time.sleep(0.005)
     assert len(h.frames) == 1 and len(h.frames[0]) == 160
     assert h.transport.closed and not h.manager.sessions
 
@@ -103,6 +110,24 @@ def test_authentication_failure_reaches_client_before_session_is_closed(harness,
     with h.client.websocket_connect(h.path, headers={"Authorization": "Bearer " + h.token()}) as ws:
         assert ws.receive_json() == {"type": "error", "reason": "talk_authentication_failed"}
     assert not h.frames and h.transport.closed and not h.manager.sessions
+
+
+@pytest.mark.parametrize("reason,discarded", [("talk_authentication_failed", True), ("talk_access_denied", False), ("camera_timeout", False)])
+def test_only_authentication_rejection_discards_the_legacy_tapo_secret_before_reply(harness, monkeypatch, reason, discarded):
+    h = harness
+    h.session.candidate = TalkCandidate("tapo", replace(h.source, talk_password="synthetic-account-password"))
+    monkeypatch.setattr(talk, "source_for", lambda *_: h.session.candidate.source)
+    cleared = []
+    monkeypatch.setattr(talk, "forget_rejected_credential", lambda session: cleared.append(session.id))
+    async def fail_start(session, socket):
+        session.socket = socket
+        session.transport = h.transport
+        raise TalkError(reason)
+    monkeypatch.setattr(h.manager, "start", fail_start)
+    with h.client.websocket_connect(h.path, headers={"Authorization": "Bearer " + h.token()}) as ws:
+        assert ws.receive_json() == {"type": "error", "reason": reason}
+        assert bool(cleared) == discarded
+    assert not h.frames
 
 
 def test_server_heartbeat_keeps_upstream_alive_while_native_microphone_is_muted(harness, monkeypatch):

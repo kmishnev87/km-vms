@@ -444,8 +444,8 @@
     <string name="widget_no_servers">Сначала добавьте подключение к NAS в приложении.</string>
     <string name="camera_call">Позвонить в камеру</string>
     <string name="call_password">Пароль аккаунта Tapo</string>
-    <string name="call_password_help">Камера использует отдельный протокол разговора. Введите пароль аккаунта Tapo, не пароль подключения камеры. Он хранится зашифрованным только на NAS.</string>
-    <string name="call_save_connect">Сохранить и позвонить</string>
+    <string name="call_password_help">Пароль TP-Link ID, с которым вы входите в приложение Tapo. Пароль RTSP/ONVIF — другая настройка. Хранится зашифрованным на NAS.</string>
+    <string name="call_save_connect">Проверить и позвонить</string>
     <string name="call_mute">Выключить микрофон</string>
     <string name="call_unmute">Включить микрофон</string>
     <string name="call_mic_on">Микрофон включён</string>
@@ -454,7 +454,8 @@
     <string name="call_connecting">Подключение…</string>
     <string name="call_end">Завершить звонок</string>
     <string name="call_busy">Динамик камеры занят. Повторите чуть позже.</string>
-    <string name="call_bad_password">Проверьте пароль аккаунта Tapo и повторите звонок.</string>
+    <string name="call_bad_password">Камера отклонила вход. Проверьте пароль Tapo ID и пункт «Я → Сторонние сервисы → Совместимость со сторонними приложениями» в Tapo.</string>
+    <string name="call_password_save_failed">Не удалось проверить и сохранить пароль. Проверьте соединение с NAS и камерой и повторите.</string>
     <string name="call_camera_auth">Проверьте данные подключения камеры.</string>
     <string name="call_unsupported">Совместимый канал разговора не найден.</string>
     <string name="call_permission">Микрофон недоступен. Разрешите доступ к нему в настройках Android.</string>

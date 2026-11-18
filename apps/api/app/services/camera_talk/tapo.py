@@ -101,7 +101,8 @@ class TapoTalk:
         envelope = CLIENT_BOUNDARY + "\r\n" + "".join(f"{k}: {v}\r\n" for k, v in headers.items()) + "\r\n"
         self.wire.send(envelope.encode() + body + b"\r\n")
 
-    def start(self, candidate):
+    def authenticate(self):
+        """Check local credentials without opening a talk session or sending audio."""
         if not self.source.talk_password:
             raise TalkError("talk_credentials_required")
         self.wire = Wire(self.source.host, 8800)
@@ -110,6 +111,8 @@ class TapoTalk:
         if status != 401 or not challenge.startswith("Digest "):
             raise TalkError("camera_rejected_call")
         fields = parse_dict_header(challenge[7:])
+        if not any(brand in fields.get("realm", "").lower() for brand in ("tp-link", "tapo")):
+            raise TalkError("backchannel_unsupported")
         hash_fn = hashlib.sha256 if fields.get("encrypt_type") == "3" else hashlib.md5
         secret = hash_fn(self.source.talk_password.encode()).hexdigest().upper()
         authorization = digest_header(challenge, "POST", "/stream", "admin", secret)
@@ -117,10 +120,16 @@ class TapoTalk:
             self.wire.close()
             self.wire = Wire(self.source.host, 8800)
         status, headers, _ = initial_request(self.wire, self.source.host, authorization)
-        if status in {401, 403}:
+        if status == 401:
             raise TalkError("talk_authentication_failed")
+        if status == 403:
+            raise TalkError("talk_access_denied")
         if status != 200:
             raise TalkError("camera_rejected_call")
+        return headers, secret
+
+    def start(self, candidate):
+        headers, secret = self.authenticate()
         exchange = parse_dict_header(headers.get("key-exchange", ""))
         self.multipart(json.dumps({"params": {"talk": {"mode": "aec"}, "method": "get"}, "seq": 3, "type": "request"}).encode(), "application/json")
         boundary = headers.get("content-type", "")
@@ -171,3 +180,11 @@ class TapoTalk:
     def keepalive(self):
         # Transport is held by the open authenticated multipart connection.
         pass
+
+
+def verify_credential(source):
+    transport = TapoTalk(source)
+    try:
+        transport.authenticate()
+    finally:
+        transport.close()

@@ -10,12 +10,20 @@ data class CameraPlayback(
     val ptz: Boolean = false,
     val talk: Boolean = false,
     val talkDuck: Boolean = false,
+    val soundBeforeCall: Boolean? = null,
 ) {
     init { require(cameraId > 0) }
     val lowLatency: Boolean get() = ptz || talk
     val transport: LiveTransport get() = if (lowLatency) LiveTransport.WEBSOCKET_FMP4 else LiveTransport.HLS
+    val audible: Boolean get() = sound && !talkDuck
     fun selectStream(selected: Stream) = copy(stream = selected)
     fun setPtz(enabled: Boolean) = copy(ptz = enabled)
+    fun setTalk(enabled: Boolean, duck: Boolean = false): CameraPlayback = when {
+        enabled && !talk -> copy(talk = true, talkDuck = duck, sound = true, soundBeforeCall = sound)
+        enabled -> copy(talkDuck = duck)
+        talk -> copy(talk = false, talkDuck = false, sound = soundBeforeCall ?: sound, soundBeforeCall = null)
+        else -> copy(talkDuck = false, soundBeforeCall = null)
+    }
 }
 
 data class VisibleTile(val cameraId: Long, val offset: Int, val height: Int)
