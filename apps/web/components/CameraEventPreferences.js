@@ -1,6 +1,6 @@
 "use client";
 import { useI18n } from "../lib/i18n";
-import { CAMERA_EVENT_KINDS, minuteLabel, minuteValue } from "../lib/cameraEvents";
+import { minuteLabel, minuteValue } from "../lib/cameraEvents";
 import { toggleEventPreference, changeCameraNotificationTime, notificationCameraGroups } from "../lib/cameraEventPreferences";
 
 function TimeField({ value, disabled, label, onChange }) {
@@ -68,12 +68,6 @@ export default function CameraEventPreferences({ preference, cameras, busy, onCh
         </div>
       </fieldset>
       <small>{t("cameraEvents.scheduleHelp")}</small>
-      <fieldset disabled={busy}><legend>{t("cameraEvents.notificationTypes")}</legend><div className="cameraEventsChoices">
-        {CAMERA_EVENT_KINDS.map(kind => <label className="cameraEventsCheck" key={kind}>
-          <input type="checkbox" checked={preference.kinds === null || Boolean(preference.kinds?.includes(kind))}
-            onChange={() => toggle("kinds", kind, CAMERA_EVENT_KINDS)}/><span>{t(`cameraEvents.kinds.${kind}`)}</span>
-        </label>)}
-      </div></fieldset>
     </div>
     <div className="cameraEventsPreferenceFooter"><button type="button" className="button secondary" disabled={busy} onClick={onSave}>{t("cameraEvents.save")}</button></div>
   </div>;

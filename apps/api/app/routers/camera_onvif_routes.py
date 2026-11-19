@@ -22,6 +22,7 @@ from app.routers.camera_connection_helpers import (
 from app.routers.deps import require_permission
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.camera_stream_dimensions import remember_onvif_dimensions
+from app.services.ai_camera_view import remember as remember_ai_view_kind
 from app.services.camera_event_settings import read_event_capabilities
 from app.services.onvif_service import (
     OnvifConfigurationError,
@@ -320,6 +321,7 @@ def onvif_ptz_capabilities(
         }
     try:
         result = get_onvif_ptz_capabilities(**creds, profile_token=camera.onvif_profile_token)
+        remember_ai_view_kind(camera, result)
         return {
             "camera_id": camera.id,
             "camera_name": camera.name,

@@ -21,7 +21,8 @@ from app.models.camera import Camera
 from app.models.recording import ArchiveRoot, RecordingJob, RecordingSegment
 from app.models.system_settings import SystemSettings
 from app.models.user import User
-from app.services.backup_before_upgrade import BackupExecutionConfig, create_backup_before_upgrade
+from app.services.backup_before_upgrade import BackupExecutionConfig, create_backup_before_upgrade, run_backup_create_operation
+from app.services.backup_manager import build_backup_snapshot
 from app.services.restore_validation import (
     DISPOSABLE_DB_PREFIX,
     RESTORE_VALIDATION_STATUS_VALIDATED,
@@ -216,6 +217,33 @@ def _seed_backup(source_url: str, tmp_path: Path, owner_password: str) -> dict:
         )
     finally:
         db.close()
+        engine.dispose()
+
+
+def test_manual_create_validates_real_disposable_restore_without_touching_source(disposable_databases, tmp_path):
+    source_url, _target_url, password = disposable_databases
+    engine = create_engine(source_url)
+    Session = sessionmaker(bind=engine, autoflush=False)
+    root = tmp_path / "manual-backups"
+    try:
+        Base.metadata.create_all(bind=engine)
+        with Session() as db:
+            _seed_representative_source(db, password)
+            owner = db.query(User).filter_by(role="owner").one()
+            database = lambda: db.execute(text("SELECT current_database()")).scalar_one()
+            scratch = lambda: db.execute(text("SELECT datname FROM pg_database WHERE datname LIKE 'kmvms_stage5_%'")).scalars().all()
+            name, original_scratch = database(), sorted(scratch())
+            submission = str(uuid.uuid4())
+            result = run_backup_create_operation(db, submission_id=submission, actor=owner, backup_root=root, trial_restore=True)
+            assert result["state"] == "completed", result
+            assert result["result"]["restore_validation_status"] == "passed"
+            assert sorted(scratch()) == original_scratch
+            assert database() == name and db.query(User).count() == 1
+            replay = run_backup_create_operation(db, submission_id=submission, actor=owner, backup_root=root, trial_restore=True)
+            assert replay["replayed"] and replay["artifact_id"] == result["artifact_id"]
+            row = build_backup_snapshot(backup_root=root, db_backend="postgresql")["items"][0]
+            assert row["restore_validation_status"] == "passed"
+    finally:
         engine.dispose()
 
 

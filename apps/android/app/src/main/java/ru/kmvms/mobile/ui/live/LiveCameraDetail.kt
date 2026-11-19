@@ -42,7 +42,8 @@ import kotlin.math.roundToInt
 @Composable fun LiveCameraDetail(camera: Camera, capability: PtzCapabilities?, controller: LiveController,
                                  immersive: Boolean, fullscreen: () -> Unit, close: () -> Unit,
                                  message: (String) -> Unit, mayTalk: Boolean = false,
-                                 onCameraSwipe: ((CameraStep) -> Unit)? = null) {
+                                 onCameraSwipe: ((CameraStep) -> Unit)? = null,
+                                 showAi: Boolean = false, toggleAi: () -> Unit = {}) {
     val context = LocalContext.current
     val talk = remember(controller, camera.id, mayTalk) {
         if (mayTalk) TalkController(context.applicationContext, controller.api, camera.id) else null
@@ -69,6 +70,7 @@ import kotlin.math.roundToInt
         onDispose { lifecycle.removeObserver(observer); handle?.close() }
     }
     val ready = video?.status == VideoStatus.PLAYING
+    var aiStatus by remember(camera.aiOverlay, showAi, playback?.stream) { mutableStateOf(LiveAiStatus.WAITING) }
     LaunchedEffect(handle, ready) { if (!ready) handle?.stop() }
     Column(Modifier.fillMaxSize().testTag("live-detail-${camera.id}")
         .background(if (immersive) Color.Black else MaterialTheme.colorScheme.background)) {
@@ -83,10 +85,11 @@ import kotlin.math.roundToInt
                 aspect = if (playback?.stream == Stream.MAIN) camera.mainAspect else camera.subAspect,
                 onPoint = { x, y -> if (ready) handle?.point(x, y) },
                 onArea = { left, top, right, bottom -> if (ready) handle?.area(left, top, right, bottom) },
-                onCameraSwipe = onCameraSwipe)
+                onCameraSwipe = onCameraSwipe, aiOverlay = camera.aiOverlay.takeIf { showAi }, onAiStatus = { aiStatus = it })
             LiveCameraCaption(camera.name, video?.hlsFallback == true, Modifier.align(Alignment.CenterStart))
             Row(Modifier.align(Alignment.TopEnd).padding(10.dp).background(Color(0xB3233044), RoundedCornerShape(12.dp)).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
+                if (camera.aiOverlay != null) LiveAiToggle(showAi, toggleAi, status = aiStatus)
                 if (capability?.supported == true) IconButton(onClick = {
                     handle?.stop(); controller.ptz(camera.id, playback?.ptz != true); collapsed = false
                 }, modifier = Modifier.testTag("live-ptz")) {

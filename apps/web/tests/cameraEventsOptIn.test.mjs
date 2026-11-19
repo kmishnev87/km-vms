@@ -10,37 +10,30 @@ const context = { URL, Date, Set };
 vm.runInNewContext(`${source}\nthis.model = { cameraEditorDraft, cameraSavePayload, patchCameraEditor };`, context);
 const { cameraEditorDraft, cameraSavePayload, patchCameraEditor } = context.model;
 
-test("new cameras opt out, saved choice survives an ordinary name change", () => {
-  assert.equal(cameraEditorDraft().events_enabled, false);
+test("camera editor does not carry the retired subscription checkbox", () => {
+  assert.equal(cameraEditorDraft().events_enabled, undefined);
   const baseline = cameraEditorDraft({ id: 42, protocol: "onvif", events_enabled: true });
   const draft = { ...baseline, name: "Renamed" };
-  assert.equal(draft.events_enabled, true);
+  assert.equal(draft.events_enabled, undefined);
   assert.equal("events_enabled" in cameraSavePayload(draft, baseline, 42), false);
-  assert.deepEqual(JSON.parse(JSON.stringify(cameraSavePayload({ ...baseline, events_enabled: false }, baseline, 42))), { events_enabled: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(cameraSavePayload(draft, baseline, 42))), { name: "Renamed" });
 });
 
 test("switching to RTSP cannot retain a hidden event receiving opt-in", () => {
-  const draft = patchCameraEditor({ ...cameraEditorDraft(), events_enabled: true }, "protocol", "rtsp");
-  assert.equal(draft.events_enabled, false);
+  const draft = patchCameraEditor(cameraEditorDraft(), "protocol", "rtsp");
+  assert.equal(draft.events_enabled, undefined);
 });
 
-test("capabilities are read once for the exact management identity with stale request cancellation", () => {
+test("camera editor does not probe subscription capabilities unnecessarily", () => {
   const source = read("../components/cameras/useCameraEditor.js");
-  assert.match(source, /\/cameras\/onvif\/events\/capabilities/);
-  assert.match(source, /eventCapability\?\.key === eventManagementKey/);
-  assert.match(source, /return \(\) => controller\.abort\(\)/);
+  assert.doesNotMatch(source, /\/cameras\/onvif\/events\/capabilities|eventCapability/);
   assert.doesNotMatch(source, /setInterval|Dahua|Hikvision|Tapo/);
 });
 
-test("unsupported devices are not offered a fake switch, existing choices can always be turned off", () => {
+test("only the recording center selects the events source", () => {
   const source = read("../components/cameras/CameraEditor.js");
-  assert.match(source, /capability\?\.supported === true/);
-  assert.match(source, /supported \|\| canDisable/);
-  assert.match(source, /patch\("events_enabled", event.target.checked\)/);
-  assert.match(source, /form.protocol !== "onvif"/);
-  assert.match(source, /copy.editorReceiveEventsHelp/);
-  const css = read("../app/styles/50-cameras-shared-modals.css");
-  assert.match(css, /\.cameraFlowEventControl\s*\{[^}]*min-height: 34px/);
+  assert.doesNotMatch(source, /events_enabled|editorReceiveEvents/);
+  assert.match(read("../lib/recordingCenter.js"), /camera_events_available/);
 });
 
 test("a rapid reopen uses the saved server choice before the background list refresh", async () => {

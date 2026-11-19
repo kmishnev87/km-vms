@@ -189,11 +189,6 @@ class EventsApi(val api: NasApi) {
         return EventPreferences.from(api.json("api/camera-events/preferences", "PATCH",
             JSONObject().put("camera_id", cameraId).put("enabled", enabled)) as JSONObject)
     }
-    suspend fun receiving(cameraId: Long, enabled: Boolean) {
-        require(cameraId in 1..Int.MAX_VALUE.toLong())
-        // Exactly the same setting, validation and permissions as CameraEditor.
-        api.json("api/cameras/$cameraId", "PUT", JSONObject().put("events_enabled", enabled))
-    }
     suspend fun save(value: EventPreferences): EventPreferences {
         require(value.startMinute in 0..1439 && value.endMinute in 0..1439)
         require(value.cameraSchedules.size <= 512 && value.cameraSchedules.keys.all { it in 1..Int.MAX_VALUE.toLong() })

@@ -340,8 +340,8 @@ def _operation_conflicts(existing: dict[str, Any], *, kind: str, artifact_id: st
     existing_kind = existing.get("kind")
     if kind == "create" and existing_kind == "create":
         return True
-    if kind in {"check", "delete"} and existing_kind in {"check", "delete"}:
-        return bool(artifact_id and existing.get("binding_artifact_id") == artifact_id)
+    if kind in {"check", "delete"} and existing_kind in {"check", "delete", "create"}:
+        return bool(artifact_id and existing.get("artifact_id") == artifact_id)
     return False
 
 
@@ -841,7 +841,7 @@ def defer_backup_operation_until_cleanup(
         if (
             current is None
             or current.get("operation_id") != receipt.get("operation_id")
-            or current.get("kind") != "check"
+            or not _has_trial_restore(current)
             or current.get("state") not in ACTIVE_STATES
             or not TEMPORARY_VALIDATION_DB_RE.fullmatch(database_name)
         ):
@@ -922,6 +922,11 @@ def _deferred_terminal_after_cleanup(receipt: dict[str, Any]) -> dict[str, Any] 
     }
 
 
+def _has_trial_restore(receipt: dict[str, Any]) -> bool:
+    return receipt.get("kind") == "check" or (receipt.get("kind") == "create"
+        and receipt.get("phase") in {"integrity_preflight", "temporary_restore", "cleanup_retry"})
+
+
 def _artifact_terminal_evidence_proven(
     root: Path,
     artifact_id: str,
@@ -935,7 +940,7 @@ def _artifact_terminal_evidence_proven(
         manifest = _read_json_bounded(manifest_path)
         integrity = state.get("integrity") if isinstance(state.get("integrity"), dict) else {}
         saved_evidence = integrity.get("evidence") if isinstance(integrity.get("evidence"), dict) else None
-        if kind == "check":
+        if kind in {"check", "create"}:
             validation = state.get("restore_validation") if isinstance(state.get("restore_validation"), dict) else {}
             validation_evidence = validation.get("evidence") if isinstance(validation.get("evidence"), dict) else None
             if validation.get("operation_id") == operation_id and validation_evidence is not None:
@@ -964,7 +969,7 @@ def _reconcile_receipt(root: Path, receipt: dict[str, Any], *, force: bool = Fal
         and receipt.get("phase") != "cleanup_retry"
     ):
         return receipt
-    if receipt.get("kind") == "check":
+    if _has_trial_restore(receipt):
         recovery = receipt.get("recovery") if isinstance(receipt.get("recovery"), dict) else {}
         if recovery.get("disposable_database_name"):
             if not _cleanup_receipt_disposable_target(receipt):
@@ -1002,7 +1007,7 @@ def _reconcile_receipt(root: Path, receipt: dict[str, Any], *, force: bool = Fal
             state = _read_artifact_state(root, artifact_id)
         except Exception:
             state = None
-        evidence_key = "create_evidence" if receipt.get("kind") == "create" else "last_check"
+        evidence_key = "last_check" if _has_trial_restore(receipt) else "create_evidence"
         evidence = state.get(evidence_key) if isinstance(state, dict) and isinstance(state.get(evidence_key), dict) else {}
         if (
             evidence.get("operation_id") == operation_id
@@ -1215,7 +1220,7 @@ def record_backup_operation_disposable_target(
         if (
             current is None
             or current.get("operation_id") != receipt.get("operation_id")
-            or current.get("kind") != "check"
+            or not _has_trial_restore(current)
             or current.get("state") not in ACTIVE_STATES
         ):
             raise BackupManagerBlocked(

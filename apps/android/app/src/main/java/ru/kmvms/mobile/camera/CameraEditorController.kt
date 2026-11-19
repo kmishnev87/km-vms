@@ -9,9 +9,8 @@ import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 
 data class CameraEditorState(val draft:CameraDraft=CameraDraft.empty(),val phase:Int=0,val busy:Boolean=false,
-    val catalog:CameraCatalog?=null,val source:String?=null,val eventsSupported:Boolean?=null,
-    val configurations:Map<String,JSONObject> = emptyMap(),val verified:Boolean=false,val saved:Boolean=false,val failures:Int=0,
-    val eventsWereEnabled:Boolean=false)
+    val catalog:CameraCatalog?=null,val source:String?=null,
+    val configurations:Map<String,JSONObject> = emptyMap(),val verified:Boolean=false,val saved:Boolean=false,val failures:Int=0)
 
 class CameraEditorController(private val api:CameraApi,private val id:Long?) {
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
@@ -23,7 +22,7 @@ class CameraEditorController(private val api:CameraApi,private val id:Long?) {
     private val proofs=mutableMapOf<String,String>()
     private var proofAt=0L
     init { if(id!=null) request=scope.launch {
-        try { baseline=CameraDraft.from(api.get(id));mutable.update{it.copy(draft=baseline,eventsWereEnabled=baseline.flag("events_enabled"))} }
+        try { baseline=CameraDraft.from(api.get(id));mutable.update{it.copy(draft=baseline)} }
         catch(cancelled:CancellationException){throw cancelled}
         catch(_:Exception){error()}
         finally{mutable.update{it.copy(busy=false)}}
@@ -95,8 +94,6 @@ class CameraEditorController(private val api:CameraApi,private val id:Long?) {
             require(draft.roles().isNotEmpty())
             proofs["onvif_probe_token"]=catalog.proof
             mutable.update{it.copy(draft=draft,catalog=catalog,source=source?.id,configurations=emptyMap())}
-            val supports=try{api.events(draft,id)}catch(cancelled:CancellationException){throw cancelled}catch(_:Exception){null}
-            ensureCurrent(own);mutable.update{it.copy(eventsSupported=supports)}
         }
         require(draft.roles().isNotEmpty())
         if(draft["protocol"]=="onvif")proofs["onvif_probe_token"]=(catalog?:throw IllegalStateException("Read ONVIF profiles first")).proof

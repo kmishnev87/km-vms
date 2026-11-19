@@ -13,7 +13,7 @@ data class Camera(val id: Long, val name: String, val enabled: Boolean, val prot
                   val host: String, val status: String, val hasSub: Boolean,
                   val segmentMinutes: Int?, val retentionDays: Int?, val quotaGb: Int?, val mode: String?,
                   val defaultStream: Stream = Stream.SUB, val mainAspect: Float? = null, val subAspect: Float? = null,
-                  val deleted: Boolean = false) {
+                  val deleted: Boolean = false, val aiOverlay: LiveAiGeometry? = null) {
     companion object {
         fun fromJson(item: JSONObject) = Camera(
             item.getLong("id"), item.getString("name"), item.optBoolean("enabled"), item.optString("protocol"),
@@ -27,6 +27,7 @@ data class Camera(val id: Long, val name: String, val enabled: Boolean, val prot
             aspect(item.optJSONObject("stream_dimensions")?.optJSONObject("main")),
             aspect(item.optJSONObject("stream_dimensions")?.optJSONObject("sub")),
             item.optBoolean("deleted"),
+            LiveAiGeometry.read(item.optJSONObject("ai_overlay")),
         )
         private fun aspect(value: JSONObject?): Float? {
             val width = value?.optInt("width") ?: 0

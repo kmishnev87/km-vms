@@ -6,6 +6,7 @@ import ru.kmvms.mobile.core.ArchiveAvailability
 import ru.kmvms.mobile.core.EventAction
 import ru.kmvms.mobile.core.EventDestination
 import ru.kmvms.mobile.core.eventDestination
+import ru.kmvms.mobile.core.notificationEventAction
 import ru.kmvms.mobile.data.NasApi
 import org.json.JSONObject
 import java.time.Duration
@@ -20,18 +21,26 @@ data class EventVideoResult(val request: MobileVideoRequest?, val liveFallback: 
 
 /** Navigation uses typed NAS identities, never a server-provided arbitrary URL. */
 class EventVideoNavigation(private val api: NasApi) {
-    suspend fun open(event: CameraEvent, action: EventAction, zone: ZoneId, now: Instant = Instant.now()): EventVideoResult {
+    suspend fun open(event: CameraEvent, action: EventAction, zone: ZoneId, now: Instant = Instant.now(),
+                     fromPush: Boolean = false): EventVideoResult {
         val id = event.cameraId?.takeIf { it > 0 && !event.ambiguous } ?: return EventVideoResult(null)
-        if (eventDestination(action, event.occurred, now, ArchiveAvailability.UNKNOWN) == EventDestination.Live) {
-            return live(event, id)
+        val chosen = if (fromPush) notificationEventAction(action, event.occurred, now) else action
+        if (eventDestination(chosen, event.occurred, now, ArchiveAvailability.UNKNOWN) == EventDestination.Live) {
+            val result = live(event, id)
+            return if (fromPush) result.copy(request = result.request?.copy(singleCamera = true)) else result
         }
         if (event.ai != null) {
             val evidence = EventsApi(api).evidence(event, zone)
-            evidence.start?.let { return EventVideoResult(MobileVideoRequest(id, event.camera, it.toEpochMilli())) }
-            return if (evidence.state == EventArchiveState.PENDING && !event.occurred.isBefore(now.minus(Duration.ofMinutes(2))))
+            evidence.start?.let { return EventVideoResult(MobileVideoRequest(id, event.camera, (if (fromPush) event.occurred else it).toEpochMilli())) }
+            return if (!fromPush && evidence.state == EventArchiveState.PENDING && !event.occurred.isBefore(now.minus(Duration.ofMinutes(2))))
                 live(event, id).copy(liveFallback = true) else EventVideoResult(null)
         }
         val chronology = ChronologyApi(api, zone)
+        if (fromPush) {
+            val timestamp = event.occurred.toEpochMilli()
+            return if (chronology.resolve(id, timestamp) is TimelineLookup.Video)
+                EventVideoResult(MobileVideoRequest(id, event.camera, timestamp)) else EventVideoResult(null)
+        }
         val before = event.occurred.minusSeconds(5).toEpochMilli()
         val preRoll = chronology.resolve(id, before)
         val source = when (preRoll) {

@@ -77,12 +77,17 @@ def reference_data(token):
     return data["ratio"], tuple((byte >> bit) & 3 for byte in packed for bit in (0, 2, 4, 6))
 
 
+def matches_geometry(anchor, size):
+    if not anchor or not size or len(size) != 2 or any(type(x) is not int or x <= 0 for x in size):
+        return False
+    ratio = anchor[0]
+    return abs(size[0]/size[1]*1000 - ratio) <= max(16, ratio*.018)
+
+
 def matches_view(anchor, luma, size):
-    if not anchor or not luma or not size or len(size) != 2 or any(type(x) is not int or x <= 0 for x in size):
+    if not luma or not matches_geometry(anchor, size):
         return False
-    ratio, signed = anchor
-    if abs(size[0]/size[1]*1000 - ratio) > max(16, ratio*.018):
-        return False
+    signed = anchor[1]
     diffs = [luma[i+1]-luma[i] for i in range(len(luma)) if i % WIDTH < WIDTH-1]
     diffs.extend(luma[i+WIDTH]-luma[i] for i in range(WIDTH*(HEIGHT-1)))
     known = [(direction, diff) for direction, diff in zip(signed, diffs) if direction]
@@ -142,8 +147,6 @@ class Memory:
 class RuleHit:
     rule_id: str
     kind: str
-    record: bool
-    notify: bool
     started: bool
     object_kinds: tuple[str, ...] = ()
 
@@ -153,8 +156,9 @@ def units(points):
 
 
 class RuleEngine:
-    def __init__(self, config, timezone):
+    def __init__(self, config, timezone, view_kind="ptz"):
         self.config = config
+        self.view_kind = view_kind
         try:
             self.zone = ZoneInfo(timezone or "UTC")
         except (ZoneInfoNotFoundError, ValueError):
@@ -178,7 +182,12 @@ class RuleEngine:
         self.before = None
         self.last = None
         self.match_count = 0
-        self.view = "checking_view" if self.spatial else "whole_frame"
+        self.view = ("checking_profile" if self.view_kind == "unknown" else "checking_view") if self.spatial else "whole_frame"
+
+    def set_view_kind(self, kind):
+        if kind != self.view_kind:
+            self.view_kind = kind
+            self.reset()
 
     def objects(self, result):
         found = []
@@ -282,15 +291,25 @@ class RuleEngine:
             luma = luma if len(luma) == WIDTH*HEIGHT else None
         except ValueError:
             luma = None
-        scene_shift = motion(self.before, luma, self.scene_samples)
+        scene_shift = (self.scene or self.view_kind == "ptz") and motion(self.before, luma, self.scene_samples)
         self.before = luma
         was_aligned = self.view == "aligned"
-        same_view = not self.spatial or matches_view(self.anchor, luma, result.get("size"))
+        same_view = not self.spatial
         if self.spatial:
-            aligned = same_view and not scene_shift
-            self.match_count = min(self.match_count+1, 2) if aligned else 0
-            self.view = "aligned" if self.match_count == 2 else "checking_view" if aligned else "view_unconfirmed"
-        if scene_shift:
+            size = result.get("size")
+            if self.view_kind == "fixed":
+                same_view = matches_geometry(self.anchor, size)
+                self.view = "aligned" if same_view else "view_unconfirmed"
+            elif self.view_kind == "ptz":
+                same_view = matches_view(self.anchor, luma, size)
+                aligned = same_view and not scene_shift
+                self.match_count = min(self.match_count+1, 2) if aligned else 0
+                self.view = "aligned" if self.match_count == 2 else "checking_view" if aligned else "view_unconfirmed"
+            else:
+                self.view = "checking_profile"
+        # A brightness step on a fixed lens is not a camera move. An explicit
+        # scene-change rule may still fire; it need not reset object rules.
+        if scene_shift and (not self.spatial or self.view_kind == "ptz") or was_aligned and not same_view:
             self.tracks.clear()
             self.memory.clear()
         found = self.objects(result) if self.view in {"aligned", "whole_frame"} or not self.masks else []
@@ -320,7 +339,7 @@ class RuleEngine:
                         if began:
                             starting_objects.add(track.object.kind)
             if active:
-                hits.append(RuleHit(rule["id"], kind, rule["record"], rule["notify"], started, tuple(sorted(starting_objects))))
+                hits.append(RuleHit(rule["id"], kind, started, tuple(sorted(starting_objects))))
         held = set()
         for key in sorted(self.memory.keys() - legal, key=lambda item: self.memory[item].last_activity or 0, reverse=True):
             memo = self.memory[key]
@@ -335,7 +354,7 @@ class RuleEngine:
                     and when-memo.last_activity <= rule["release_seconds"]):
                 held.add(rule["id"])
                 if not any(hit.rule_id == rule["id"] for hit in hits):
-                    hits.append(RuleHit(rule["id"], rule["kind"], rule["record"], rule["notify"], False))
+                    hits.append(RuleHit(rule["id"], rule["kind"], False))
             else:
                 self.memory.pop(key)
         return hits

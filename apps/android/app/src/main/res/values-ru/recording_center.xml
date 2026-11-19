@@ -40,7 +40,12 @@
     <string name="rec_ai_device">Модель: %1$s. Устройство: %2$s.</string>
     <string name="rec_ai_version">Версия: %1$s. Движок: %2$s.</string>
     <string name="rec_retry_ai">Перезапустить AI</string>
-    <string name="rec_event_requires">Сначала включи приём событий в настройках этой ONVIF-камеры.</string>
+    <string name="rec_event_requires">Нужна камера с подключением по ONVIF. Подписка включается при сохранении источника «События камеры».</string>
+    <string name="live_ai_contours">Линии и зоны AI</string>
+    <string name="live_ai_waiting">Ждём кадр</string>
+    <string name="live_ai_uncalibrated">Нужно обновить кадр в настройках AI</string>
+    <string name="live_ai_mismatch">Не удалось подтвердить ракурс</string>
+    <string name="live_ai_profile_unknown">Тип объектива не подтверждён</string>
     <string name="rec_event_unsupported">Эта камера подключена без ONVIF. Запись по её событиям недоступна.</string>
     <string name="rec_source">Камера-источник</string>
     <string name="rec_source_choose">Выбрать источник</string>
@@ -58,6 +63,9 @@
     <string name="rec_prehistory_ready">Доступно: %1$d с</string>
     <string name="rec_prehistory_limit">Доступную предысторию ограничивает память.</string>
     <string name="rec_postrecord">Минут после последнего события</string>
+    <string name="rec_alert_profile">Оповещения</string>
+    <string name="rec_alert_quiet">После, мин</string>
+    <string name="rec_alert_quiet_help">Следующее событие даст новое оповещение после этой паузы без активности. Запись остаётся постоянной.</string>
     <string name="rec_event_types">Какие события запускают запись</string>
     <string name="rec_event_all">Все типы</string>
     <string name="rec_event_count">Типов выбрано: %1$d</string>

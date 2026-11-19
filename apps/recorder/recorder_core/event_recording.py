@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from recorder_core.ai_supervisor import AI_KINDS
 
 CHANNEL_PROGRESS_TIMEOUT = 150
+STALE_CONFIRM_SECONDS = 10
 STALLED_RECOVERY_SECONDS = 120
 BUFFERED_PROFILES = ("balanced", "full_quality")
 FAULTS = frozenset({"stalled", "failed", "exhausted", "recovering"})
@@ -83,6 +84,9 @@ class Episode:
     extended: bool = False
     stalled: bool = False
     progress_after_stall: float | None = None
+    suspect_since: float | None = None
+    receiver_generation: tuple | None = None
+    handoff_used: bool = False
 
     def clear_episode(self, now):
         self.last_activity = max(self.last_activity, now)
@@ -119,6 +123,9 @@ class Episode:
             self.extended = False
             self.stalled = False
             self.progress_after_stall = None
+            self.suspect_since = None
+            self.receiver_generation = None
+            self.handoff_used = False
         if blocked or not row.enabled:
             self.clear_episode(now)
         if policy.get("source") == "ai":
@@ -138,16 +145,34 @@ class Episode:
             self.clear_episode(now)
             self.stalled = False
             self.progress_after_stall = None
+            self.suspect_since = None
+            self.receiver_generation = None
+            self.handoff_used = False
             return Decision(None, "inactive")
         if self.source_expected_since is None:
             self.source_expected_since = now
 
         channel = state.get("channel") or {}
         issued = timestamp(channel.get("sample_at"))
+        # Receiver and Recorder restart independently. A recent response from
+        # the still-fenced receiver proves health even if Recorder started later.
+        # It does not revive a pre-restart trigger (last_activity has a cutoff).
         current = bool(row.event_receiver_current and channel.get("policy_revision") == revision
-                       and issued is not None and started < issued <= now)
+                       and issued is not None and issued <= now)
         phase = channel.get("phase") if current else None
+        if current:
+            generation = (channel.get("lease_owner"), channel.get("lease_fence"), channel.get("generation"))
+            if phase == "connecting" and generation != self.receiver_generation and not self.stalled:
+                # A deliberate hand-off gets one bounded window. Repeated
+                # reconnects with no responses do not postpone the stall forever.
+                if not self.handoff_used and self.source_expected_since < issued:
+                    self.source_expected_since = issued
+                    self.handoff_used = True
+                    self.suspect_since = None
+            self.receiver_generation = generation
         completed_at = issued if phase in {"healthy", "recovering"} else None
+        if completed_at is not None and now - completed_at < CHANNEL_PROGRESS_TIMEOUT:
+            self.handoff_used = False
         since = min(self.source_expected_since, completed_at) if completed_at is not None else self.source_expected_since
         health = progress_status(expected=True, since=since, completed_at=completed_at,
                                  now=now, timeout=CHANNEL_PROGRESS_TIMEOUT)
@@ -155,10 +180,18 @@ class Episode:
             health = phase
             self.stalled = False
             self.progress_after_stall = None
+            self.suspect_since = None
         elif health == "stalled":
-            self.stalled = True
             self.progress_after_stall = None
+            if not self.stalled:
+                if self.suspect_since is None:
+                    self.suspect_since = clock
+                if clock - self.suspect_since < STALE_CONFIRM_SECONDS:
+                    health = "connecting"  # Observe a hand-off on the next Recorder polls.
+                else:
+                    self.stalled = True
         elif self.stalled and health == "healthy":
+            self.suspect_since = None
             if self.progress_after_stall is None:
                 self.progress_after_stall = completed_at
             if completed_at - self.progress_after_stall < STALLED_RECOVERY_SECONDS:
@@ -166,6 +199,8 @@ class Episode:
             else:
                 self.stalled = False
                 self.progress_after_stall = None
+        elif health == "healthy":
+            self.suspect_since = None
 
         if blocked or not row.enabled:
             return Decision(None, health)

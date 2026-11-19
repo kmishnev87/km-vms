@@ -40,7 +40,12 @@
     <string name="rec_ai_device">Model: %1$s. Device: %2$s.</string>
     <string name="rec_ai_version">Version: %1$s. Runtime: %2$s.</string>
     <string name="rec_retry_ai">Restart AI</string>
-    <string name="rec_event_requires">Enable event reception in this ONVIF camera’s settings first.</string>
+    <string name="rec_event_requires">An ONVIF connection is required. Saving Camera events starts the subscription.</string>
+    <string name="live_ai_contours">AI lines and zones</string>
+    <string name="live_ai_waiting">Waiting for a frame</string>
+    <string name="live_ai_uncalibrated">Refresh the frame in AI settings</string>
+    <string name="live_ai_mismatch">The camera view could not be verified</string>
+    <string name="live_ai_profile_unknown">The camera profile could not be verified</string>
     <string name="rec_event_unsupported">This camera is connected without ONVIF. Recording on its own events is unavailable.</string>
     <string name="rec_source">Source camera</string>
     <string name="rec_source_choose">Choose a source</string>
@@ -58,6 +63,9 @@
     <string name="rec_prehistory_ready">Available: %1$d s</string>
     <string name="rec_prehistory_limit">Available pre-roll is limited by memory.</string>
     <string name="rec_postrecord">Minutes after the last event</string>
+    <string name="rec_alert_profile">Alerts</string>
+    <string name="rec_alert_quiet">After, min</string>
+    <string name="rec_alert_quiet_help">A new event can alert you after this quiet interval. Recording stays continuous.</string>
     <string name="rec_event_types">Events that trigger recording</string>
     <string name="rec_event_all">All event types</string>
     <string name="rec_event_count">Types selected: %1$d</string>

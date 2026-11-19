@@ -11,8 +11,8 @@ android {
         applicationId = "ru.kmvms.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("kmvms.versionCode").orElse("815").get().toInt()
-        versionName = providers.gradleProperty("kmvms.versionName").orElse("0.8.15").get()
+        versionCode = providers.gradleProperty("kmvms.versionCode").orElse("816").get().toInt()
+        versionName = providers.gradleProperty("kmvms.versionName").orElse("0.8.16").get()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {

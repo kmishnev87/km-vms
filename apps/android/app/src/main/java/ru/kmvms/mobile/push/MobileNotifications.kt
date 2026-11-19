@@ -3,10 +3,12 @@ package ru.kmvms.mobile.push
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -62,6 +64,7 @@ object MobileNotifications {
             }
             // Means handed to Android, not proof that the person saw a banner.
             log(DiagnosticCode.PUSH_POSTED)
+            if (event.preview) runCatching { EventPreviewWorker.enqueue(original, profile.id, event) }
         } else log(DiagnosticCode.PUSH_LIVE_SUPPRESSED)
         history.edit().putString("delivered_v1", JSONArray(delivered.takeLast(255) + key).toString()).apply()
         history.edit().putLong("last_received.${profile.id}", System.currentTimeMillis()).apply()
@@ -70,6 +73,19 @@ object MobileNotifications {
         val intent = Intent(context, MainActivity::class.java).setData(Uri.parse("kmvms://notification/$profile/$event/$action"))
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+    internal fun active(context: Context, tag: String): Boolean =
+        context.getSystemService(NotificationManager::class.java).activeNotifications.any { it.tag == tag && it.id == 1 }
+
+    internal fun addPreview(context: Context, tag: String, image: Bitmap) = synchronized(lock) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (!allowed(context)) return@synchronized
+        // Do not bring back an event the user already opened or dismissed.
+        val old = manager.activeNotifications.firstOrNull { it.tag == tag && it.id == 1 }?.notification ?: return@synchronized
+        val style = Notification.BigPictureStyle().bigPicture(image)
+            .setSummaryText(old.extras.getCharSequence(Notification.EXTRA_TEXT))
+        val updated = Notification.Builder.recoverBuilder(context, old).setStyle(style).setOnlyAlertOnce(true).build()
+        manager.notify(tag, 1, updated)
     }
     fun clear(context: Context, profile: String) {
         val manager = context.getSystemService(NotificationManager::class.java)

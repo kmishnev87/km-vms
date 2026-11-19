@@ -53,12 +53,13 @@ open class AlertWidgetProvider : AppWidgetProvider() {
                 if (variant == WidgetVariant.COUNT) {
                     val signedIn = profile != null && runCatching { ProfileVault(context).signIn(profile.id) }.getOrNull() != null
                     val value = profile?.takeIf { signedIn }?.let { WidgetUnreadStore(context).get(it)?.count }
-                    setTextViewText(R.id.alert_widget_count, value?.toString() ?: "—")
-                    setContentDescription(R.id.alert_widget_count, if (value == null) localized.getString(R.string.widget_count_unavailable)
+                    setTextViewText(R.id.alert_widget_count, value?.coerceAtMost(99)?.toString() ?: "—")
+                    setViewVisibility(R.id.alert_widget_count_plus, if (value != null && value > 99) android.view.View.VISIBLE else android.view.View.GONE)
+                    setContentDescription(R.id.alert_widget_count_area, if (value == null) localized.getString(R.string.widget_count_unavailable)
                         else localized.getString(R.string.widget_unread_count, value))
                     setContentDescription(R.id.alert_widget_live, localized.getString(R.string.live))
                     setOnClickPendingIntent(R.id.alert_widget_live, if (configured) destinationClick(context, id, OPEN_LIVE, "live") else click)
-                    setOnClickPendingIntent(R.id.alert_widget_count, if (configured) destinationClick(context, id, OPEN_EVENTS, "events") else click)
+                    setOnClickPendingIntent(R.id.alert_widget_count_area, if (configured) destinationClick(context, id, OPEN_EVENTS, "events") else click)
                 }
             }
             AppWidgetManager.getInstance(context).updateAppWidget(id, views)

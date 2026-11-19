@@ -11,7 +11,7 @@ const VISIBLE_STATES = [
   "storage_suspended", "storage_waiting", "error", "analysis_starting",
 ];
 const AI_SOURCE_FAULTS = new Set(["failed", "stalled", "recovering", "exhausted"]);
-export const canUseCameraEvents = (row) => row.protocol === "onvif" && row.events_enabled === true;
+export const canUseCameraEvents = (row) => (row?.camera_events_available ?? row?.events_enabled) === true && row?.protocol === "onvif";
 export const canUseAI = (row) => row.runtime?.ai_available === true;
 export const eventKinds = (draft) => draft.source === "ai" ? AI_EVENT_KINDS : CAMERA_EVENT_KINDS;
 export const profilesFor = (draft) => draft.source === "ai" ? RECORDING_PROFILES.slice(1) : RECORDING_PROFILES;
@@ -33,6 +33,9 @@ export function statusView(row) {
   if (state === "linked_source_unavailable" && runtime.source_status === "source_events_disabled") {
     return { key: "status_link_events_disabled", tone: "quiet" };
   }
+  if (["waiting", "recording", "extended"].includes(state) && runtime.ai?.rules_view === "checking_profile") {
+    return { key: "rule_view_profile_short", tone: "warn" };
+  }
   if (state === "waiting" && ["view_unconfirmed", "invalid_rules"].includes(runtime.ai?.rules_view)) {
     return { key: "rule_view_short", tone: "warn" };
   }
@@ -51,7 +54,8 @@ export function draftForCamera(row) {
     mode: modeKey(policy), source: policy.source || "none",
     profile: policy.profile || "none",
     prebuffer_seconds: policy.prebuffer_seconds ?? 0,
-    postrecord_minutes: policy.postrecord_minutes ?? 1,
+    postrecord_minutes: policy.mode === "events" ? policy.postrecord_minutes ?? 1 : 1,
+    alert_quiet_minutes: row.alert_quiet_minutes ?? null,
     linked_camera_id: policy.linked_camera_id ?? null,
     event_kinds: (policy.event_kinds || eventKinds(policy)).filter((kind) => eventKinds(policy).includes(kind)),
     rule_ids: [...(policy.rule_ids || [])],
@@ -116,10 +120,13 @@ export function inlinePolicyControls(rows, row, draft) {
   const candidates = linked ? linkCandidates(rows, row.camera_id) : [];
   const linkReady = linked && candidates.some(item => item.camera_id === draft.linked_camera_id);
   const constantSource = linkReady && sourceWritesContinuously(rows, draft.linked_camera_id, row.camera_id);
-  const ownEventSource = events && (draft.source === "camera" && canUseCameraEvents(row) || draft.source === "ai" && canUseAI(row));
+  const cameraConditions = draft.source === "camera" && canUseCameraEvents(row);
+  const ownEventSource = events && (cameraConditions || draft.source === "ai" && canUseAI(row));
   const profiled = ownEventSource || linkReady && !constantSource;
+  const alertProfile = !linked && !events && draft.alert_quiet_minutes != null
+    && (cameraConditions || draft.source === "ai" && canUseAI(row));
   return {
-    linked, events, candidates, constantSource, profiled, linkReady, ownEventSource,
+    linked, events, candidates, constantSource, profiled, linkReady, ownEventSource, cameraConditions, alertProfile,
     preRoll: profiled && ["balanced", "full_quality"].includes(draft.profile),
     sources: [!events ? "none" : null, canUseCameraEvents(row) || draft.source === "camera" ? "camera" : null,
       canUseAI(row) || draft.source === "ai" ? "ai" : null].filter(Boolean),
@@ -138,7 +145,7 @@ export function hasPolicyChanges(row, draft) {
     return JSON.stringify({...plain,ai_rules:ai_rules ?? null});
   };
   return comparable(draft) !== comparable(draftForCamera(row)) ||
-    (draft.mode === "events" || draft.source === "ai") && !draft.event_kinds.length;
+    draft.source !== "none" && !draft.event_kinds.length;
 }
 
 export function stageRecordingDraft(entries, row, draft) {
@@ -165,7 +172,7 @@ export function validateRecordingDraft(row, draft, candidates) {
   if (draft.source === "ai" && !canUseAI(row)) return "ai_unavailable";
   if (draft.source === "ai" && draft.rule_ids.length) return "ai_rules_pending";
   if (draft.source === "ai" && draft.ai_rules) {
-    const issue = ruleError(draft.ai_rules, draft.mode === "events");
+    const issue = ruleError(draft.ai_rules);
     if (issue) return issue;
   }
   if (draft.mode === "events" && !["camera", "ai"].includes(draft.source)) return "source_choose";
@@ -175,7 +182,7 @@ export function validateRecordingDraft(row, draft, candidates) {
   if (draft.mode === "linked" && !candidates.some((source) => source.camera_id === draft.linked_camera_id)) {
     return draft.linked_camera_id ? "source_missing" : "source_choose";
   }
-  if ((draft.mode === "events" || draft.source === "ai") && !(draft.source === "ai" && draft.ai_rules) && !draft.event_kinds.length) return "event_select_one";
+  if (draft.source !== "none" && !(draft.source === "ai" && draft.ai_rules) && !draft.event_kinds.length) return "event_select_one";
   if (draft.mode !== "continuous" && !profilesFor(draft).includes(draft.profile)) return "profile";
   if (draft.mode !== "continuous" && draft.profile !== "economical"
       && (!Number.isInteger(draft.prebuffer_seconds) || draft.prebuffer_seconds < 0 || draft.prebuffer_seconds > 120)) return "prehistory";
@@ -185,13 +192,16 @@ export function validateRecordingDraft(row, draft, candidates) {
 export function recordingPolicyUpdate(camera, draft) {
   const ownEvents = draft.mode === "events";
   const linked = draft.mode === "linked";
+  const { alert_quiet_minutes, ...policyDraft } = draft;
+  const alertProfile = draft.mode === "continuous" && draft.source !== "none" && alert_quiet_minutes != null;
   return {
     expected_revision: camera.policy.revision,
+    ...(alertProfile ? { alert_quiet_minutes } : {}),
     policy: {
-      ...draft,
+      ...policyDraft,
       source: linked ? "none" : draft.source,
       linked_camera_id: linked ? draft.linked_camera_id : null,
-      postrecord_minutes: ownEvents ? draft.postrecord_minutes : 1,
+      postrecord_minutes: ownEvents ? draft.postrecord_minutes : alertProfile ? alert_quiet_minutes : 1,
       profile: draft.mode === "continuous" ? "none" : draft.profile,
       prebuffer_seconds: draft.mode === "continuous" || draft.profile === "economical" ? 0 : draft.prebuffer_seconds,
       event_kinds: draft.event_kinds.length ? draft.event_kinds : draft.source === "ai" ? DEFAULT_AI_EVENT_KINDS : eventKinds(draft),

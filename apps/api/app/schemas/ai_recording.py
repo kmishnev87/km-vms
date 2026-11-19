@@ -69,13 +69,18 @@ class AiRule(StrictModel):
     release_seconds: StrictInt = Field(default=2, ge=0, le=15)
     dwell_seconds: StrictInt = Field(default=10, ge=3, le=300)
     schedule: AiSchedule | None = None
+    # Retained on the wire for old clients and rollback only. The recording
+    # scenario and personal alert preferences now determine the actions.
     record: StrictBool = True
-    notify: StrictBool = False
+    notify: StrictBool = True
+
+    @field_validator("record", "notify")
+    @classmethod
+    def compatibility_action(cls, _value):
+        return True
 
     @model_validator(mode="after")
     def valid_rule(self):
-        if not (self.record or self.notify):
-            raise ValueError("ai_rule_action_required")
         if self.kind != "scene" and (not self.classes or len(set(self.classes)) != len(self.classes)):
             raise ValueError("ai_rule_classes_required")
         if self.kind != "crossing" and self.direction != "both":
@@ -133,16 +138,15 @@ class RecordingPolicy(StrictModel):
             raise ValueError("linked_policy_requires_explicit_camera_and_profile")
         if self.profile in {"none", "economical"} and self.prebuffer_seconds:
             raise ValueError("profile_does_not_have_prebuffer")
-        if self.source == "ai" and self.mode == "events" and self.ai_rules is not None and not any(
-            rule.record for rule in self.ai_rules.rules
-        ):
-            raise ValueError("ai_record_rule_required")
         return self
 
 
 class PolicyUpdate(StrictModel):
     expected_revision: StrictInt = Field(ge=0)
     policy: RecordingPolicy
+    # Explicit for new clients; an older editor always sent a neutral 1 for
+    # continuous mode and must not erase a chosen notification interval.
+    alert_quiet_minutes: StrictInt | None = Field(default=None, ge=1, le=5)
 
 
 class EmergencyUpdate(StrictModel):

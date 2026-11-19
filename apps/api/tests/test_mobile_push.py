@@ -150,6 +150,47 @@ def test_notification_detail_rejects_non_camera_audit_entries(fixture):
     assert client.post(f"/mobile/push/devices/{uuid.uuid4()}/test").status_code == 404
 
 
+def test_both_sources_reach_the_same_badge_and_device_delivery(fixture, tmp_path, monkeypatch):
+    from app.services import ai_event_history
+    from app.services.onvif_events import Signal
+
+    _, factory, _, _ = fixture
+    device = register(fixture)
+    monkeypatch.setattr(ai_event_history.settings, "storage_previews", str(tmp_path))
+    captured = events.now_utc()
+    with factory() as db:
+        camera = db.get(Camera, 1)
+        camera.protocol = "onvif"
+        camera.events_enabled = False  # Explicit policy wins over the legacy column.
+        camera.recording_policy = {"schema_version": 1, "revision": 1, "mode": "continuous",
+                                   "source": "camera", "profile": "none"}
+        db.add(Camera(id=2, name="AI", storage_folder_name="fixture_ai", host="192.0.2.2",
+            port=554, enabled=True, protocol="rtsp", events_enabled=False,
+            recording_policy={"schema_version": 1, "revision": 1, "mode": "continuous",
+                              "source": "ai", "profile": "none", "event_kinds": ["person"]}))
+        events.save_preferences(db, 2, {"notifications": False})
+        lens = {"id": 1, "name": "Gate", "events_enabled": True}
+        native = events.record_signal(db, {"device_id": "fixture", "cameras": [lens]}, lens,
+            Signal("RuleEngine/Motion", "motion", True, False, captured, captured, False, source={}))
+        assert native
+        ai = uuid.uuid4()
+        inbox = tmp_path / (ai.hex + ".evt")
+        from datetime import timezone
+        packet = {"v": 1, "camera_id": 2, "revision": 1, "captured": captured.replace(tzinfo=timezone.utc).timestamp(),
+                  "rule_id": None, "condition": "presence", "objects": ["person"]}
+        inbox.write_bytes(json.dumps(packet).encode() + b"\n")
+        assert ai_event_history.ingest(db, inbox, received=captured)
+        assert events.updates(db, 1)["unread_count"] == 2
+        assert events.updates(db, 2)["unread_count"] == 0
+        assert events.automatic_read_ids(db, 2, [native, str(ai)]) == {native, str(ai)}
+        assert events.list_camera_events(db, 1, source="camera")["total"] == 1
+        assert events.list_camera_events(db, 1, source="ai")["total"] == 1
+    sent = []
+    for _ in range(2):
+        assert push.deliver_one(factory, device, "test-worker", sender=lambda _, payload: sent.append(json.loads(payload)))
+    assert {payload["event_id"]: payload.get("ai_condition") for payload in sent} == {native: None, str(ai): "presence"}
+
+
 def test_delivery_advances_durable_cursor_without_changing_history(fixture):
     _, factory, _, _ = fixture
     old = event(factory)
@@ -193,20 +234,19 @@ def test_orphaned_other_process_lease_schedules_one_wake_instead_of_losing_backl
     assert len(deferred) == 1 and deferred[0] > events.now_utc()
 
 
-def test_later_person_classification_is_not_lost_after_filtered_start(fixture):
+def test_legacy_type_filters_do_not_block_push_and_metadata_update_does_not_repeat_it(fixture):
     _, factory, _, _ = fixture
     identifier = register(fixture)
     current = event(factory)
     with factory() as db:
         preferences = events.preferences(db, 1)[0]
         events.save_preferences(db, 1, {**preferences, "kinds": ["person"]})
-    assert push.deliver_one(factory, identifier, "first-worker", sender=lambda *_: pytest.fail("not a person yet"))
+    sent = []
+    assert push.deliver_one(factory, identifier, "first-worker", sender=lambda _s, payload: sent.append(json.loads(payload)))
     with factory() as db:
         row = db.get(AuditEvent, current)
-        row.event_metadata = {**row.event_metadata, "object_kinds": ["person"], "mobile_notification_at": events.now_utc().strftime("%Y-%m-%d %H:%M:%S.%f")}
+        row.event_metadata = {**row.event_metadata, "object_kinds": ["person"]}
         db.commit()
-    sent = []
-    assert push.deliver_one(factory, identifier, "next-worker", sender=lambda _s, payload: sent.append(json.loads(payload)))
     assert [item["event_id"] for item in sent] == [current]
     assert push.deliver_one(factory, identifier, "next-worker", sender=lambda *_: pytest.fail("duplicate")) is False
 
@@ -233,7 +273,7 @@ def test_delivery_obeys_permissions_preferences_and_concurrent_logout(fixture, s
     push.deliver_one(factory, identifier, "test-worker", sender=sender)
     with factory() as db:
         saved = store.get(db, identifier)
-        assert len(calls) == (1 if scenario in {"permanent_error", "logout_during_send"} else 0)
+        assert len(calls) == (1 if scenario in {"permanent_error", "logout_during_send", "kind_filter"} else 0)
         if scenario in {"disabled_user", "no_permission", "permanent_error", "logout_during_send"}: assert not saved.enabled
         else: assert saved.cursor_id == current
         assert events.event_query(db).count() == 1

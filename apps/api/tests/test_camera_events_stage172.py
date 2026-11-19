@@ -6,13 +6,33 @@ import uuid
 from lxml import etree
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.services import camera_events as domain
 from app.services import onvif_events as ov
 from app.services.audit_log import list_events
 from app.models.audit_event import AuditEvent
+from app.models.camera import Camera
+from app.db.session import Base
 from app.routers import camera_events as routes
-from test_stage11_retention_automation import db
+
+
+def register_fixture_cameras(db):
+    for cid in (1, 2):
+        db.add(Camera(id=cid, name=f"Lens {cid}", storage_folder_name=f"lens{cid}",
+                      host="192.0.2.1", port=80, protocol="onvif", events_enabled=True))
+    db.commit()
+
+
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with sessionmaker(engine)() as session:
+        register_fixture_cameras(session)
+        yield session
+    engine.dispose()
 
 
 def notification(*, topic="tns1:RuleEngine/CellMotionDetector/Motion", active="true", initialized=False, source="lens1", stamp=None):
@@ -143,17 +163,17 @@ def test_episode_start_repeat_end_and_initialization(db, monkeypatch):
     monkeypatch.setattr(domain, "now_utc", lambda: current[0])
     camera=group()["cameras"][0]
     initial=ov.parse_notification(notification(initialized=True))
-    # Initialized can announce a newly created active property, not just an
-    # idle startup snapshot. Preserve that real positive observation once.
-    first=domain.record_signal(db,group(),camera,initial)
+    assert domain.record_signal(db,group(),camera,initial) is None
+    first=domain.record_signal(db,group(),camera,ov.parse_notification(notification()))
     assert first
-    assert domain.event_query(db).first().event_metadata["initial_state"] is True
+    assert domain.event_query(db).first().event_metadata["initial_state"] is False
+    current[0] += timedelta(seconds=40)
     assert domain.record_signal(db,group(),camera,ov.parse_notification(notification())) is None
     assert domain.event_query(db).count()==1
     assert domain.event_query(db).first().event_metadata["occurrences"]==1
     domain.record_signal(db,group(),camera,ov.parse_notification(notification(active="false")))
-    assert domain.event_query(db).first().event_metadata["active"] is False
-    current[0] += timedelta(seconds=45)
+    assert domain.serialize(domain.event_query(db).first())["active"] is True
+    current[0] += timedelta(seconds=60)
     second=domain.record_signal(db,group(),camera,ov.parse_notification(notification()))
     assert second and second!=first and domain.event_query(db).count()==2
     assert list_events(db)==[]  # Camera history never spams the administrative journal.
@@ -165,12 +185,15 @@ def test_ambiguous_device_is_not_attributed_to_first_lens(db):
     assert value["camera_id"] is None and value["source_ambiguous"]
 
 
-def test_lost_source_does_not_leave_a_false_ongoing_alarm(db):
+def test_lost_source_does_not_leave_a_false_ongoing_alarm(db, monkeypatch):
+    now = [domain.now_utc()]
+    monkeypatch.setattr(domain, "now_utc", lambda: now[0])
     identifier=domain.record_signal(db,group(),group()["cameras"][0],ov.parse_notification(notification()))
     domain.source_disconnected(db,group())
-    value=domain.event_query(db).filter_by(id=identifier).one().event_metadata
-    assert value["active"] is None and value["state_unconfirmed"] is True and not value.get("ended_at")
-    assert domain.serialize(domain.event_query(db).filter_by(id=identifier).one())["state_unconfirmed"]
+    row = domain.event_query(db).filter_by(id=identifier).one()
+    assert domain.serialize(row)["active"]
+    now[0] += timedelta(seconds=60)
+    assert not domain.serialize(row)["active"] and domain.serialize(row)["ended_at"]
 
 
 def test_read_markers_are_per_user_idempotent_and_do_not_change_events(db):
@@ -195,7 +218,11 @@ def test_first_event_after_empty_cursor_is_delivered(db):
 
 
 def test_history_filters_pages_and_retention_do_not_touch_other_events(db, monkeypatch):
+    start = domain.now_utc() - timedelta(minutes=4)
+    current = [start]
+    monkeypatch.setattr(domain, "now_utc", lambda: current[0])
     for n in range(4):
+        current[0] = start + timedelta(minutes=n)
         signal=ov.parse_notification(notification(source=str(n)))
         domain.record_signal(db,group(),group()["cameras"][0],signal)
     admin=AuditEvent(id=str(uuid.uuid4()),category="system",event_type="test",severity="info",message_ru="test",message_en="test",event_metadata={})
@@ -206,7 +233,7 @@ def test_history_filters_pages_and_retention_do_not_touch_other_events(db, monke
     assert domain.event_query(db).count()==2 and db.get(AuditEvent,admin.id) is not None
 
 
-@pytest.mark.parametrize("notifications,kinds,cameras,expected",[(False,None,None,False),(True,["person"],None,False),
+@pytest.mark.parametrize("notifications,kinds,cameras,expected",[(False,None,None,False),(True,["person"],None,True),
     (True,["motion"],[1],True),(True,None,[],False),(True,None,None,True)])
 def test_preferences_filter_notifications_not_recording(notifications,kinds,cameras,expected):
     preference={"notifications":notifications,"kinds":kinds,"camera_ids":cameras}
@@ -215,7 +242,7 @@ def test_preferences_filter_notifications_not_recording(notifications,kinds,came
 
 def test_preferences_cannot_write_unrelated_layout(db):
     value=routes.Preferences(notifications=False,kinds=["person"],camera_ids=[1]).model_dump()
-    assert domain.save_preferences(db,42,value)==value
+    assert domain.save_preferences(db,42,value)=={**value,"kinds":None}
     assert domain.preferences(db,42)[0]["notifications"] is False
     assert domain.preferences(db,43)[0]["notifications"] is True
     # A repeated first-save uses the existing unique user/key row.
@@ -244,7 +271,8 @@ def test_receiver_groups_lenses_and_ignores_recording_switch(monkeypatch):
     from app.services import camera_events_worker as worker
     from app.models.system_settings import SystemSettings
     cameras=[SimpleNamespace(id=n,host="camera",port=80,username="test",password_encrypted="cipher",
-             onvif_profile_token=f"profile-{n}",onvif_path="/onvif/device_service",name=f"Lens {n}",enabled=False,events_enabled=True) for n in (1,2)]
+             onvif_profile_token=f"profile-{n}",onvif_path="/onvif/device_service",name=f"Lens {n}",enabled=False,
+             protocol="onvif", recording_policy=None, events_enabled=True) for n in (1,2)]
     class Query:
         def __init__(self,model): self.model=model
         def first(self): return SimpleNamespace(system_initialized=True)

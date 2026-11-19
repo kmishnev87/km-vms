@@ -3,21 +3,20 @@ import assert from "node:assert/strict";
 import { defaultRule, polygonValid, ruleError, timeLabel, timeMinute } from "../lib/aiRules.js";
 import { draftForCamera, recordingPolicyUpdate } from "../lib/recordingCenter.js";
 
-test("rules validate finite endpoints, closed clock schedules, actions and camera reference", () => {
+test("rules validate geometry and schedules without requiring legacy action switches", () => {
   const rule = defaultRule("gate");
   const config = { rules:[rule], exclusions:[], reference:null };
-  assert.equal(ruleError(config, true), "");
-  rule.record = false; rule.notify = true;
-  assert.equal(ruleError(config, true), "rule_record_required");
-  assert.equal(ruleError(config, false), "");
+  assert.equal(ruleError(config), "");
+  rule.record = false; rule.notify = false;
+  assert.equal(ruleError(config), "");
   rule.kind = "crossing"; rule.points = [[200,200], [210,210]];
-  assert.equal(ruleError(config, false), "rule_capture_first");
+  assert.equal(ruleError(config), "rule_capture_first");
   config.reference = "frame.fixture";
-  assert.equal(ruleError(config, false), "rule_line_invalid");
+  assert.equal(ruleError(config), "rule_line_invalid");
   rule.points[1] = [400, 400];
-  assert.equal(ruleError(config, false), "");
+  assert.equal(ruleError(config), "");
   rule.schedule = {days:[],start:1140,end:420};
-  assert.equal(ruleError(config, false), "rule_days_required");
+  assert.equal(ruleError(config), "rule_days_required");
   assert.equal(timeMinute(timeLabel(1140)), 1140);
   assert(!polygonValid([[200,200],[800,800],[800,200],[200,800]]));
   assert(polygonValid([[200,200],[800,300],[800,800],[200,800]]));

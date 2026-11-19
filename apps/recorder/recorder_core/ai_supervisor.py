@@ -66,6 +66,7 @@ class Source:
     active_kinds: frozenset = field(default_factory=frozenset)
     scene_active: bool = False
     policy_revision: int | None = None
+    notification_window: int = 60
     rules: RuleEngine | None = None
     rules_invalid: bool = False
 
@@ -188,7 +189,7 @@ class AiSupervisor:
         self.reported_exhaustion = False
         self.transitions = deque(maxlen=12)
 
-    def configure(self, configs, *, gpu_allowed, policy_revisions=None):
+    def configure(self, configs, *, gpu_allowed, policy_revisions=None, notification_windows=None):
         now = time.monotonic()
         with self.cond:
             admitted = sorted(configs)[:MAX_SOURCES]
@@ -208,7 +209,15 @@ class AiSupervisor:
                         except (KeyError, TypeError, ValueError):
                             source.rules_invalid = True
                     self.sources[i] = source
-                self.sources[i].policy_revision = (policy_revisions or {}).get(i)
+                source = self.sources[i]
+                if advanced and source.rules:
+                    kind = advanced[0][2] if len(advanced[0]) > 2 else "ptz"
+                    if source.rules.view_kind != kind:
+                        self._discard(source)
+                        source.rules.set_view_kind(kind)
+                        source.activity = None
+                source.policy_revision = (policy_revisions or {}).get(i)
+                source.notification_window = (notification_windows or {}).get(i, 60)
             if self.gpu_allowed != gpu_allowed:
                 self.gpu_allowed = gpu_allowed
                 if not gpu_allowed and self.backend and self.backend.get("backend") == "gpu":
@@ -349,7 +358,9 @@ class AiSupervisor:
         starts = []
         if source.rules is not None:
             hits = source.rules.process(result, frame.captured)
-            if any(hit.record for hit in hits):
+            # An eligible match is activity regardless of the legacy per-rule
+            # toggles. The recorder's camera scenario decides what to write.
+            if hits:
                 source.activity = frame.captured
             starts.extend((hit.rule_id, hit.kind, hit.object_kinds) for hit in hits if hit.started)
         elif not source.rules_invalid:
@@ -375,7 +386,9 @@ class AiSupervisor:
                 self.reported_exhaustion = False
                 self.failures = 0
                 self.failed_at = self.next_at = self.reason = None
-        return source.policy_revision, starts
+        if source.activity == frame.captured:
+            return source.policy_revision, starts, source.notification_window
+        return None
 
     def _failure(self, reason):
         self.backend = {}

@@ -111,6 +111,8 @@ def event_payload(event):
         "occurred_at": push_timestamp(event["occurred_at"])}
     if (ai := event.get("ai")) and ai.get("condition") in {"presence", "enter", "exit", "dwell", "crossing", "scene"}:
         data["ai_condition"] = ai["condition"]
+    if event.get("camera_id") and (ai.get("snapshot_available") if ai else not event.get("clock_uncertain")):
+        data["preview"] = True  # Optional hint; the app retrieves only from its saved NAS.
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 

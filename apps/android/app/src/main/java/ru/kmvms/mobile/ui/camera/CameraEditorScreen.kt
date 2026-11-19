@@ -97,13 +97,6 @@ import org.json.JSONObject
                         CameraField(R.string.main_path,"rtsp_main_url",state,controller)
                         CameraField(R.string.sub_path,"rtsp_sub_url",state,controller)
                     }
-                    if(state.eventsSupported==true||state.draft.flag("events_enabled")||state.eventsWereEnabled)Row(verticalAlignment=Alignment.CenterVertically){
-                        Text(stringResource(R.string.receive_camera_events),modifier=Modifier.weight(1f))
-                        Switch(checked=state.draft.flag("events_enabled"),onCheckedChange={controller.change("events_enabled",it.toString())},enabled=!state.busy)
-                    }
-                    if(state.eventsWereEnabled&&!state.draft.flag("events_enabled")) {
-                        Text(stringResource(R.string.rec_camera_event_warning), style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.error)
-                    }
                 }
                 2->{
                     CameraField(R.string.camera_name,"name",state,controller)

@@ -218,15 +218,13 @@ internal fun AiRuleEditor(
                                 Text(stringResource(R.string.ai_rule_local_time), color = Muted, fontSize = 12.sp)
                             }
                         }
-                        RuleToggle(R.string.ai_rule_action_record, rule.record) { checked -> patch { it.copy(record = checked) } }
-                        RuleToggle(R.string.ai_rule_action_notify, rule.notify) { checked -> patch { it.copy(notify = checked) } }
                         TextButton(onClick = {
                             val rest = value.rules.filterNot { it.id == selected }
                             selected = rest.firstOrNull()?.id.orEmpty(); drawing = false
                             onChange(value.copy(rules = rest).takeIf { rest.isNotEmpty() })
                         }) { Text(stringResource(R.string.ai_rule_remove)) }
                     } else Text(stringResource(R.string.ai_rule_default), color = Muted, fontSize = 12.sp)
-                    draft.aiRules?.issue(draft.mode == "events")?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+                    draft.aiRules?.issue()?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
                 }
                 TextButton(onClick = close, modifier = Modifier.align(Alignment.End).testTag("ai-rule-done")) { Text(stringResource(R.string.ai_rule_done)) }
             }

@@ -61,6 +61,7 @@
     <string name="ai_rule_days_required">Choose at least one scheduled day.</string>
     <string name="ai_rule_range">Check the confidence and timing ranges.</string>
     <string name="ai_rule_view_checking_view">AI is checking the view against the setup frame.</string>
+    <string name="ai_rule_view_checking_profile">The camera profile could not be verified. Lines, zones and exclusions are not applied yet.</string>
     <string name="ai_rule_view_aligned">View confirmed. Zones and lines are applied.</string>
     <string name="ai_rule_view_view_unconfirmed">View not confirmed. Zones, lines and exclusions are paused.</string>
     <string name="ai_rule_view_invalid_rules">AI could not apply these rules. Check them in the editor.</string>

@@ -1,5 +1,6 @@
 """The new attention contract on an owned disposable PostgreSQL database."""
-from datetime import datetime
+from datetime import datetime, timedelta
+from unittest.mock import patch
 from types import SimpleNamespace
 import uuid
 
@@ -10,19 +11,21 @@ from app.services.schema_migrations import execute_migration_plan
 from test_format_schema_stage1375_postgres import format_database, business_snapshot, pytestmark
 
 
-def accept(db):
+def accept(db, at):
     camera = {"id": 1, "name": "Preserved camera"}
-    return events.record_signal(db, {"device_id": "fixture", "cameras": [camera]}, camera,
-        Signal("Motion/" + uuid.uuid4().hex, "motion", True, False, events.now_utc(), None, False, {}))
+    with patch.object(events, "now_utc", lambda: at):
+        return events.record_signal(db, {"device_id": "fixture", "cameras": [camera]}, camera,
+            Signal("Motion/" + uuid.uuid4().hex, "motion", True, False, at, None, False, {}))
 
 
 def test_muted_arrival_markers_survive_reenable_and_never_touch_the_old_backlog(format_database):
     _, db = format_database
     execute_migration_plan(db)
-    old = accept(db)
+    now = events.now_utc()
+    old = accept(db, now-timedelta(minutes=1))
     before = business_snapshot(db)
     events.save_preferences(db, 1, {"notifications": False})
-    muted = accept(db)
+    muted = accept(db, now)
     events.save_preferences(db, 1, {"notifications": True})
     page = events.list_camera_events(db, 1)
     assert page["total"] == 2 and page["unread_count"] == 1

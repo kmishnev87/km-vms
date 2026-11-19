@@ -15,6 +15,7 @@ from app.db.session import SessionLocal
 from app.models.camera import Camera
 from app.models.system_settings import SystemSettings
 from app.services.camera_event_health import HEALTH_SAMPLE_SECONDS, Recovery, publish_channel, pull_delay, record_transition
+from app.services.camera_event_settings import camera_event_reception_selected
 from app.services.camera_events import cleanup_history, record_signal, source_disconnected
 from app.services.onvif_events import EVENT_KINDS, DeviceClient, EventDeviceError, ignored_notification, kind_for, parse_notification, profile_identities, resolve_source
 from app.services.storage_operations_foundation import StorageOperationLeaseLost, acquire_worker_lease, release_worker_lease, renew_worker_lease
@@ -33,8 +34,9 @@ _owner = "camera-events:" + str(os.getpid()) + ":" + uuid.uuid4().hex
 
 
 def camera_receiving_revision(camera):
-    fields = ("protocol", "host", "port", "username", "password_encrypted", "onvif_path", "onvif_profile_token", "events_enabled")
-    return hashlib.sha256(json.dumps([getattr(camera, key, None) for key in fields]).encode()).hexdigest()
+    fields = ("protocol", "host", "port", "username", "password_encrypted", "onvif_path", "onvif_profile_token")
+    return hashlib.sha256(json.dumps([getattr(camera, key, None) for key in fields] +
+                                    [camera_event_reception_selected(camera)]).encode()).hexdigest()
 
 
 def connection_id(camera):
@@ -56,7 +58,7 @@ def connection_groups():
             group = groups.setdefault(device_id, {"device_id": device_id, "host": camera.host, "port": camera.port,
                 "username": camera.username, "password": decrypt_text(camera.password_encrypted), "onvif_path": camera.onvif_path, "cameras": []})
             group["cameras"].append({"id": camera.id, "name": camera.name, "profile_token": camera.onvif_profile_token,
-                                     "events_enabled": bool(camera.events_enabled), "revision": camera_receiving_revision(camera)})
+                                     "events_enabled": camera_event_reception_selected(camera), "revision": camera_receiving_revision(camera)})
         groups = {key: group for key, group in groups.items() if any(c["events_enabled"] for c in group["cameras"])}
         for group in groups.values():
             group["fingerprint"] = hashlib.sha256(json.dumps(group, sort_keys=True).encode()).hexdigest()
@@ -78,7 +80,7 @@ def receiver_fault_snapshots(cameras):
     now = time.monotonic()
     with _guard:
         for camera in cameras:
-            if camera.protocol != "onvif" or not camera.events_enabled:
+            if not camera_event_reception_selected(camera):
                 continue
             state = _states.get(str(camera.id)) or {}
             status = state.get("status")
@@ -204,7 +206,7 @@ class Receiver:
                 renew_worker_lease(db, lease, lease_seconds=LEASE_SECONDS, commit=False)
                 rows = db.query(Camera).filter(Camera.id.in_(ids)).order_by(Camera.id).with_for_update().all()
                 local_ids = {camera.id for camera in rows if (
-                    not camera.events_enabled or camera.deleted_at is not None
+                    not camera_event_reception_selected(camera) or camera.deleted_at is not None
                     or camera.status == "deleting" or camera.protocol != "onvif"
                     or connection_id(camera) == self.group["device_id"]
                 )}
@@ -261,6 +263,8 @@ class Receiver:
         self.client.subscribe()
         generation = uuid.uuid4().hex
         self.generation = generation
+        if not recovering:
+            self._publish(lease, "connecting", generation=generation)
         signal_group = {**group, "recording_generation": generation}
         counts = {"messages_received": 0, "messages_parsed": 0, "messages_rejected": 0,
                   "messages_ignored": 0, "messages_unsupported": 0, "events_saved": 0, "excluded_source": 0,
@@ -269,8 +273,7 @@ class Receiver:
         unclassified = {}
         supported_kinds = sorted({kind_for(topic) for topic in topics} & set(EVENT_KINDS))
         observed_kinds = set()
-        minute, accepted, dropped = time.monotonic(), 0, 0
-        next_sample = minute
+        next_sample = time.monotonic()
         while not self.stopping():
             with SessionLocal() as db:
                 renew_worker_lease(db, lease, lease_seconds=LEASE_SECONDS)
@@ -295,8 +298,6 @@ class Receiver:
                     if self.stopping():
                         break
                     counts["messages_received"] += 1
-                    if time.monotonic() - minute > 60:
-                        minute, accepted = time.monotonic(), 0
                     signal = parse_notification(message)
                     if signal is None:
                         counts["messages_ignored" if ignored_notification(message) else "messages_rejected"] += 1
@@ -320,20 +321,17 @@ class Receiver:
                         raise ReceivingConfigurationChanged
                     camera, allowed = signal_camera(group, identities, signal)
                     if allowed:
-                        history_allowed = accepted < 120 or signal.active is False
-                        dropped += int(not history_allowed)
-                        saved = record_signal(db, signal_group, camera, signal, diagnostics=counts, history_allowed=history_allowed)
+                        saved = record_signal(db, signal_group, camera, signal, diagnostics=counts)
                         counts["events_saved"] += int(saved is not None)
                     else:
                         counts["excluded_source"] += 1
-                    accepted += 1
             if counts["messages_parsed"]:
                 status = "partial_messages" if counts["messages_rejected"] else "connected"
             else:
                 status = "invalid_messages" if counts["messages_rejected"] else "waiting"
             _state(group, status, kinds=sorted(set(supported_kinds) | observed_kinds),
                    advertised_kinds=supported_kinds, observed_kinds=sorted(observed_kinds),
-                   unclassified=list(unclassified.values()), dropped=dropped, incident=self.recovery.details(), **counts)
+                   unclassified=list(unclassified.values()), dropped=0, incident=self.recovery.details(), **counts)
             self._wait_between_pulls(started, bool(messages))
 
     def _serve(self, lease):

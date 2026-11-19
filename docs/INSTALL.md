@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[1.0.3](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.3)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[1.0.4](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.4)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.3/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.3
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.4/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.4
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.3 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v1.0.4 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.3 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v1.0.4 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -115,13 +115,13 @@ Use **Settings → Language** to choose **English**, **简体中文**, or **Ру
 
 History and personal notification selection support eleven useful types: motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame. Only reported camera semantics are used. A rule can retain several object classes, and the same event can match either its rule or class filter. Clock synchronization, known service messages, and excluded abandoned/removed-object messages do not enter history. Unfamiliar signals are bounded receiver diagnostics, not generic detection spam. The camera's NTP and detection settings are not changed by these filters.
 
-Use the bell in the top navigation to open camera events. In camera setup or editing, enable **Receive camera events** under **Recording and events** after ONVIF capability confirmation. Reception is off by default for new cameras and cameras present before an upgrade; it is independent of continuous recording. One managed subscription serves each opted-in physical device. Turning reception off works even when a camera is offline and preserves its history. Camera managers can change these same shared reception switches in the event reception tab, in either the web interface or Android. This controls NAS event collection, not the camera's own detection or AI rules.
+Use the bell to open camera events. To receive ONVIF detections, choose **Camera events** as the source in **AI & Recording**. Select all or specific types under **Conditions**, for continuous or event-based recording. One managed subscription serves an opted-in physical device; reported source identifiers distinguish lenses where available. Changing the camera's source preserves its history and does not change the device's own detection settings.
 
-**Notifications** changes only your account's camera/type/time preferences. Select common hours or individual camera schedules; hours use the NAS time zone, and an interval can cross midnight. Equal start and end times mean all day. Events arriving while excluded by your preferences remain in history as viewed, without increasing your unread count or sending a push. Previously unread events keep their status when you change preferences, and muted arrivals do not become unread later. The Android **Alerts on this phone** switch controls delivery to that phone only; it does not mark NAS events viewed or change reception.
+**Notifications** changes only your account's camera and schedule preferences. Select common hours or individual camera schedules; hours use the NAS time zone, and an interval can cross midnight. Equal start and end times mean all day. Events excluded by your preferences remain in history as viewed, without increasing your unread count or sending a push. Previously unread events keep their status, and muted arrivals do not become unread later. The Android **Alerts on this phone** switch controls delivery to that phone only; it does not mark NAS events viewed or change reception.
 
 An event can open its camera's live view or available archive footage around five seconds before the event. Chronology also has event markers and previous/next navigation. Missing recordings are not created by clicking an event; brown event markers remain visible without a recording. Browser notifications require the web application to be open. Native mobile push uses a compatible provider as described below.
 
-Identical active triggers less than 45 seconds apart are suppressed in history and push delivery. Each repeat advances the sliding interval; separate cameras, rules, types and reported object classes have independent intervals. ONVIF endings are still processed, and matching activity can still extend recording.
+The first accepted detection starts an episode, without waiting for a video file. Later matching activity on that camera extends the episode, even when its type or AI rule differs, without another history row or push. With event-based recording, use the recording policy's **After** interval. With continuous recording and analytics, choose **After** in the **Alerts** profile. The camera can alert again after that many quiet minutes. This does not change personal alert preferences.
 
 Use the eye/check icon above history to mark selected events, or all retained events when none are selected. This is a personal acknowledgement, not deletion. Events arriving after the loaded list snapshot remain unviewed. The normal published updater applies the registered schema migration for the camera reception choice; no manual database editing is required.
 
@@ -156,7 +156,7 @@ Calls temporarily use the low-latency video path and preserve the saved sound/PT
 
 KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up. The standard adapter continues to use hold-to-speak.
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.15.apk** from the [1.0.3 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.3). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.16.apk** from the [1.0.4 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.4). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.

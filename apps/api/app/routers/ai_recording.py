@@ -11,6 +11,7 @@ from app.models.user import User
 from app.routers.deps import require_permission
 from app.schemas.ai_recording import EmergencyUpdate, PolicyUpdate
 from app.services import ai_recording as domain
+from app.services.ai_camera_view import view_kind
 from app.services.ai_rule_frame import (
     frame, matching_references, read_editor_image, reference_is_fresh, saved_reference, store_editor_image,
 )
@@ -66,7 +67,8 @@ def capture_editor_frame(camera_id: int, profile: Literal["none", "balanced", "f
     if not reference_is_fresh(locked, snapshot["reference"]):
         raise HTTPException(409, detail={"code": "ai_frame_reference_changed"})
     previous = saved_reference(locked)
-    snapshot["matching_saved"] = not previous or matching_references(previous, snapshot["reference"])
+    snapshot["matching_saved"] = not previous or matching_references(
+        previous, snapshot["reference"], fixed=view_kind(locked) == "fixed")
     try:
         store_editor_image(locked, snapshot)
     except (OSError, ValueError):
@@ -92,7 +94,7 @@ def retry_source(camera_id: int, source: Literal["ai", "camera"] | None = None, 
         raise HTTPException(404, detail={"code": "camera_not_found"})
     if source == "ai" or source is None and domain.ai_policy_supported(camera):
         status = domain.queue_ai_retry(db, camera_id)
-    elif camera.protocol != "onvif" or not camera.events_enabled:
+    elif not domain.camera_event_reception_selected(camera):
         raise HTTPException(409, detail={"code": "camera_event_reception_required"})
     else:
         status = retry_camera_events(camera)

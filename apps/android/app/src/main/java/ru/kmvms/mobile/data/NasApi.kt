@@ -84,7 +84,7 @@ class NasApi(val address: ServerAddress) {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
                 playbackById[item.getLong("id")]?.let { viewer ->
-                    for (key in listOf("rtsp_main_url", "rtsp_sub_url", "stream_dimensions")) {
+                    for (key in listOf("rtsp_main_url", "rtsp_sub_url", "stream_dimensions", "ai_overlay")) {
                         if (viewer.has(key)) item.put(key, viewer.get(key))
                     }
                 }

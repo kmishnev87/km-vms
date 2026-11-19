@@ -20,7 +20,6 @@ class CameraApi(private val api:NasApi) {
         return api.json("api/cameras/test","POST",draft.payload(id).put("stream_role",role).put("include_preview",role=="main")) as JSONObject
     }
     suspend fun metadata(draft:CameraDraft,id:Long?)=api.json("api/cameras/test","POST",draft.payload(id).put("stream_role","main").put("metadata_only",true).put("include_preview",false)) as JSONObject
-    suspend fun events(draft:CameraDraft,id:Long?)=(api.json("api/cameras/onvif/events/capabilities","POST",draft.payload(id)) as JSONObject).optBoolean("supported")
     suspend fun configuration(draft:CameraDraft,id:Long?,token:String)=api.json("api/cameras/onvif/profile_config","POST",draft.payload(id).put("profile_token",token)) as JSONObject
     suspend fun updateConfiguration(draft:CameraDraft,id:Long?,token:String,diff:JSONObject)=api.json("api/cameras/onvif/update_profile","POST",draft.payload(id).put("profile_token",token).put("config",diff)) as JSONObject
     suspend fun save(id:Long?,payload:JSONObject):JSONObject {

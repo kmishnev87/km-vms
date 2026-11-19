@@ -552,7 +552,17 @@ export function maintenanceBackupOperationResultText(result, t) {
   const operationResult = result?.result && typeof result.result === "object" ? result.result : {};
   const status = String(operationResult.status || result?.status || result?.state || "").trim().toLowerCase();
   const operationLabels = t.maintenanceBackupOperationLabels || {};
-  if (kind === "create") {
+  if (kind === "create" && status === "check_failed" && result?.state === "failed") {
+    const cause = t.maintenanceBackupTrialCauses?.[result.reason];
+    return {
+      kind, label: operationLabels.create || t.maintenanceBackupCreate,
+      title: t.maintenanceBackupCreated,
+      text: [t.maintenanceBackupTrialFailed || t.maintenanceBackupCheckOutcomes?.restore_failed, cause].filter(Boolean).join(" "),
+      successful: false,
+      showReason: true,
+    };
+  }
+  if (kind === "create" && !["validated", "check_failed"].includes(status)) {
     const labels = t.maintenanceBackupCreateStatuses || {};
     const created = ["ok", "created", "verified", "valid", "completed", "complete", "satisfied"].includes(status);
     const failed = ["blocked", "failed", "error", "backup_failed"].includes(status);

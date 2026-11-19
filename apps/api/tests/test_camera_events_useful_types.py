@@ -10,8 +10,8 @@ from app.models.audit_event import AuditEvent
 from app.routers import camera_events as routes
 from app.services import camera_events as events
 from app.services import onvif_events as ov
-from test_camera_events_stage172 import notification, group
-from test_stage11_retention_automation import db
+from test_camera_events_stage172 import notification, group, db
+from test_camera_events_lifecycle_stage16 import legacy_open
 
 
 USEFUL = {"motion", "person", "vehicle", "animal", "intrusion", "line_crossing",
@@ -67,13 +67,13 @@ def test_rule_and_object_class_survive_together(db):
     assert item["id"] == identifier and item["object_kind"] == "person" and item["rule_kind"] == "line_crossing"
     for kind in ("person", "line_crossing"):
         assert events.list_camera_events(db, 1, kind=kind)["total"] == 1
-        assert events.notifications_allowed({"kinds": [kind]}, item, SimpleNamespace())
-    assert not events.notifications_allowed({"kinds": ["audio"]}, item, SimpleNamespace())
+    assert events.list_camera_events(db, 1, kind="audio")["total"] == 0
+    assert events.notifications_allowed({"kinds": ["audio"]}, item, SimpleNamespace())
 
 
-def test_rule_end_without_class_flag_closes_existing_episode(db):
+def test_rule_end_without_class_flag_closes_existing_legacy_property(db):
     start = ov.parse_notification(data_items(notification(topic="RuleEngine/CellMotionDetector/Motion"), IsHuman="true"))
-    identifier = events.record_signal(db, group(), group()["cameras"][0], start)
+    identifier = legacy_open(db, start)
     end = ov.parse_notification(notification(topic="RuleEngine/CellMotionDetector/Motion", active="false"))
     assert start.kind == "person" and end.kind == "motion"
     events.record_signal(db, group(), group()["cameras"][0], end)
@@ -81,17 +81,17 @@ def test_rule_end_without_class_flag_closes_existing_episode(db):
     assert not item["active"] and item["ended_at"] and events.event_query(db).count() == 1
 
 
-def test_mixed_objects_and_late_classification_preserve_all_useful_information(db):
-    identifier = events.record_signal(db, group(), group()["cameras"][0], ov.parse_notification(notification()))
+def test_mixed_objects_in_opening_event_keep_their_filters(db):
     message = data_items(notification(), ClassTypes="Human Vehicle Animal")
     signal = ov.parse_notification(message)
     assert signal.object_kinds == ("person", "vehicle", "animal")
     classified = events.record_signal(db, group(), group()["cameras"][0], signal)
-    assert classified and classified != identifier  # A new useful class is not spam.
+    assert classified
+    assert events.record_signal(db, group(), group()["cameras"][0], ov.parse_notification(notification())) is None
     item = events.serialize(db.get(AuditEvent, classified))
     assert item["object_kinds"] == ["person", "vehicle", "animal"]
     for kind in ("motion", "person", "vehicle", "animal"):
-        assert events.list_camera_events(db, 1, kind=kind)["total"] == (2 if kind == "motion" else 1)
+        assert events.list_camera_events(db, 1, kind=kind)["total"] == 1
         assert events.notifications_allowed({"kinds": [kind]}, item, SimpleNamespace())
 
 
@@ -103,7 +103,7 @@ def test_data_only_smart_event_start_and_end_are_recognized(db, field, kind):
     start = ov.parse_notification(data_items(notification(topic="RuleEngine/SmartEvent/Alarm", active=None), **{field: "true"}))
     end = ov.parse_notification(data_items(notification(topic="RuleEngine/SmartEvent/Alarm", active=None), **{field: "false"}))
     assert start.kind == end.kind == kind and start.active is True and end.active is False
-    identifier = events.record_signal(db, group(), group()["cameras"][0], start)
+    identifier = legacy_open(db, start)
     events.record_signal(db, group(), group()["cameras"][0], end)
     assert events.serialize(db.get(AuditEvent, identifier))["ended_at"]
 
@@ -129,20 +129,19 @@ def test_excluding_missing_objects_does_not_discard_a_zone_exit_with_a_similar_w
 
 
 @pytest.mark.parametrize("kind", sorted(USEFUL))
-def test_all_new_types_round_trip_through_preferences_without_changing_camera_receiving(db, kind):
+def test_old_clients_can_send_all_known_type_names_without_adding_a_second_filter(db, kind):
     value = routes.Preferences(kinds=[kind], camera_ids=[1], notifications=True).model_dump()
-    assert events.save_preferences(db, 17, value)["kinds"] == [kind]
-    assert events.preferences(db, 17)[0]["kinds"] == [kind]
+    assert events.save_preferences(db, 17, value)["kinds"] is None
+    assert events.preferences(db, 17)[0]["kinds"] is None
 
 
-def test_full_eleven_kind_selection_can_be_saved_and_null_and_empty_stay_distinct(db):
+def test_personal_type_fields_have_one_neutral_value(db):
     value = routes.Preferences(kinds=list(ov.EVENT_KINDS)).model_dump()
-    assert events.save_preferences(db, 17, value)["kinds"] == list(ov.EVENT_KINDS)
+    assert events.save_preferences(db, 17, value)["kinds"] is None
     for kinds in (None, [], ["other"]):
-        expected = [] if kinds == ["other"] else kinds
         saved = events.save_preferences(db, 17, routes.Preferences(kinds=kinds).model_dump())
-        assert saved["kinds"] == expected
-        assert events.preferences(db, 17)[0]["kinds"] == expected
+        assert saved["kinds"] is None
+        assert events.preferences(db, 17)[0]["kinds"] is None
 
 
 def test_unknown_alarm_is_not_clock_noise_but_does_not_become_generic_history(db):

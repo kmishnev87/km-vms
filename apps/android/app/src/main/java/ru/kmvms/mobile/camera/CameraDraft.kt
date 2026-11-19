@@ -12,7 +12,6 @@ class CameraDraft private constructor(private val fields: Map<String,String>) {
         if(key=="host" && this["protocol"]=="onvif" && this["rtsp_host"] in listOf("",this["host"]))next["rtsp_host"]=value
         if(key=="protocol") {
             next["port"]=if(value=="onvif")"80" else "554"
-            next["events_enabled"]="false"
             listOf("onvif_path","onvif_profile_token","onvif_sub_profile_token","onvif_channel_id","rtsp_main_url","rtsp_sub_url").forEach{next[it]=""}
         }
         return CameraDraft(next)
@@ -40,8 +39,8 @@ class CameraDraft private constructor(private val fields: Map<String,String>) {
     companion object {
         val connectionFields=setOf("protocol","host","port","username","password","rtsp_host","rtsp_port","rtsp_transport","rtsp_main_url","rtsp_sub_url","onvif_path","onvif_profile_token","onvif_sub_profile_token","onvif_channel_id")
         private val integerFields=setOf("port","rtsp_port","segment_minutes","retention_days","storage_quota_gb")
-        private val booleanFields=setOf("enabled","events_enabled")
-        private val defaults=mapOf("name" to "","enabled" to "true","events_enabled" to "false","protocol" to "onvif",
+        private val booleanFields=setOf("enabled")
+        private val defaults=mapOf("name" to "","enabled" to "true","protocol" to "onvif",
             "host" to "","port" to "80","username" to "","password" to "","rtsp_main_url" to "","rtsp_sub_url" to "",
             "rtsp_host" to "","rtsp_port" to "554","rtsp_transport" to "tcp","onvif_path" to "","onvif_profile_token" to "",
             "onvif_sub_profile_token" to "","onvif_channel_id" to "","recording_mode" to "always","default_live_stream" to "sub",

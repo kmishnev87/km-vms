@@ -94,6 +94,8 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
     var selectedId by rememberSaveable { mutableStateOf(initial?.cameraId) }
     LaunchedEffect(initial?.key) { initial?.let { selectedId = it.cameraId } }
     var requestedFullscreen by rememberSaveable { mutableStateOf(false) }
+    var aiVisible by rememberSaveable(profileId) { mutableStateOf(listOf<Long>()) }
+    fun toggleAi(id: Long) { aiVisible = if (id in aiVisible) aiVisible - id else aiVisible + id }
     var dismissedLandscapeFullscreen by rememberSaveable { mutableStateOf(false) }
     val selected = cameras.find { it.id == selectedId }
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -144,10 +146,15 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(viewingCameras, key = { it.id }) { camera ->
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).testTag("live-tile-${camera.id}")) {
-                    CameraVideo(sessions[camera.id], Modifier.fillMaxSize(), crop = true, onTap = { selectedId = camera.id })
+                    val showAi = camera.id in aiVisible
+                    var aiStatus by remember(camera.aiOverlay, showAi) { mutableStateOf(LiveAiStatus.WAITING) }
+                    CameraVideo(sessions[camera.id], Modifier.fillMaxSize(), crop = true, onTap = { selectedId = camera.id },
+                        aiOverlay = camera.aiOverlay.takeIf { showAi }, onAiStatus = { aiStatus = it })
                     val video = sessions[camera.id]?.state?.collectAsStateWithLifecycle()?.value
                     LiveCameraCaption(camera.name, video?.hlsFallback == true,
                         Modifier.align(Alignment.CenterStart).testTag("live-name-${camera.id}"))
+                    if (camera.aiOverlay != null) LiveAiToggle(showAi, { toggleAi(camera.id) },
+                        Modifier.align(Alignment.TopStart).padding(6.dp).background(Color(0xB3233044), RoundedCornerShape(8.dp)), aiStatus)
                 }
             }
         }
@@ -159,7 +166,7 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
             { dismissedLandscapeFullscreen = false; requestedFullscreen = true }, closeDetail, onMessage, mayTalk,
             onCameraSwipe = if (selected.id in viewingIds && viewingIds.size > 1) { step ->
                 adjacentCamera(viewingIds, selected.id, step)?.let { selectedId = it }
-            } else null) }
+            } else null, showAi = selected.id in aiVisible, toggleAi = { toggleAi(selected.id) }) }
     }
     if (choosing && singleId == null) LiveCameraPicker(cameras, viewingIds, { choosing = false }) { ids ->
         savedOrder = ids; preferences.save(profileId, ids); choosing = false

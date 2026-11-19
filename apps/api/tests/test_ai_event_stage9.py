@@ -64,14 +64,16 @@ def api(monkeypatch, tmp_path):
     engine.dispose()
 
 
-def offer(api, *, rule="gate", condition="exit", objects=("vehicle",), revision=2, second=0, received=None, jpeg=b"", identifier=None):
+def offer(api, *, rule="gate", condition="exit", objects=("vehicle",), revision=2, second=0, received=None,
+          jpeg=b"", identifier=None, progress=False):
     _, factory, _ = api
     identifier = identifier or uuid.uuid4()
     path = history.root() / "inbox" / (identifier.hex + ".evt")
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = UTC_NOW + timedelta(seconds=second)
-    path.write_bytes(json.dumps({"v": 1, "camera_id": 7, "revision": revision, "captured": stamp.timestamp(),
-                                "rule_id": rule, "condition": condition, "objects": objects}).encode() + b"\n" + jpeg)
+    packet = {"v": 2 if progress else 1, "camera_id": 7, "revision": revision, "captured": stamp.timestamp()}
+    packet.update({"progress": True} if progress else {"rule_id": rule, "condition": condition, "objects": objects})
+    path.write_bytes(json.dumps(packet).encode() + b"\n" + jpeg)
     with factory() as db:
         accepted = history.ingest(db, path, received=received or stamp.replace(tzinfo=None))
     return str(identifier), accepted
@@ -85,17 +87,21 @@ def test_events_use_shared_inbox_filters_and_personal_preferences(api):
     state["user"] = 1
     loud, ok = offer(api, objects=("vehicle","person"))
     assert ok
-    quiet, ok = offer(api, rule="quiet", condition="presence", objects=("person",), second=5)
-    assert ok
+    assert not offer(api, rule="quiet", condition="presence", objects=("person",), second=5)[1]
     assert not offer(api, revision=1)[1]
     assert not offer(api, objects=("animal",))[1]
     assert not offer(api, second=25, objects=("vehicle","person"))[1]
     assert not offer(api, second=55, objects=("vehicle","person"))[1]
     assert not offer(api, second=57, identifier=uuid.UUID(loud))[1]
-    assert offer(api, second=103, objects=("vehicle","person"))[1]
+    assert not offer(api, progress=True, second=114)[1]  # Same episode, no new alert.
+    assert not offer(api, progress=True, second=113)[1]  # A delayed pulse cannot shorten the window.
+    assert not offer(api, progress=True, second=174, revision=1)[1]
+    quiet, ok = offer(api, rule="quiet", condition="presence", objects=("person",), second=174)
+    assert ok
+    assert offer(api, second=234, objects=("vehicle","person"))[1]
     page = client.get("/camera-events", params={"source": "ai", "rule": "въезда", "kind": "person",
-        "condition": "exit", "until": (UTC_NOW + timedelta(seconds=102)).isoformat()}).json()
-    assert [item["id"] for item in page["items"]] == [loud] and page["unread_count"] == 2
+        "condition": "exit", "until": (UTC_NOW + timedelta(seconds=233)).isoformat()}).json()
+    assert [item["id"] for item in page["items"]] == [loud] and page["unread_count"] == 3
     result = client.post("/camera-events/selections", json={"source":"ai", "rule":"Ворота", "condition":"presence",
                          "through":page["read_cursor"], "visible_ids":[quiet]})
     assert result.status_code == 200 and result.json()["visible_ids"] == [quiet] and result.json()["count"] == 1
@@ -107,8 +113,32 @@ def test_events_use_shared_inbox_filters_and_personal_preferences(api):
         item = events.serialize(db.get(AuditEvent, loud))
         assert json.loads(mobile_push.event_payload(item))["ai_condition"] == "exit"
         assert "snapshot" not in mobile_push.event_payload(item)
-        muted = events.serialize(db.get(AuditEvent, quiet))
-        assert muted["read"] and not events.notifications_allowed({}, muted, None)
+        item = events.serialize(db.get(AuditEvent, quiet))
+        assert item["ai"]["notify_requested"] and events.notifications_allowed({}, item, None)
+        assert not events.automatic_read_ids(db, 1, [quiet])
+        assert events.automatic_read_ids(db, 2, [loud, quiet]) == {loud, quiet}
+        assert db.get(AuditEvent, quiet).event_metadata["ai_record"] is False
+
+
+def test_event_scenario_delivers_legacy_disabled_rule_without_changing_older_read_state(api):
+    client, factory, _ = api
+    old, ok = offer(api, rule="quiet", condition="presence", objects=("person",))
+    assert ok
+    with factory() as db:
+        older_row = db.get(AuditEvent, old)
+        older_row.event_metadata = {**older_row.event_metadata, "ai_notify": False}
+        camera = db.get(Camera, 7)
+        config = camera.recording_policy["ai_rules"]
+        camera.recording_policy = {**camera.recording_policy, "revision": 3, "mode": "events", "profile": "full_quality",
+            "prebuffer_seconds": 30, "postrecord_minutes": 2, "event_kinds": ["person"], "ai_rules": config}
+        db.commit()
+    newer, ok = offer(api, rule="quiet", condition="presence", objects=("person",), second=61, revision=3)
+    assert ok
+    with factory() as db:
+        assert db.get(AuditEvent, newer).event_metadata["ai_record"] is True
+        assert db.get(AuditEvent, newer).event_metadata["ai_notify"] is True
+    rows = {item["id"]: item for item in client.get("/camera-events").json()["items"]}
+    assert rows[old]["read"] and not rows[newer]["read"]
 
 
 @pytest.fixture
@@ -202,6 +232,34 @@ def test_real_keyframe_handoff_off_the_recording_thread(api):
         assert history.ingest(db, path, received=NOW)
     camera_snapshot = client.get(f"/camera-events/{uuid.UUID(hex=path.stem)}/snapshot")
     assert camera_snapshot.content == jpeg
+
+
+def test_outbox_coalesces_sustained_positives_and_preserves_first_rule(api, monkeypatch):
+    from recorder_core import ai_event_outbox as outbox_module
+
+    monkeypatch.setattr(outbox_module, "isolated_thumbnail", lambda _: b"")
+    monkeypatch.setattr(outbox_module, "PROGRESS_INTERVAL", 3600)
+    outbox = outbox_module.AiEventOutbox(history.root())
+    start = UTC_NOW.timestamp()
+    gate = ("gate", "exit", ("vehicle",))
+    quiet = ("quiet", "presence", ("person",))
+
+    def send(second, matches):
+        outbox.offer(SimpleNamespace(camera=7, captured=start + second), 2, matches)
+
+    send(0, [gate, quiet])
+    send(20, [quiet])
+    send(40, [])  # Sustained activity without a second rule start.
+    deadline = time.monotonic() + 4
+    while not list(outbox.root.glob("*.evt")) and time.monotonic() < deadline:
+        time.sleep(.02)
+    send(100, [quiet])  # Exactly sixty seconds since the last positive.
+    outbox.stop()
+    paths = list(outbox.root.glob("*.evt"))
+    packets = [history._read(path)[0] for path in history._queued_events([(start, path) for path in reversed(paths)])]
+    assert [p["captured"] - start for p in packets] == [0, 40, 100]
+    assert packets[0]["rule_id"] == "gate" and packets[1]["progress"] is True
+    assert packets[2]["rule_id"] == "quiet"
 
 
 def test_old_snapshot_is_linked_if_long_segment_finalizes_late_or_is_already_deleted(api, jpeg):

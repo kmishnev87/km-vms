@@ -845,6 +845,7 @@ def dry_run_restore_maintenance(
         "availability_status": verification.get("availability_status") or "unsafe",
         "integrity_status": verification.get("integrity_status") or "failed",
         "target_kind": target_kind,
+        "target_reason": target.get("reason") if status != "valid" else None,
         "requires_current_backup": bool(target.get("requires_current_backup")),
         "temporary_validation_restore_supported": bool(target.get("temporary_validation_restore_supported", target_kind == TARGET_TEMPORARY_VALIDATION_DB and target.get("status") == "safe")),
         "temporary_validation_target": target.get("temporary_validation_target"),
@@ -1067,6 +1068,13 @@ def run_backup_validation_operation(
     if replayed:
         return safe_receipt(receipt, replayed=True)
 
+    return validate_backup_receipt(db, receipt, artifact_id, actor=actor, root=root)
+
+
+def validate_backup_receipt(
+    db: Session, receipt: dict[str, Any], artifact_id: str, *, actor: Any, root: Path,
+) -> dict[str, Any]:
+    """Validate the exact artifact under an admitted create or manual check receipt."""
     receipt = update_backup_operation(
         receipt,
         state="running",
@@ -1135,7 +1143,8 @@ def run_backup_validation_operation(
                 reason_code=(
                     "integrity_failed"
                     if verification.get("integrity_status") != "verified"
-                    else str(compatibility.get("compatibility_status") or "check_blocked")
+                    else str((compatibility.get("compatibility_status") if compatibility.get("compatibility_status") != "compatible"
+                              else preflight.get("target_reason")) or "check_blocked")
                 ),
                 result=result,
                 backup_root=root,

@@ -40,7 +40,12 @@
     <string name="rec_ai_device">模型：%1$s。设备：%2$s。</string>
     <string name="rec_ai_version">版本：%1$s。运行时：%2$s。</string>
     <string name="rec_retry_ai">重启 AI</string>
-    <string name="rec_event_requires">请先在此 ONVIF 摄像机的设置中启用事件接收。</string>
+    <string name="rec_event_requires">需要 ONVIF 连接。保存「摄像机事件」来源后将启用订阅。</string>
+    <string name="live_ai_contours">AI 线条和区域</string>
+    <string name="live_ai_waiting">等待画面</string>
+    <string name="live_ai_uncalibrated">请在 AI 设置中刷新画面</string>
+    <string name="live_ai_mismatch">无法确认摄像机视角</string>
+    <string name="live_ai_profile_unknown">无法确认摄像机配置</string>
     <string name="rec_event_unsupported">此摄像机未通过 ONVIF 连接，无法按自身事件录像。</string>
     <string name="rec_source">来源摄像机</string>
     <string name="rec_source_choose">选择来源</string>
@@ -58,6 +63,9 @@
     <string name="rec_prehistory_ready">可用：%1$d 秒</string>
     <string name="rec_prehistory_limit">可用预录受内存限制。</string>
     <string name="rec_postrecord">最后一次事件后的分钟数</string>
+    <string name="rec_alert_profile">提醒</string>
+    <string name="rec_alert_quiet">后，分钟</string>
+    <string name="rec_alert_quiet_help">在这段静默时间后，新事件可发出新的提醒。连续录像不受影响。</string>
     <string name="rec_event_types">触发录像的事件</string>
     <string name="rec_event_all">所有事件类型</string>
     <string name="rec_event_count">已选类型：%1$d</string>

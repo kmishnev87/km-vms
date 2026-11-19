@@ -64,19 +64,6 @@ class EventsApiTest {
         assertEquals(baseline.cameraSchedules, baseline.copy(perCameraHours = false).cameraSchedules)
     }
 
-    @Test fun receivingUsesOnlyTheExistingSharedCameraSetting() = runBlocking {
-        MockWebServer().use { server ->
-            server.enqueue(MockResponse().setBody("{}"))
-            client(server).receiving(42, false)
-            val request = server.takeRequest()
-            assertEquals("PUT", request.method)
-            assertEquals("/api/cameras/42", request.path)
-            val body = JSONObject(request.body.readUtf8())
-            assertEquals(setOf("events_enabled"), body.keys().asSequence().toSet())
-            assertFalse(body.getBoolean("events_enabled"))
-        }
-    }
-
     @Test fun invalidIndividualHoursCannotBeCreated() {
         for (minutes in listOf(-1, 1440)) try { EventHours(minutes, 0); fail("must reject invalid time") }
         catch (_: IllegalArgumentException) { }

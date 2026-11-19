@@ -33,8 +33,14 @@ def api():
         db.add(User(id=1,username="test-viewer",password_hash="test-only",role="viewer",is_active=True))
         db.add(Camera(id=1,name="Front",storage_folder_name="front",host="192.0.2.1",port=554,protocol="rtsp",enabled=True))
         db.commit()
-        group={"device_id":"device","cameras":[{"id":1,"name":"Front","profile_token":"p"}]}
-        identifier=domain.record_signal(db,group,group["cameras"][0],Signal("Motion","motion",True,False,datetime.now(timezone.utc).replace(tzinfo=None),None,True,{}))
+        # A historical event received before the current session. Read, target,
+        # and deletion tests do not have to wait for the next camera episode.
+        identifier=str(uuid.uuid4())
+        stamp=datetime.now(timezone.utc).replace(tzinfo=None)-timedelta(minutes=15)
+        db.add(AuditEvent(id=identifier,created_at=stamp,category=domain.CATEGORY,event_type="camera.motion",
+            severity="info",message_ru="",message_en="",target_type="camera",target_id="1",target_name="Front",
+            event_metadata={"occurred_at":stamp.isoformat()+"Z","clock_uncertain":True}))
+        db.commit()
     application=FastAPI();application.include_router(routes.router)
     def database():
         with factory() as db:
@@ -85,15 +91,15 @@ def test_read_and_preferences_are_idempotent_and_separate(api):
     assert client.put("/camera-events/preferences",json={"notifications":False,"recording_mode":"off"}).status_code==422
 
 
-def test_all_eleven_preferences_pass_real_api_validation_without_resetting_camera_or_recording(api):
+def test_legacy_type_preferences_are_accepted_but_ignored_without_changing_camera_or_recording(api):
     from app.services.onvif_events import EVENT_KINDS
     client, factory, _, _ = api
     with factory() as db:
         before = (db.get(Camera, 1).enabled, db.get(Camera, 1).events_enabled)
     for kinds in (list(EVENT_KINDS), list(EVENT_KINDS)[:-1], [], None):
         response = client.put("/camera-events/preferences", json={"notifications": False, "kinds": kinds})
-        assert response.status_code == 200 and response.json()["kinds"] == kinds
-        assert client.get("/camera-events/preferences").json()["kinds"] == kinds
+        assert response.status_code == 200 and response.json()["kinds"] is None
+        assert client.get("/camera-events/preferences").json()["kinds"] is None
     with factory() as db:
         assert (db.get(Camera, 1).enabled, db.get(Camera, 1).events_enabled) == before
     assert client.get("/camera-events").json()["total"] == 1
@@ -228,9 +234,12 @@ def test_capability_read_and_opt_in_writes_require_camera_management(api, monkey
     assert reader == [True]
 
 
-def test_saved_receiving_choice_can_toggle_without_changing_recording_and_without_network_when_off(api, monkeypatch):
+def test_center_owns_subscription_and_legacy_editor_cannot_override_it(api, monkeypatch):
+    from app.routers import ai_recording
+
     client, factory, _, app = api
     app.include_router(camera_routes.router)
+    app.include_router(ai_recording.router)
     with factory() as db:
         db.get(User, 1).role = "admin"
         camera = db.get(Camera, 1)
@@ -241,13 +250,17 @@ def test_saved_receiving_choice_can_toggle_without_changing_recording_and_withou
         db.commit()
     calls = []
     monkeypatch.setattr(camera_event_settings, "read_event_capabilities", lambda **kwargs: calls.append(True) or {"supported": True})
-    on = client.put("/cameras/1", json={"events_enabled": True})
+    def select(source, revision):
+        return client.put("/ai-recording/cameras/1", json={"expected_revision": revision,
+            "policy": {"mode": "continuous", "source": source}})
+    before = client.put("/cameras/1", json={"events_enabled": True})
+    assert before.status_code == 200 and before.json()["events_enabled"] is False
+    on = select("camera", 0)
     assert on.status_code == 200 and on.json()["events_enabled"] is True
-    assert on.json()["enabled"] is True
-    assert calls == [True]
-    renamed = client.put("/cameras/1", json={"name": "Renamed"})
+    assert on.json()["recording_enabled"] is True
+    renamed = client.put("/cameras/1", json={"name": "Renamed", "events_enabled": False})
     assert renamed.status_code == 200 and renamed.json()["events_enabled"] is True
-    off = client.put("/cameras/1", json={"events_enabled": False})
+    off = select("none", 1)
     assert off.status_code == 200 and off.json()["events_enabled"] is False
-    assert off.json()["enabled"] is True and calls == [True]
+    assert off.json()["recording_enabled"] is True and calls == []
     assert client.get("/camera-events").json()["total"] == 1

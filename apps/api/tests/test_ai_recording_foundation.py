@@ -101,17 +101,17 @@ def test_role_enforcement_is_server_side(env, role, status):
     assert client.put("/ai-recording/emergency", json={"expected_enabled": False, "enabled": True}).status_code == status
 
 
-def test_retry_uses_explicit_source_on_camera_with_both_ai_and_subscription(env, monkeypatch):
+def test_retry_uses_only_the_selected_source(env, monkeypatch):
     client, _ = env
     assert prepare(client, policy={"mode": "continuous", "source": "ai", "profile": "none"}).status_code == 200
     calls = []
     monkeypatch.setattr(editor_router, "retry_camera_events", lambda camera: calls.append(("camera", camera.id)) or "queued")
     monkeypatch.setattr(domain, "queue_ai_retry", lambda db, cid: calls.append(("ai", cid)) or "queued")
     path = "/ai-recording/cameras/1/retry"
-    assert client.post(path + "?source=camera").json() == {"status": "queued"}
+    assert client.post(path + "?source=camera").status_code == 409
     assert client.post(path + "?source=ai").json() == {"status": "queued"}
     assert client.post(path).json() == {"status": "queued"}  # previously installed client
-    assert calls == [("camera", 1), ("ai", 1), ("ai", 1)]
+    assert calls == [("ai", 1), ("ai", 1)]
 
 
 def test_web_rule_frame_is_saved_with_policy_and_reopens_without_camera_io(env, monkeypatch, tmp_path):
@@ -153,7 +153,14 @@ def test_web_rule_frame_is_saved_with_policy_and_reopens_without_camera_io(env, 
     assert prepare(client, policy=policy, revision=1).status_code == 200  # still editable on the exact saved frame
     assert client.get(base + "/saved").json() == latest
     with factory() as db:
-        assert "image" not in db.get(Camera, 1).recording_policy["ai_rules"]
+        camera = db.get(Camera, 1)
+        assert "image" not in camera.recording_policy["ai_rules"]
+        overlay = domain.live_rule_overlay(camera)
+        assert overlay["shapes"] == [{"line": False, "points": [[150, 200], [800, 200], [800, 800]]}]
+        assert overlay["view"]["ratio"] == 1778
+        assert latest["reference"] not in json.dumps(overlay)
+        camera.rtsp_main_url = "rtsp://example.invalid/changed"
+        assert domain.live_rule_overlay(camera)["view"] is None
 
 
 @pytest.mark.parametrize("policy", [
@@ -290,17 +297,38 @@ def test_history_suppression_and_muted_attention_do_not_suppress_activity(env, m
         assert db.get(Camera, 1).recording_signal_state["last_activity_at"] == domain.iso(clock[0])
 
 
-def test_history_budget_never_discards_control_signal(env, monkeypatch):
+@pytest.mark.parametrize("mode", ["continuous", "events"])
+def test_camera_types_are_one_source_filter_for_both_recording_scenarios(env, monkeypatch, mode):
     client, factory = env
-    prepare(client)
+    policy = {"mode": mode, "source": "camera", "event_kinds": ["person"]}
+    if mode == "events":
+        policy.update(profile="full_quality", prebuffer_seconds=30)
+    assert prepare(client, policy=policy).status_code == 200
     monkeypatch.setattr(history, "now_utc", lambda: NOW)
     with factory() as db:
-        assert history.record_signal(db, GROUP, GROUP["cameras"][0], camera_signal(), history_allowed=False) is None
+        # An old APK can still send the former type filter; it cannot override
+        # the chosen types of this camera or suppress an allowed notification.
+        saved = history.save_preferences(db, 1, {"notifications": True, "kinds": ["vehicle"]})
+        assert saved["kinds"] is None
+        assert history.record_signal(db, GROUP, GROUP["cameras"][0], camera_signal()) is None
         assert history.event_query(db).count() == 0
-        assert db.get(Camera, 1).recording_signal_state["last_activity_at"] == domain.iso(NOW)
+        assert not db.get(Camera, 1).recording_signal_state
+        # Some physical cameras classify the object after the generic start.
+        identifier = history.record_signal(db, GROUP, GROUP["cameras"][0],
+            camera_signal(object_kind="person", object_kinds=("person",)))
+        assert identifier
+        assert history.list_camera_events(db, 1, kind="person")["unread_count"] == 1
+        if mode == "events":
+            assert db.get(Camera, 1).recording_signal_state["last_activity_at"] == domain.iso(NOW)
+        else:
+            assert "last_activity_at" not in db.get(Camera, 1).recording_signal_state
+        # A classless end is consumed without ending the shared activity window.
+        assert history.record_signal(db, GROUP, GROUP["cameras"][0],
+            dataclasses.replace(camera_signal(1), active=False)) is None
+        assert history.serialize(db.get(AuditEvent, identifier))["active"] is True
 
 
-def test_source_opt_out_retires_old_history_after_worker_configuration_changes(env, monkeypatch):
+def test_source_opt_out_preserves_opening_history_and_does_not_rearm(env, monkeypatch):
     from app.services import camera_events_worker as worker
     _, factory = env
     monkeypatch.setattr(worker, "SessionLocal", factory)
@@ -317,7 +345,8 @@ def test_source_opt_out_retires_old_history_after_worker_configuration_changes(e
     worker.Receiver(group)._disconnect(SimpleNamespace())
     with factory() as db:
         metadata = db.get(AuditEvent, event).event_metadata
-        assert metadata["active"] is None and metadata["state_unconfirmed"]
+        assert metadata["alert_episode_until"] == NOW.replace(tzinfo=timezone.utc).timestamp() + 60
+        assert not metadata.get("state_unconfirmed")
 
 
 def test_actual_receiver_passes_activity_after_120_history_messages(env, monkeypatch):
@@ -362,7 +391,8 @@ def test_actual_receiver_passes_activity_after_120_history_messages(env, monkeyp
         state = db.get(Camera, 1).recording_signal_state
         assert state["last_activity_at"] == domain.iso(NOW + timedelta(seconds=12.7))
         assert state["source_confirmed"] is False
-    assert worker.receiver_states()["1"]["dropped"] == 8
+    assert worker.receiver_states()["1"]["dropped"] == 0
+    assert worker.receiver_states()["1"]["messages_suppressed"] == 127
 
 
 def test_initialized_stale_replayed_unknown_and_ambiguous_signals_cannot_extend(env):

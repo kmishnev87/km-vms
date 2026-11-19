@@ -13,8 +13,11 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.system_settings import SystemSettings
 from app.schemas.ai_recording import DetectionEvidence, RecordingPolicy, RecordingSignal
+from app.services.ai_camera_view import spatial_ai, view_kind, wake as wake_ai_view
 from app.services.ai_rule_frame import matching_references, read_editor_image, reference_is_fresh, verified_reference
 from app.services.audit_log import create_event
+from app.services.camera_alert_episodes import MEMBERS as ALERT_MEMBERS, settings_from as alert_minutes
+from app.services.camera_event_settings import camera_event_reception_selected
 from app.services.onvif_events import EVENT_KINDS
 
 POLICY_VERSION = 1
@@ -38,7 +41,7 @@ def effective_policy(camera):
     stored = camera.recording_policy
     if stored is None:
         return {"schema_version": POLICY_VERSION, "revision": 0, **RecordingPolicy(
-            source="camera" if camera.events_enabled else "none").model_dump(exclude={"ai_rules"})}
+            source="camera" if camera_event_reception_selected(camera) else "none").model_dump(exclude={"ai_rules"})}
     if not isinstance(stored, dict) or stored.get("schema_version") != POLICY_VERSION:
         raise HTTPException(409, detail={"code": "recording_policy_version_unsupported"})
     policy = RecordingPolicy.model_validate({k: v for k, v in stored.items() if k not in {"schema_version", "revision"}})
@@ -106,7 +109,8 @@ def reset_recording_cutoff(db, camera, *, keep_channel):
         Camera.id == camera.id).with_for_update().one()
     if not isinstance(policy, dict) or policy.get("mode") not in ("events", "linked"):
         return
-    cutoff = {"recording_cutoff_at": iso(datetime.now(timezone.utc))}
+    cutoff = {"recording_cutoff_at": iso(datetime.now(timezone.utc)),
+              **{key: state[key] for key in ALERT_MEMBERS if state and key in state}}
     if keep_channel and state and state.get("channel"):
         cutoff["channel"] = state["channel"]
     camera.recording_signal_state = cutoff
@@ -137,7 +141,7 @@ def camera_rows(db, cameras):
         link = view.get("link") or {}
         if link.get("source_event_status") in SOURCE_FAULTS:
             origin = sources.get(link.get("origin_camera_id"))
-            if origin is not None and origin.enabled and event_policy_supported(origin) and origin.events_enabled:
+            if origin is not None and origin.enabled and event_policy_supported(origin) and camera_event_reception_selected(origin):
                 attach_recovery(view, origin, link["source_event_status"])
             elif origin is not None and origin.enabled and ai_policy_supported(origin):
                 source_view = (origin.recording_signal_state or {}).get("recorder") or {}
@@ -153,7 +157,7 @@ def attach_recovery(runtime, camera, phase):
     if channel.get("policy_revision") != camera.recording_policy.get("revision"):
         return
     runtime["incident"] = channel.get("incident")
-    if phase == "exhausted" and channel.get("phase") == "exhausted" and camera.events_enabled:
+    if phase == "exhausted" and channel.get("phase") == "exhausted" and camera_event_reception_selected(camera):
         runtime["retry_camera_id"] = camera.id
 
 
@@ -239,9 +243,12 @@ def camera_row(camera, evidence=None, *, storage_suspended=False):
             runtime["link"]["source_recording_confirmed"] = bool(link.get("source_recording_confirmed"))
             runtime["link"]["postrecord_inherited"] = True
     runtime["actual_status"] = actual_status(camera, runtime, evidence, storage_suspended=storage_suspended)
+    policy = effective_policy(camera)
     return {"camera_id": camera.id, "name": camera.name, "recording_enabled": bool(camera.enabled),
             "record_stream": camera.default_record_stream, "live_stream": camera.default_live_stream,
-            "protocol": camera.protocol, "events_enabled": bool(camera.events_enabled), "policy": effective_policy(camera),
+            "protocol": camera.protocol, "events_enabled": camera_event_reception_selected(camera),
+            "camera_events_available": camera.protocol == "onvif", "policy": policy,
+            "alert_quiet_minutes": alert_minutes(policy) if policy["mode"] == "continuous" else alert_minutes(None),
             "signal": {key: state.get(key) for key in ("last_activity_at", "last_observed_at", "capacity_limited")},
             "runtime": runtime}
 
@@ -253,6 +260,24 @@ def spatial_geometry(rules):
                           for item in rules["rules"] if item["points"]))
     exclusions = tuple(tuple(polygon) for polygon in rules["exclusions"])
     return points, exclusions
+
+
+def live_rule_overlay(camera):
+    """Read-only geometry for authorized Live viewers; no draft, media URL or image."""
+    if not ai_policy_supported(camera):
+        return None
+    rules = camera.recording_policy.get("ai_rules")
+    if not isinstance(rules, dict):
+        return None
+    shapes = [{"line": item["kind"] == "crossing", "points": item["points"]}
+              for item in rules.get("rules", []) if isinstance(item, dict) and item.get("kind") != "scene"
+              and len(item.get("points") or []) >= (2 if item.get("kind") == "crossing" else 3)]
+    shapes.extend({"mask": True, "points": polygon} for polygon in rules.get("exclusions", []) if len(polygon) >= 3)
+    if not shapes:
+        return None
+    anchor = verified_reference(camera, rules.get("reference"))
+    return {"shapes": shapes, "view": {"ratio": anchor["ratio"], "edges": anchor["edges"],
+                                       "mode": view_kind(camera)} if anchor else None}
 
 
 def save_policy(db, camera_id, payload, actor):
@@ -267,6 +292,13 @@ def save_policy(db, camera_id, payload, actor):
     if payload.expected_revision != current["revision"]:
         raise HTTPException(409, detail={"code": "recording_policy_changed"})
     proposed = payload.policy.model_dump()
+    if proposed["mode"] == "continuous":
+        # Store the interval using the existing, rollback-compatible duration
+        # slot. The continuous writer never uses it to time recording.
+        proposed["postrecord_minutes"] = (
+            payload.alert_quiet_minutes if payload.alert_quiet_minutes is not None
+            else alert_minutes(current if current["mode"] == "continuous" else None)
+        ) if proposed["source"] != "none" else alert_minutes(None)
     previous_rules = current.get("ai_rules")
     if "ai_rules" not in payload.policy.model_fields_set:
         # Older clients must not clear the configuration on unrelated edits.
@@ -275,8 +307,6 @@ def save_policy(db, camera_id, payload, actor):
     if rules is None:
         proposed.pop("ai_rules", None)
     else:
-        if proposed["source"] == "ai" and proposed["mode"] == "events" and not any(item["record"] for item in rules["rules"]):
-            raise HTTPException(422, detail={"code": "ai_record_rule_required"})
         shape, old_shape = spatial_geometry(rules), spatial_geometry(previous_rules)
         anchor, old_anchor = rules["reference"], (previous_rules or {}).get("reference")
         same_anchor = old_anchor == anchor
@@ -291,12 +321,12 @@ def save_policy(db, camera_id, payload, actor):
             # A legacy token without an image still needs a new frame after expiry.
             if same_anchor and not reference_is_fresh(camera, anchor) and read_editor_image(camera, anchor) is None:
                 raise HTTPException(409, detail={"code": "ai_frame_reference_required"})
-            if old_anchor and not same_anchor and not matching_references(old_anchor, anchor):
+            if old_anchor and not same_anchor and not matching_references(old_anchor, anchor, fixed=view_kind(camera) == "fixed"):
                 if any(set(a) & set(b) for a, b in zip(old_shape, shape)):
                     raise HTTPException(409, detail={"code": "ai_frame_reference_changed"})
     if proposed["source"] == "ai" and "event_kinds" not in payload.policy.model_fields_set:
         proposed["event_kinds"] = ["person", "vehicle", "animal"]
-    if proposed["source"] == "camera" and (camera.protocol != "onvif" or not camera.events_enabled):
+    if proposed["source"] == "camera" and camera.protocol != "onvif":
         raise HTTPException(409, detail={"code": "camera_event_reception_required"})
     next_id = proposed["linked_camera_id"]
     seen = {camera_id}
@@ -310,15 +340,19 @@ def save_policy(db, camera_id, payload, actor):
         next_id = effective_policy(target)["linked_camera_id"]
     previous = {k: v for k, v in current.items() if k not in {"schema_version", "revision"}}
     activate_continuous = proposed["mode"] == "continuous" and camera.recording_mode != "always"
-    if previous == proposed and not activate_continuous:
+    incoming = proposed["source"] == "camera" and proposed["mode"] in {"continuous", "events"}
+    if previous == proposed and not activate_continuous and bool(camera.events_enabled) == incoming:
         return camera_rows(db, [camera])[0]
     camera.recording_policy = {"schema_version": POLICY_VERSION, "revision": current["revision"] + 1, **proposed}
+    camera.events_enabled = incoming  # Wire compatibility only; ingestion reads the source.
     if activate_continuous:
         # Apply an explicit editor choice, not an install-time migration.
         # The independent camera pause (enabled) is deliberately unchanged.
         camera.recording_mode = "always"
     # A new rule/source generation cannot reuse stale activity from its predecessor.
-    camera.recording_signal_state = None
+    previous_state = camera.recording_signal_state or {}
+    camera.recording_signal_state = ({key: previous_state[key] for key in ALERT_MEMBERS if key in previous_state} or None
+                                     if current["source"] == proposed["source"] else None)
     audit = create_event(db=db, actor=actor, category="cameras", event_type="cameras.recording_policy_saved",
         message_ru="Сохранены настройки AI и записи камеры", message_en="Camera AI and recording policy saved",
         target_type="camera", target_id=camera.id, target_name=camera.name,
@@ -328,6 +362,11 @@ def save_policy(db, camera_id, payload, actor):
     if audit is None:
         raise RuntimeError("recording_policy_audit_failed")
     db.commit()
+    from app.services.camera_events_worker import wake_camera_events
+
+    wake_camera_events()
+    if spatial_ai(camera):
+        wake_ai_view()
     return camera_rows(db, [camera])[0]
 
 
@@ -402,6 +441,30 @@ def save_emergency(db, payload, actor):
     return emergency_response(db)
 
 
+def camera_signal_kinds(signal):
+    return {signal.kind, signal.rule_kind, signal.object_kind, *signal.object_kinds} & set(EVENT_KINDS)
+
+
+def camera_history_matches_policy(db, group, resolved_camera, signal):
+    # End markers still close the exact episode already in the history, even
+    # if the camera omits the type on the end or the operator changed types.
+    if signal.active is False:
+        return True
+    kinds = camera_signal_kinds(signal)
+    lenses = [resolved_camera] if resolved_camera is not None else group["cameras"]
+    for lens in lenses:
+        camera = db.get(Camera, lens["id"])
+        # The receiver has already checked opt-in and resolved the source.
+        # Pre-policy receivers retain their original "all types" semantics.
+        if camera is None or camera.recording_policy is None:
+            continue
+        if (not camera_event_reception_selected(camera)
+                or not kinds.intersection(camera.recording_policy.get("event_kinds", EVENT_KINDS))):
+            return False
+    # Ambiguous device-level events may not bypass an individual lens filter.
+    return bool(lenses and kinds)
+
+
 def observe_camera_signal(db, group, resolved_camera, signal, *, received):
     """Record bounded last activity BEFORE history suppression/caps/personal prefs.
 
@@ -436,7 +499,7 @@ def observe_camera_signal(db, group, resolved_camera, signal, *, received):
     # Stable opaque rule identity without device-provided display text in API.
     rule_id = hashlib.sha256(json.dumps([signal.topic, signal.source.get("Rule")],
         sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    kinds = {kind, signal.rule_kind, signal.object_kind, *signal.object_kinds} & set(EVENT_KINDS)
+    kinds = camera_signal_kinds(signal) | {kind}
     normalized = RecordingSignal(source="camera", source_generation=generation,
         identity=identity, kind=kind, matched_kinds=sorted(kinds), rule_id=rule_id,
         active=signal.active, initialized=signal.initialized, occurred_at=signal.occurred_at,
@@ -451,7 +514,7 @@ def observe_recording_signal(db, camera_id, signal: RecordingSignal, *, received
     camera = db.query(Camera).filter(Camera.id == camera_id).populate_existing().with_for_update().first()
     if camera is None or camera.deleted_at is not None or camera.status == "deleting":
         return False
-    if signal.source == "camera" and not camera.events_enabled:
+    if signal.source == "camera" and not camera_event_reception_selected(camera):
         return False
     policy = effective_policy(camera)
     if policy["source"] != signal.source or policy["mode"] != "events":
@@ -469,7 +532,7 @@ def observe_recording_signal(db, camera_id, signal: RecordingSignal, *, received
     if cutoff and signal.active is not False and iso(received if signal.clock_uncertain else occurred) <= cutoff:
         return False
     if state.get("policy_revision") != policy["revision"] or state.get("source_generation") != generation:
-        state = {key: state[key] for key in ("channel", "recorder", "recording_cutoff_at") if key in state}
+        state = {key: state[key] for key in ("channel", "recorder", "recording_cutoff_at", *ALERT_MEMBERS) if key in state}
         state.update(schema_version=1, policy_revision=policy["revision"], source=signal.source,
                      source_generation=generation, observations={})
     observations = dict(state.get("observations") or {})

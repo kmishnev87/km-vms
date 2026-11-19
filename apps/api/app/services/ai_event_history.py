@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from bisect import bisect_left
-import hashlib
 import json
 import logging
 import os
@@ -19,7 +18,7 @@ from app.db.session import SessionLocal
 from app.models.audit_event import AuditEvent
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
-from app.services import camera_event_repeats as repeats, camera_events as events
+from app.services import camera_alert_episodes as episodes, camera_events as events
 from app.services.ai_recording import ai_policy_supported
 from app.services.ai_rule_frame import jpeg_size
 
@@ -84,20 +83,43 @@ def _link_recordings(db, pending):
     return result
 
 
+def _header(handle):
+    line = handle.readline(4097)
+    if len(line) > 4096 or not line.endswith(b"\n"):
+        raise ValueError("invalid_ai_event_header")
+    value = json.loads(line)
+    if not isinstance(value, dict):
+        raise ValueError("invalid_ai_event_envelope")
+    return value
+
+
 def _read(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError("invalid_ai_event_file")
     with path.open("rb") as handle:
-        line = handle.readline(4097)
-        if len(line) > 4096 or not line.endswith(b"\n"):
-            raise ValueError("invalid_ai_event_header")
-        header = json.loads(line)
+        header = _header(handle)
         jpeg = handle.read(MAX_JPEG + 1)
-    if not isinstance(header, dict) or len(jpeg) > MAX_JPEG:
+    if len(jpeg) > MAX_JPEG:
         raise ValueError("invalid_ai_event_envelope")
     if jpeg and (not jpeg.endswith(b"\xff\xd9") or not jpeg_size(jpeg, 640, 360)):
         jpeg = b""  # An invalid still cannot remove an otherwise valid event.
     return header, jpeg
+
+
+def _queued_events(paths):
+    # A final progress pulse and the next opening can be written in the same
+    # filesystem clock tick. Order by captured video time, not file mtime or UUID.
+    ordered = []
+    for changed, path in paths:
+        try:
+            with path.open("rb") as handle:
+                captured = episodes.timestamp(_header(handle).get("captured"))
+            if captured is None:
+                raise ValueError("invalid_ai_event_timestamp")
+            ordered.append((captured, changed, path))
+        except (ValueError, FileNotFoundError):
+            path.unlink(missing_ok=True)
+    return [path for _, _, path in sorted(ordered)]
 
 
 def _sensor_identity(camera, value):
@@ -114,7 +136,7 @@ def _sensor_identity(camera, value):
         rule = next((item for item in config.get("rules", []) if item["id"] == rule_id), None)
         if not rule or rule["kind"] != condition or not set(kinds).issubset(rule["classes"]):
             return None
-        name, notify, record = rule.get("name", ""), bool(rule["notify"]), bool(rule["record"])
+        name = rule.get("name", "")
         scope = "line" if condition == "crossing" else "zone" if rule.get("points") or condition in {"enter", "exit", "dwell"} else "frame"
     else:
         selected = policy.get("event_kinds") or []
@@ -122,10 +144,10 @@ def _sensor_identity(camera, value):
             return None
         if condition == "scene" and "motion" not in selected:
             return None
-        name, notify, record, scope = "", True, policy["mode"] == "events", "frame"
+        name, scope = "", "frame"
     if (condition == "scene") != (not kinds) or condition not in ("presence", *RULE_KINDS):
         return None
-    return rule_id, condition, kinds, str(name or "")[:48], notify, record, scope
+    return rule_id, condition, kinds, str(name or "")[:48], scope
 
 
 def ingest(db, path, *, received=None):
@@ -134,7 +156,7 @@ def ingest(db, path, *, received=None):
     value, jpeg = _read(path)
     received = received or events.now_utc()
     camera_id, revision, captured = value.get("camera_id"), value.get("revision"), value.get("captured")
-    if (value.get("v") != 1 or type(camera_id) is not int or not 1 <= camera_id <= 2**31 - 1
+    if (value.get("v") not in (1, 2) or type(camera_id) is not int or not 1 <= camera_id <= 2**31 - 1
             or type(revision) is not int or revision < 1 or type(captured) not in (int, float)):
         return False
     try:
@@ -143,17 +165,22 @@ def ingest(db, path, *, received=None):
         return False
     if not received - timedelta(minutes=10) <= occurred <= received + timedelta(seconds=5):
         return False
-    camera = db.query(Camera).filter(Camera.id == camera_id).with_for_update().first()
+    camera = db.query(Camera).filter(Camera.id == camera_id).populate_existing().with_for_update().first()
     if (camera is None or camera.deleted_at is not None or camera.status == "deleting" or not camera.enabled
             or not ai_policy_supported(camera) or camera.recording_policy["revision"] != revision):
         return False
+    minutes = episodes.settings_from(camera.recording_policy)
+    if value.get("v") == 2 and value.get("progress") is True:
+        episodes.admit(db, camera, source="ai", at=captured, minutes=minutes)
+        db.commit()
+        return False   # Extends the current window, never adds a history row or wakes push.
     resolved = _sensor_identity(camera, value)
     if not resolved or db.get(AuditEvent, identifier) is not None:
         return False
-    rule_id, condition, kinds, rule_name, notify, record, scope = resolved
+    rule_id, condition, kinds, rule_name, scope = resolved
     kind = (kinds[0] if condition == "presence" else RULE_KINDS[condition])
-    key = hashlib.sha256(json.dumps([ORIGIN, revision, rule_id, condition, kinds]).encode()).hexdigest()
-    if repeats.check(db, "camera", str(camera_id), key, occurred):
+    admitted = episodes.admit(db, camera, source="ai", at=captured, minutes=minutes, identifier=identifier)
+    if admitted is None or not admitted.opening:
         db.commit()
         return False
     picture_saved = False
@@ -178,26 +205,24 @@ def ingest(db, path, *, received=None):
                      severity="info", message_ru="Событие AI", message_en="AI event", target_type="camera",
                      target_id=str(camera_id), target_name=camera.name, event_metadata={
                          "origin": ORIGIN, "ai_condition": condition, "ai_rule_id": rule_id, "ai_rule_name": rule_name, "ai_scope": scope,
-                         "ai_snapshot": picture_saved, "ai_notify": notify, "ai_record": record,
+                         "ai_snapshot": picture_saved, "ai_notify": True, "ai_record": camera.recording_policy["mode"] == "events",
                          **({"ai_recording_id": recording_id} if recording_id is not None else {}),
                          "ai_captured_epoch": captured,
                          "occurred_at": occurred.replace(tzinfo=timezone.utc).isoformat(), "occurrences": 1,
                          "rule_kind": RULE_KINDS.get(condition), "object_kinds": kinds,
-                         "object_kind": kinds[0] if kinds else None, **repeats.attributes(key, occurred),
+                         "object_kind": kinds[0] if kinds else None, **admitted.metadata,
                      })
     db.add(row)
     db.flush()
-    if notify:
-        from app.services.mobile_badges import touch
-        from app.services.mobile_push import signal_change, wake_local
+    from app.services.mobile_badges import touch
+    from app.services.mobile_push import signal_change, wake_local
 
-        events.auto_read_new_event(db, row, received)
-        touch(db)
-        signal_change(db)
+    events.auto_read_new_event(db, row, received)
+    touch(db)
+    signal_change(db)
     db.commit()
     events.notify_change()
-    if notify:
-        wake_local()
+    wake_local()
     return True
 
 
@@ -256,7 +281,8 @@ def _sweep_frames(db):
                     or (match is not None and match[1])):
                 file.unlink(missing_ok=True)
                 if row:
-                    row.event_metadata = {**data, "ai_snapshot": False}
+                    key = "ai_snapshot" if data.get("origin") == ORIGIN else "camera_snapshot"
+                    row.event_metadata = {**data, key: False}
             elif match is not None:
                 row.event_metadata = {**data, "ai_recording_id": match[0]}
         db.commit()
@@ -284,7 +310,7 @@ def _work():
                             paths.append((changed, file))
                         elif changed < time.time() - 300:
                             file.unlink(missing_ok=True)
-                for _, path in sorted(paths)[:24]:
+                for path in _queued_events(paths)[:24]:
                     if _stop.is_set():
                         break
                     with SessionLocal() as db:

@@ -90,11 +90,26 @@ def test_confirmed_source_stall_is_distinguished_from_silent_progress():
     row = source_row(emergency=True, event_receiver_current=False)
     assert reconcile(episode, row, 2).source_status == "connecting"
     assert reconcile(episode, row, 151).request is None
-    assert reconcile(episode, row, 152).request == "emergency"
-    quiet_reply = source_row(sample=154, emergency=True)
-    assert reconcile(episode, quiet_reply, 155).source_status == "recovering"
-    assert reconcile(episode, source_row(sample=214, emergency=True), 215).request == "emergency"
-    assert reconcile(episode, source_row(sample=274, emergency=True), 275).request is None
+    assert reconcile(episode, row, 152).request is None
+    assert reconcile(episode, row, 162).request == "emergency"
+    quiet_reply = source_row(sample=164, emergency=True)
+    assert reconcile(episode, quiet_reply, 165).source_status == "recovering"
+    assert reconcile(episode, source_row(sample=224, emergency=True), 225).request == "emergency"
+    assert reconcile(episode, source_row(sample=284, emergency=True), 285).request is None
+
+
+def test_receiver_handoff_does_not_start_emergency_or_replay_old_activity():
+    episode = Episode()
+    stale_activity = source_row(sample=-3, activity=-4, emergency=True)
+    first = reconcile(episode, stale_activity, 1)
+    assert first.source_status == "healthy" and first.request is None
+    gap = source_row(sample=1, emergency=True, event_receiver_current=False)
+    assert reconcile(episode, gap, 151).request is None
+    assert reconcile(episode, gap, 153).request is None
+    new = source_row(sample=156, phase="connecting", emergency=True)
+    new.recording_signal_state["channel"]["generation"] = "new"
+    assert reconcile(episode, new, 157).request is None
+    assert reconcile(episode, source_row(sample=158, activity=158, emergency=True), 159).request == "event"
 
 
 def test_progress_contract_for_ai_needs_completion_but_no_detection():

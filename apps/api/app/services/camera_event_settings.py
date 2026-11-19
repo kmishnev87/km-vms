@@ -4,6 +4,17 @@ from fastapi import HTTPException
 from app.services.onvif_events import DeviceClient, EventDeviceError
 
 
+def camera_event_reception_selected(camera):
+    """Explicit recording source wins; a pre-policy ONVIF opt-in is preserved."""
+    if camera.protocol != "onvif":
+        return False
+    policy = camera.recording_policy
+    if policy is None:
+        return bool(camera.events_enabled)
+    return bool(isinstance(policy, dict) and policy.get("schema_version") == 1
+                and policy.get("mode") in {"continuous", "events"} and policy.get("source") == "camera")
+
+
 def read_event_capabilities(*, host, port, username, password, onvif_path=None):
     client = None
     try:

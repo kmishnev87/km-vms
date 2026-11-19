@@ -10,7 +10,7 @@ import java.util.UUID
 /** A push can display text, not carry a credential, media address or command. */
 data class PushEnvelope(val eventId: String, val cameraId: Long?, val cameraName: String,
     val kind: CameraEventKind, val occurred: Instant, val test: Boolean = false, val objects: Set<CameraEventKind> = emptySet(),
-    val aiCondition: AiEventCondition? = null) {
+    val aiCondition: AiEventCondition? = null, val preview: Boolean = false) {
     companion object {
         fun parse(bytes: ByteArray): PushEnvelope {
             require(bytes.size in 1..3000)
@@ -29,7 +29,8 @@ data class PushEnvelope(val eventId: String, val cameraId: Long?, val cameraName
                 // Android 8–12 Instant.parse rejects offsets accepted by newer
                 // Android/JDKs. Accept both current UTC-Z and older NAS +00:00.
                 OffsetDateTime.parse(value.getString("occurred_at")).toInstant(), test, objects,
-                AiEventCondition.parse(value.optString("ai_condition")))
+                AiEventCondition.parse(value.optString("ai_condition")),
+                !test && cameraId != null && value.optBoolean("preview"))
         }
     }
 }

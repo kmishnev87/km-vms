@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aiPhaseKey, diagnosisKey, draftForCamera, profilesFor, recordingPolicyUpdate,
+import { aiPhaseKey, diagnosisKey, draftForCamera, inlinePolicyControls, profilesFor, recordingPolicyUpdate,
   updateMode, updateSource, validateRecordingDraft } from "../lib/recordingCenter.js";
 
 const rtsp = { camera_id: 7, protocol: "rtsp", events_enabled: false, recording_enabled: true,
   policy: { revision: 2, mode: "continuous", source: "none" }, runtime: { ai_available: true } };
+
+test("camera event types are independent of the scenario and its buffering controls", () => {
+  const row = { ...rtsp, protocol: "onvif", camera_events_available: true,
+    policy:{ revision:2, mode:"continuous", source:"camera", event_kinds:["person"] } };
+  const continuous = draftForCamera(row);
+  assert.equal(inlinePolicyControls([row], row, continuous).cameraConditions, true);
+  assert.equal(inlinePolicyControls([row], row, continuous).profiled, false);
+  const events = updateMode(continuous, "events", row);
+  assert.equal(inlinePolicyControls([row], row, events).profiled, true);
+  assert.deepEqual(updateMode(events, "continuous", row).event_kinds, ["person"]);
+  assert.equal(validateRecordingDraft(row, {...continuous, event_kinds:[]}, []), "event_select_one");
+});
 
 test("AI is available without ONVIF, never defaults to scene change or economy, and keeps shared revisions", () => {
   const draft = updateMode(draftForCamera(rtsp), "events", rtsp);

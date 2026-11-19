@@ -26,7 +26,6 @@ class CameraEditorControllerTest {
                 {"token":"s1","stream_path":"/sub-one","source_id":"lens-a","video":{"codec":"H264","width":640,"height":360,"fps":25}},
                 {"token":"s2","stream_path":"/sub-two","source_id":"lens-a","video":{"codec":"H264","width":1280,"height":720,"fps":25}}],
                 "source_groups":[{"id":"lens-a","channel":1,"profile_tokens":["m","s1","s2"],"main_profile_token":"m","sub_profile_token":"s1"}]}""")
-            json("""{"supported":true}""")
         }
         for(role in listOf("main","sub"))json("""{"ok":true,"tested_role":"$role","video":{"codec":"h264"},"validation_token":"fixture-$role-proof"}""")
         repeat(3){json("""{"config":{"codec":"H264","resolution":"640x360","fps":25},"supported":{}}""")}
@@ -47,6 +46,7 @@ class CameraEditorControllerTest {
                 withTimeout(15000){editor.state.first{it.saved&&!it.busy}}
                 val requests=(0 until server.requestCount).map{server.takeRequest()}
                 assertEquals(1,requests.count{it.path=="/api/cameras/onvif/probe"})
+                assertTrue(requests.none { it.path=="/api/cameras/onvif/events/capabilities" })
                 val body=JSONObject(requests.single{it.path=="/api/cameras"&&it.method=="POST"}.body.readUtf8())
                 assertEquals("fixture-management-proof",body.getString("onvif_probe_token"))
                 assertEquals("fixture-sub-proof",body.getString("sub_validation_token"))

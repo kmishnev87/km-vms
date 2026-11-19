@@ -19,6 +19,7 @@ from app.models.audit_event import AuditEvent
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.services import camera_events as events
+from app.services.camera_event_settings import camera_event_reception_selected
 from app.services import camera_event_selections as selections
 from app.services.audit_log import create_event
 from app.services.camera_events_worker import receiver_states
@@ -190,9 +191,9 @@ def delete_filtered(selection_id: UUID, payload: SelectionAction, db: Session = 
 @router.get("/cameras")
 def cameras(db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     states = receiver_states()
-    return {"items": [{"id": c.id, "name": c.name, "protocol": c.protocol, "enabled": c.enabled, "events_enabled": c.events_enabled,
+    return {"items": [{"id": c.id, "name": c.name, "protocol": c.protocol, "enabled": c.enabled, "events_enabled": camera_event_reception_selected(c),
                         "receiver": {"status": "unsupported"} if c.protocol != "onvif" else
-                        {"status": "disabled"} if not c.events_enabled else states.get(str(c.id), {"status": "pending"})}
+                        {"status": "disabled"} if not camera_event_reception_selected(c) else states.get(str(c.id), {"status": "pending"})}
                        for c in db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.name).all()]}
 
 
@@ -400,8 +401,11 @@ def evidence(event_id: UUID, db: Session = Depends(get_db), user: User = Depends
 def snapshot(event_id: UUID, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     from app.services.ai_event_history import frame_path
 
-    value = events.serialize(event_row(db, event_id))
-    if not (value.get("ai") or {}).get("snapshot_available") or not value["camera_id"]:
+    row = event_row(db, event_id)
+    value = events.serialize(row)
+    available = ((value.get("ai") or {}).get("snapshot_available") if value.get("ai") else
+                 bool((row.event_metadata or {}).get("camera_snapshot")))
+    if not available or not value["camera_id"]:
         _failure("ai_snapshot_not_found", 404)
     _camera(db, value["camera_id"])
     path = frame_path(event_id)

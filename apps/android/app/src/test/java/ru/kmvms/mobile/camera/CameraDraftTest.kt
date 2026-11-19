@@ -49,7 +49,7 @@ class CameraDraftTest {
     @Test fun rtspModeDoesNotSubmitOnvifVideoAddressOverrides(){
         val payload=saved().change("protocol","rtsp").change("rtsp_main_url","/main").payload()
         assertFalse(payload.has("rtsp_host"));assertFalse(payload.has("rtsp_port"));assertEquals(554,payload.getInt("port"))
-        assertFalse(payload.getBoolean("events_enabled"))
+        assertFalse(payload.has("events_enabled"))
     }
     @Test fun savedCameraCredentialsStayOnNasDuringReadOnlyProbe()=runBlocking{
         MockWebServer().use{server->

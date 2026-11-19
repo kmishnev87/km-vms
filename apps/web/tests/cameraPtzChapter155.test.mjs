@@ -147,11 +147,12 @@ test("the real hook sends JSON and binds commands to its selected profile", asyn
 test("real view wiring keeps PTZ separate from camera actions and before audio/stream/close", () => {
   const cameras = read("app/cameras/page.js"), live = read("app/live/page.js"), css = read("app/styles/95-camera-ptz.css");
   assert.equal((cameras.match(/className="[^"]*\bcameraNameWithPtz\b[^"]*"/g) || []).length, 2, "both list and cards have an identity badge");
-  const header = live.slice(live.indexOf('<div className={`liveWorkspaceTileBar'), live.indexOf('className="liveWorkspaceTileVideo"'));
+  const header = live.slice(live.indexOf('<div className="liveWorkspaceTileActions">'), live.indexOf('className="liveWorkspaceTileVideo"'));
   const badge = header.indexOf("<CameraPtzBadge"), stream = header.indexOf('className="liveWorkspaceTileSelect"');
   const audio = header.indexOf('data-live-audio-button="true"'), close = header.indexOf('removeTile(tile.id)');
   assert(badge >= 0 && badge < audio && audio < stream && stream < close, "PTZ → audio → stream → close");
-  assert.match(css, /\.liveWorkspaceTileBar\.hasPtz\s*\{\s*grid-template-columns:minmax\(0,1fr\) 30px 30px 76px 30px/);
+  assert.match(css, /\.liveWorkspaceTileActions > \.cameraPtzBadge/);
+  assert.match(read("app/styles/90-live-workspace.css"), /\.liveWorkspaceTileActions\s*\{\s*display:\s*flex/);
   assert.match(live, /className="liveSidebarPtz"/);
   assert.match(live, /fullscreenTileId === tile\.id \|\| \(isSystemFullscreen && isSidebarCollapsed\)/);
   assert.match(css, /--ptz-bg:rgba\(2,6,23,\.72\)/);

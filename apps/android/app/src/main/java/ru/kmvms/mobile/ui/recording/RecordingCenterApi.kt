@@ -25,10 +25,16 @@ private fun JSONArray?.strings(): List<String>? =
 internal data class RecordingDraft(
     val mode: String, val source: String, val profile: String, val seconds: String, val minutes: Int,
     val sourceId: Long?, val kinds: Set<String>, val rules: List<String>,
-    val aiRules: AiRules? = null, val aiRulesEdited: Boolean = false,
+    val aiRules: AiRules? = null, val aiRulesEdited: Boolean = false, val alertQuietMinutes: Int? = null,
 ) {
+    val hasAlertInterval: Boolean get() = mode == "continuous" && source != "none" && alertQuietMinutes != null
+
     fun withMode(value: String, camera: RecordingCamera? = null): RecordingDraft = if (value == mode) this else copy(
-        mode = value, source = if (value == "events") "camera" else "none",
+        mode = value, source = when {
+            value == "events" -> "camera"
+            value == "continuous" && mode != "linked" -> source
+            else -> "none"
+        },
         profile = if (value == "continuous") "none" else profile.takeIf { it in recordingProfiles } ?: "economical",
         seconds = if (value == "continuous") "0" else seconds, sourceId = null, rules = emptyList(),
     ).let { draft ->
@@ -54,12 +60,13 @@ internal data class RecordingDraft(
 
     fun payload(revision: Int) = JSONObject()
         .put("expected_revision", revision)
+        .apply { if (hasAlertInterval) put("alert_quiet_minutes", alertQuietMinutes) }
         .put("policy", JSONObject()
             .put("mode", mode)
             .put("source", if (mode == "linked") "none" else source)
             .put("profile", if (mode == "continuous") "none" else profile)
             .put("prebuffer_seconds", if (mode == "continuous" || profile == "economical") 0 else seconds.toInt())
-            .put("postrecord_minutes", if (mode == "events") minutes else 1)
+            .put("postrecord_minutes", if (mode == "events") minutes else if (hasAlertInterval) alertQuietMinutes else 1)
             .put("linked_camera_id", if (mode == "linked") sourceId else JSONObject.NULL)
             .put("event_kinds", JSONArray(kinds.ifEmpty { if (source == "ai") aiDefaults else allRecordingKinds }.toList()))
             .put("rule_ids", JSONArray(if (mode == "events") rules else emptyList<String>()))
@@ -68,8 +75,8 @@ internal data class RecordingDraft(
     fun isValid(camera: RecordingCamera, sources: List<RecordingCamera>): Boolean {
         if (source == "ai" && (!camera.aiAvailable || rules.isNotEmpty()) || source == "camera" && !camera.canUseEvents) return false
         if (mode == "linked" && sources.none { it.id == sourceId }) return false
-        if (source == "ai" && aiRules?.issue(mode == "events") != null) return false
-        if (mode == "events" && !(source == "ai" && aiRules != null) && kinds.isEmpty()) return false
+        if (source == "ai" && aiRules?.issue() != null) return false
+        if (source != "none" && !(source == "ai" && aiRules != null) && kinds.isEmpty()) return false
         if (mode != "continuous" && profile !in profiles()) return false
         return mode == "continuous" || profile == "economical" || seconds.toIntOrNull()?.let { it in 0..120 } == true
     }
@@ -85,8 +92,9 @@ internal data class RecordingCamera(
     val sourceIntent: String?, val sourceConfirmed: Boolean,
     val bufferStatus: String?, val bufferedSeconds: Int, val bufferLimited: Boolean,
     val incident: RecordingIncident?, val retryCameraId: Long?, val aiAvailable: Boolean, val ai: LocalAiStatus?,
+    val eventsSourceAvailable: Boolean = receivingEvents,
 ) {
-    val canUseEvents: Boolean get() = protocol == "onvif" && receivingEvents
+    val canUseEvents: Boolean get() = protocol == "onvif" && eventsSourceAvailable
     companion object {
         fun fromJson(row: JSONObject): RecordingCamera {
             val policy = row.getJSONObject("policy")
@@ -100,9 +108,11 @@ internal data class RecordingCamera(
                 row.optString("protocol"), row.optBoolean("events_enabled"), policy.getInt("revision"),
                 RecordingDraft(policy.optString("mode", "continuous"), source,
                     policy.optString("profile", "none"), policy.optInt("prebuffer_seconds").toString(),
-                    policy.optInt("postrecord_minutes", 1), policy.positiveId("linked_camera_id"),
+                    if (policy.optString("mode") == "events") policy.optInt("postrecord_minutes", 1) else 1,
+                    policy.positiveId("linked_camera_id"),
                     (policy.optJSONArray("event_kinds").strings()?.toSet() ?: allowedKinds(source)).intersect(allowedKinds(source)),
-                    policy.optJSONArray("rule_ids").strings().orEmpty(), policy.optJSONObject("ai_rules")?.let(AiRules::read)),
+                    policy.optJSONArray("rule_ids").strings().orEmpty(), policy.optJSONObject("ai_rules")?.let(AiRules::read),
+                    alertQuietMinutes = row.optInt("alert_quiet_minutes", -1).takeIf { it in 1..5 }),
                 runtime.text("actual_status"), runtime.optBoolean("event_recording_available"), runtime.text("legacy_recording_mode"),
                 runtime.optBoolean("emergency_requested"), runtime.optBoolean("emergency_recording"), runtime.text("source_status"),
                 link.text("source_intent"), link.optBoolean("source_recording_confirmed"),
@@ -111,7 +121,7 @@ internal data class RecordingCamera(
                 runtime.optBoolean("ai_available"), runtime.optJSONObject("ai")?.let {
                     LocalAiStatus(it.text("phase"), it.text("reason"), it.text("model"), it.text("device"),
                         it.text("version"), it.text("runtime"), it.text("rules_view"))
-                })
+                }, row.optBoolean("camera_events_available", row.optBoolean("events_enabled")))
         }
     }
 }

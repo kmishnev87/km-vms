@@ -44,7 +44,7 @@ function ConditionMenu({ row, draft, change, t, r, disabled }) {
 }
 
 const durations = [1,2,3,4,5];
-function DurationSelect({ id, label, value, change, disabled }) {
+function DurationSelect({ id, label, value, change, disabled, hint }) {
   const wrapper=useRef(null), trigger=useRef(null), options=useRef([]);
   const [open,setOpen]=useState(false);
   const close=(restoreFocus=false)=>{setOpen(false);if(restoreFocus)trigger.current?.focus()};
@@ -58,7 +58,7 @@ function DurationSelect({ id, label, value, change, disabled }) {
   return <div className="recDuration" ref={wrapper} onBlur={e=>{
     if(e.relatedTarget && !e.currentTarget.contains(e.relatedTarget))close();
   }}>
-    <button type="button" className="recCellChoice recDurationButton" ref={trigger} aria-label={`${label}: ${value}`}
+    <button type="button" className="recCellChoice recDurationButton" ref={trigger} aria-label={`${label}: ${value}`} title={hint}
       aria-haspopup="listbox" aria-controls={id} aria-expanded={open&&!disabled} disabled={disabled}
       onClick={()=>setOpen(!open)} onKeyDown={e=>{
         if(["ArrowDown","ArrowUp"].includes(e.key)){e.preventDefault();setOpen(true);}
@@ -79,7 +79,7 @@ export function RecordingPolicyRow({ row, rows, entry, problem, busy, saving, ch
   const id = row.camera_id;
   const draft = entry?.draft || draftForCamera(row);
   const controls = inlinePolicyControls(rows, row, draft);
-  const { linked, events, candidates, constantSource, profiled, preRoll, sources, aiEditor, linkReady, ownEventSource } = controls;
+  const { linked, events, candidates, constantSource, profiled, preRoll, sources, aiEditor, linkReady, ownEventSource, cameraConditions, alertProfile } = controls;
   const invalid = entry ? inlineSaveProblem(rows, row, entry) : "";
   const feedback = problem || invalid;
   const state = statusView(row);
@@ -114,15 +114,18 @@ export function RecordingPolicyRow({ row, rows, entry, problem, busy, saving, ch
     {cell("profile", r("profile"), profiled ? <select aria-label={label("profile")} className="recCellChoice" value={profile}
       disabled={busy} title={r("hint_"+profile)} onChange={e => change(updateProfile(draft,e.target.value))}>
       {profilesFor(draft).map(p => <option key={p} value={p}>{r("row_profile_"+p)}</option>)}
-    </select> : constantSource ? <span className="recLinkNote" title={r("source_constant")}>{r("row_profile_follows")}</span>
+    </select> : alertProfile ? <span className="recLinkNote" title={r("row_alert_gap_help")}>{r("row_profile_alerts")}</span>
+      : constantSource ? <span className="recLinkNote" title={r("source_constant")}>{r("row_profile_follows")}</span>
       : <Blank hint={linked&&!linkReady ? srcHint : undefined} />)}
     {cell("before", r("row_before"), preRoll ? <input type="number" aria-label={label("row_before")} className="recCellChoice recCellNumber"
       title={actualPreRoll} min="0" max="120" inputMode="numeric" disabled={busy} value={preRollValue ?? ""}
       onChange={e => change({...draft,prebuffer_seconds:e.target.value === "" ? null : Number(e.target.value)})} /> : <Blank />)}
-    {cell("after", r("row_after"), ownEventSource ? <DurationSelect id={`rec-duration-${id}`} label={label("row_after")}
-      disabled={busy} value={draft.postrecord_minutes} change={n=>change({...draft,postrecord_minutes:n})} />
+    {cell("after", r("row_after"), ownEventSource || alertProfile ? <DurationSelect id={`rec-duration-${id}`}
+      label={label(alertProfile ? "row_alert_gap" : "row_after")} hint={alertProfile ? r("row_alert_gap_help") : undefined}
+      disabled={busy} value={alertProfile ? draft.alert_quiet_minutes : draft.postrecord_minutes}
+      change={n=>change({...draft,[alertProfile ? "alert_quiet_minutes" : "postrecord_minutes"]:n})} />
       : <Blank hint={linkReady ? r("inherit_duration") : undefined} />)}
-    {cell("conditions", r("row_conditions"), ownEventSource && draft.source==="camera" ? <ConditionMenu row={row} draft={draft} disabled={busy}
+    {cell("conditions", r("row_conditions"), cameraConditions ? <ConditionMenu row={row} draft={draft} disabled={busy}
       change={change} t={t} r={r} /> : aiEditor ? <span className="recAiSummary" title={r("rule_edit")}>
         {draft.ai_rules ? r("rule_count", {n:aiRuleCount(draft.ai_rules)}) : r("row_full_frame")}
       </span> : <Blank />)}

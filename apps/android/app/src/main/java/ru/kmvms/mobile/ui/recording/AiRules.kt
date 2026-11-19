@@ -30,18 +30,18 @@ internal data class AiRule(
     val id: String = UUID.randomUUID().toString(), val name: String = "", val kind: String = "presence",
     val classes: Set<String> = setOf("person"), val points: List<AiPoint> = emptyList(), val direction: String = "both",
     val confidence: Int = 50, val confirm: Int = 0, val release: Int = 2, val dwell: Int = 10,
-    val schedule: AiSchedule? = null, val record: Boolean = true, val notify: Boolean = false,
+    val schedule: AiSchedule? = null,
 ) {
     fun json() = JSONObject().put("id", id).put("name", name).put("kind", kind).put("classes", JSONArray(classes.toList()))
         .put("points", JSONArray(points.map { it.json() })).put("direction", direction).put("confidence", confidence)
         .put("confirm_seconds", confirm).put("release_seconds", release).put("dwell_seconds", dwell)
-        .put("schedule", schedule?.json() ?: JSONObject.NULL).put("record", record).put("notify", notify)
+        // Old NAS releases still read the legacy action fields.
+        .put("schedule", schedule?.json() ?: JSONObject.NULL).put("record", true).put("notify", true)
     companion object {
         fun read(row: JSONObject) = AiRule(row.getString("id"), row.optString("name"), row.getString("kind"),
             row.getJSONArray("classes").stringSet(), shape(row.optJSONArray("points")), row.optString("direction", "both"),
             row.optInt("confidence", 50), row.optInt("confirm_seconds"), row.optInt("release_seconds", 2),
-            row.optInt("dwell_seconds", 10), row.optJSONObject("schedule")?.let(AiSchedule::read),
-            row.optBoolean("record"), row.optBoolean("notify"))
+            row.optInt("dwell_seconds", 10), row.optJSONObject("schedule")?.let(AiSchedule::read))
     }
 }
 
@@ -51,13 +51,11 @@ internal data class AiRules(
     fun json() = JSONObject().put("rules", JSONArray(rules.map { it.json() }))
         .put("exclusions", JSONArray(exclusions.map { row -> JSONArray(row.map { it.json() }) }))
         .put("reference", reference ?: JSONObject.NULL)
-    fun issue(events: Boolean): Int? {
+    fun issue(): Int? {
         if (rules.isEmpty()) return R.string.ai_rule_add_prompt
-        if (events && rules.none { it.record }) return R.string.ai_rule_record_required
         if (reference.isNullOrBlank() && (exclusions.isNotEmpty() || rules.any { it.points.isNotEmpty() })) return R.string.ai_rule_capture_first
         if (exclusions.any { !validPolygon(it) }) return R.string.ai_rule_polygon_invalid
         for (rule in rules) {
-            if (!rule.record && !rule.notify) return R.string.ai_rule_action_required
             if (rule.kind != "scene" && rule.classes.isEmpty()) return R.string.ai_rule_class_required
             if (rule.schedule?.days?.isEmpty() == true) return R.string.ai_rule_days_required
             if (rule.kind == "crossing") {

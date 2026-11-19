@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException
 
 from app.core.config import settings
+from app.services.ai_camera_view import view_kind
 
 WIDTH, HEIGHT = 20, 12
 MAX_JPEG = 256 * 1024
@@ -171,13 +172,16 @@ def store_editor_image(camera, snapshot):
     prune_editor_images(camera.id, (saved_reference(camera), reference))
 
 
-def matching_references(before, after):
+def matching_references(before, after, *, fixed=False):
     try:
         old, new = [json.loads(unb64(reference.split(".")[0])) for reference in (before, after)]
         a, b = unb64(old["edges"]), unb64(new["edges"])
         ratio = old["ratio"]
         if len(a) != 112 or len(b) != 112 or abs(ratio-new["ratio"]) > max(16, ratio*.018):
             return False
+        if fixed:
+            # Same configured stream geometry can be refreshed in any light.
+            return hmac.compare_digest(old["cfg"], new["cfg"])
         positions = [((x >> shift) & 3, (y >> shift) & 3) for x, y in zip(a, b) for shift in (0, 2, 4, 6)]
         known = [(x, y) for x, y in positions if x]
         return len(known) >= 24 and sum(x == y for x, y in known) / len(known) >= .68
@@ -223,7 +227,8 @@ def frame(camera, profile, *, editor=False):
                 reference = make_reference(camera, *size, luma, editor=editor)
                 saved = saved_reference(camera)
                 response = {"image": base64.b64encode(image).decode("ascii"), "width": size[0], "height": size[1],
-                            "reference": reference, "matching_saved": not saved or matching_references(saved, reference)}
+                            "reference": reference, "matching_saved": not saved or matching_references(
+                                saved, reference, fixed=view_kind(camera) == "fixed")}
                 if editor:
                     response.update(role=role, track=track)
                 return response

@@ -49,6 +49,7 @@ from recorder_core.contracts import (
 from recorder_core.job_store import RecordingJobStore
 from recorder_core.event_recording import Decision, Episode, ai_policy, event_policy, timestamp
 from recorder_core.ai_supervisor import AI_KINDS, AiSupervisor
+from recorder_core.ai_camera_view import view_kind as ai_view_kind
 from recorder_core.ai_event_outbox import AiEventOutbox
 from recorder_core.linked_recording import (
     Intent, cutoff as recording_cutoff, link_configured, link_status, linked_policy,
@@ -106,7 +107,8 @@ running = True
 jobs: dict[int, "RecordingJob"] = {}
 segment_repairs = SegmentRepairQueue()
 event_buffer_budget = PacketBudget()
-ai_events = AiEventOutbox(os.getenv("AI_EVENT_ROOT"))
+AI_EVENT_ROOT = os.getenv("AI_EVENT_ROOT")
+ai_events = AiEventOutbox(AI_EVENT_ROOT)
 local_ai = AiSupervisor(event_sink=ai_events)
 AI_GPU_ALLOWED = (os.getenv("LIVE_HWACCEL_MODE", "auto").lower() not in {"off", "disabled", "false", "0"}
                   and any(Path("/dev/dri").glob("renderD*")))
@@ -1499,7 +1501,7 @@ def event_start_allowed(row, job: RecordingJob, policy: dict) -> bool:
               ) flags
              WHERE c.id = :camera_id AND c.enabled AND c.deleted_at IS NULL
                AND c.status <> 'deleting'
-               AND (:source = 'ai' OR (c.protocol = 'onvif' AND c.events_enabled))
+               AND (:source = 'ai' OR c.protocol = 'onvif')
                AND c.recording_policy ->> 'source' = :source
                AND c.recording_policy ->> 'revision' = :revision
                AND (c.recording_signal_state ->> 'recording_cutoff_at') IS NOT DISTINCT FROM :cutoff
@@ -2015,8 +2017,13 @@ def camera_control_rows(executor):
     return executor.execute(text("""
             SELECT c.id, c.name, c.storage_folder_name, c.enabled, c.protocol, c.host, c.port,
                    c.rtsp_main_url, c.rtsp_sub_url, c.rtsp_transport, c.recording_mode,
+                   c.onvif_path, c.onvif_channel_id, c.onvif_profile_token, c.onvif_sub_profile_token,
                    c.default_record_stream, c.default_live_stream, c.segment_minutes, c.retention_days, c.storage_quota_gb,
-                   c.deleted_at, c.status, c.events_enabled, c.recording_policy, c.recording_signal_state,
+                   c.deleted_at, c.status, c.recording_policy, c.recording_signal_state,
+                   (c.protocol = 'onvif' AND CASE WHEN c.recording_policy IS NULL THEN c.events_enabled
+                    ELSE COALESCE(c.recording_policy ->> 'source' = 'camera'
+                          AND c.recording_policy ->> 'mode' IN ('continuous', 'events')
+                          AND c.recording_policy ->> 'schema_version' = '1', FALSE) END) AS events_enabled,
                    flags.event_recording_emergency_enabled, flags.recording_suspended_by_low_disk AS event_low_disk,
                    flags.timezone AS analysis_timezone,
                    l.worker_key IS NOT NULL AS event_receiver_current
@@ -2084,6 +2091,7 @@ def sync_cameras() -> None:
         seen_ids = {row.id for row in rows}
         ai_configs = {}
         ai_revisions = {}
+        ai_notification_windows = {}
         for row in rows:
             job = get_or_create_job(row)
             job.ai_generation = job.ai_status = None
@@ -2091,15 +2099,18 @@ def sync_cameras() -> None:
             if policy and camera_present(row):
                 if row.enabled:
                     ai_revisions[row.id] = policy["revision"]
+                    ai_notification_windows[row.id] = policy["postrecord_minutes"] * 60
                 job.ai_generation = ai_generation(row, policy)
                 kinds = policy.get("event_kinds")
                 ai_configs[row.id] = (job.ai_generation, frozenset(
                     kind for kind in kinds if isinstance(kind, str) and kind in AI_KINDS) if isinstance(kinds, list) else frozenset())
                 if policy.get("ai_rules") is not None:
-                    ai_configs[row.id] += ((policy["ai_rules"], getattr(row, "analysis_timezone", None)),)
+                    ai_configs[row.id] += ((policy["ai_rules"], getattr(row, "analysis_timezone", None),
+                                            ai_view_kind(row, AI_EVENT_ROOT)),)
             if not event_policy(row) and job.event_episode.revision is not None:
                 job.event_episode = Episode()
-        local_ai.configure(ai_configs, gpu_allowed=AI_GPU_ALLOWED, policy_revisions=ai_revisions)
+        local_ai.configure(ai_configs, gpu_allowed=AI_GPU_ALLOWED, policy_revisions=ai_revisions,
+                           notification_windows=ai_notification_windows)
         for row in rows:
             if row.id in ai_configs and isinstance(row.recording_signal_state, dict):
                 retry = row.recording_signal_state.get("ai_retry") or {}

@@ -44,14 +44,12 @@ test("individual camera hours preserve global defaults, another camera and list 
   assert.deepEqual(previous.camera_schedules, { "2": { start_minute: 0, end_minute: 360 } });
 });
 
-test("event receiving is a permission-gated mirror, never a detector or personal setting", () => {
-  const hub = read("../components/CameraEventsHub.js"), receiving = read("../components/CameraEventReceiving.js");
-  assert.match(hub, /manage \? \["receiving"\] : \[\]/);
+test("event history keeps personal preferences and cannot write the recording source", () => {
+  const hub = read("../components/CameraEventsHub.js");
+  assert.match(hub, /\["history", "notifications"\]/);
   assert.doesNotMatch(hub, /loadDetectors|\/detectors|\["detection"\]/);
-  assert.match(hub, /apiFetch\(`\/cameras\/\$\{camera.id\}`,[\s\S]*?JSON.stringify\(\{ events_enabled \}\)/);
-  assert.match(receiving, /checked=\{camera.events_enabled\}/);
-  assert.match(receiving, /disabled=\{busy \|\| camera.protocol !== "onvif"\}/);
-  assert.doesNotMatch(receiving, /camera.enabled|notifications|setInterval/);
+  assert.doesNotMatch(hub, /events_enabled|CameraEventReceiving/);
+  assert.match(hub, /camera-events\/preferences/);
 });
 
 test("preview URLs only contain a positive camera identity, never change a saved workspace", () => {

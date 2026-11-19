@@ -9,8 +9,12 @@ from app.models import Camera, RecordingSegment, SystemSettings
 from app.models.recording import ArchiveRoot
 from app.schemas.ai_recording import PolicyUpdate
 from app.services.ai_recording import camera_rows, save_policy
+from app.services import ai_event_history
+from app.services.camera_events import event_query, serialize
+from app.services.mobile_push import event_payload
 from app.services.ai_rule_frame import make_reference
 from recorder_core.ai_supervisor import AiSupervisor
+from recorder_core.ai_event_outbox import AiEventOutbox
 from recorder_core.event_buffer import BufferedCamera, capture_command
 from recorder_core.storage_activation import recording_start_allowed
 from test_event_recording_profiles_postgres import ffmpeg, video_span
@@ -50,7 +54,10 @@ def test_selected_ai_receives_only_recorder_input_and_saves_seekable_media(mode,
                 raise TimeoutError
             if with_rules:
                 assert frame.advanced
-                return sample(*([object_at(.5)] if detected[0] else []))
+                # The saved frame is daytime. A fixed camera must still
+                # trigger on the corresponding IR image, not just draw it.
+                return sample(*([object_at(.5)] if detected[0] else []),
+                              image=bytes(255-n for n in LUMA) if detected[0] else LUMA)
             return {"phase": "sample", "scene_change": False, "objects": [{"kind": "person"}] if detected[0] else []}
 
         def close(self):
@@ -61,7 +68,10 @@ def test_selected_ai_receives_only_recorder_input_and_saves_seekable_media(mode,
         opened.append(url)
         return args[:args.index("-rtsp_transport")] + ["-re", "-stream_loop", "-1", "-i", str(files[url])] + args[args.index("-i") + 2:]
 
-    manager = AiSupervisor(Inference)
+    monkeypatch.setattr(ai_event_history.settings, "storage_previews", str(tmp_path / "previews"))
+    monkeypatch.setattr("app.services.mobile_push.wake_local", lambda: None)
+    outbox = AiEventOutbox(ai_event_history.root()) if with_rules else None
+    manager = AiSupervisor(Inference, event_sink=outbox)
     monkeypatch.setattr(worker, "local_ai", manager)
     monkeypatch.setattr(worker, "AI_GPU_ALLOWED", False)
     monkeypatch.setattr(worker, "log_event", lambda level, name, **details:
@@ -124,6 +134,16 @@ def test_selected_ai_receives_only_recorder_input_and_saves_seekable_media(mode,
             assert opened == [live_url, record_url]
         else:
             assert opened == [record_url]
+        if with_rules:
+            assert view()["ai"]["rules_view"] == "aligned"
+            wait_until(lambda: any(outbox.root.glob("*.evt")))
+            notice = next(outbox.root.glob("*.evt"))
+            with Session(engine) as db:
+                assert ai_event_history.ingest(db, notice)
+                row = event_query(db).one()
+                assert row.event_metadata["ai_notify"] is True
+                assert row.event_metadata["ai_record"] is True
+                assert '"ai_condition":"presence"' in event_payload(serialize(row)).replace(" ", "")
         if mode == "continuous":
             failed[0] = True
             wait_until(lambda: view().get("ai", {}).get("phase") == "failed")
@@ -143,5 +163,7 @@ def test_selected_ai_receives_only_recorder_input_and_saves_seekable_media(mode,
             if job.event_buffer:
                 job.event_buffer.close()
         manager.stop()
+        if outbox:
+            outbox.stop()
         if manager.thread:
             manager.thread.join(5)

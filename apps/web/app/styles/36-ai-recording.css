@@ -32,6 +32,7 @@
   min-height: 34px; background: var(--rec-paper); border-radius: 8px 8px 0 0;
   color: var(--rec-muted); font-size: 12px; font-weight: 600;
 }
+.recordingCenterColumnNames > :nth-child(n+2):nth-child(-n+8) { text-align: center; }
 .recordingCenterRow {
   grid-template-areas: "camera mode source profile before after conditions state actions";
   min-height: 55px; border-top: 1px solid var(--rec-line); font-size: 13px;
@@ -58,7 +59,7 @@
   box-sizing: border-box; display: flex; align-items: center; min-height: 32px; padding-inline: 7px;
   color: var(--rec-muted); line-height: 1.2;
 }
-.recCell-before .recCellBlank,.recCell-after .recCellBlank { justify-content: center; }
+.recCellBlank { justify-content: center; }
 .recLinkNote { display: inline-flex; align-items: center; min-height: 32px; padding-inline: 7px; color: var(--rec-muted); font-size: 12px; }
 .recordingCenterState { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rec-muted); }
 .recordingCenterState span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
@@ -199,12 +200,11 @@
 .aiCanvasBadge.is-context { opacity: .60; }
 .aiStageStrip { min-width: 0; padding: 7px 10px 5px; background: #20364c; border-top: 1px solid #446078; }
 .aiToolRow { justify-content: space-between; }
-.aiToolRow .aiWorkTool,.aiShapeSwitcher {
+.aiToolRow .aiWorkTool {
   color: #e2effb; border-color: #567089; background: #2a4560;
 }
 .aiToolRow .aiWorkTool:hover:not(:disabled) { color: #fff; background: #355772; }
 .aiToolRow .aiWorkTool[aria-pressed="true"] { background: #366679; border-color: #86c4d2; color: #f2feff; }
-.aiShapeSwitcher { max-width: min(34%,290px); min-height: 32px; border-radius: 6px; border: 1px solid #567089; padding-inline: 7px; font-size: 12px; }
 .aiToolNote { display: flex; align-items: center; justify-content: space-between; gap: 7px; min-height: 25px; color: #bed0e2; font-size: 11px; }
 .aiToolNote span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .aiToolNote span + span { flex: none; }
@@ -214,7 +214,6 @@
   display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr) 42px; min-height: 0; min-width: 0;
   border-inline-start: 1px solid var(--rec-line);
 }
-.aiRuleSidebar[hidden] { display: none; }
 .aiSideTabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--rec-line); background: #f5f8fc; }
 .aiSideTabs button {
   min-width: 0; min-height: 39px; padding: 5px; border: 0; color: var(--rec-muted); background: transparent;
@@ -289,18 +288,23 @@
 .aiConditionHint > span { flex: 0 0 auto; margin-block: auto; }
 .aiRuleDays { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 4px; }
 .aiRuleDays .aiWorkTool { min-width: 0; padding-inline: 2px; white-space: nowrap; font-size: 11px; }
-.aiRuleOutcomes { border-top: 1px solid var(--rec-line); padding-top: 4px; }
-.aiRuleOutcomes .aiHintBox { margin-block-start: 4px; }
 .aiSideStatus {
   min-height: 0; overflow: auto; padding: 5px 10px; border-top: 1px solid var(--rec-line);
   color: var(--rec-muted); background: #f4f8fc; font-size: 12px; line-height: 1.25;
 }
 .aiSideStatus[data-warning="true"] { color: #923b45; }
+html:has(.aiWorkspace.is-expanded) { scrollbar-gutter: auto; }
 .aiWorkspace.is-expanded,.aiWorkspace:fullscreen {
-  position: fixed; inset: 0; z-index: 1600; width: 100%; height: 100dvh; min-height: 0; max-width: none; margin: 0;
+  position: fixed; inset: 0; z-index: 1600; width: 100vw; height: 100dvh; min-height: 0; max-width: none; margin: 0;
   border: 0; border-radius: 0; background: var(--ai-mat);
 }
-.aiWorkspace.is-expanded .aiWorkSurface { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr); }
+.aiWorkspace.is-expanded .aiWorkSurface {
+  grid-template-columns: minmax(0,1fr) min(48vw, clamp(294px, 26vw, 372px));
+  grid-template-rows: minmax(0,1fr);
+}
+.aiWorkspace.is-expanded .aiRuleSidebar {
+  border-inline-start: 1px solid var(--rec-line); border-top: 0; background: #fff;
+}
 .aiWorkspace.is-expanded .aiCanvasMat { margin: 6px; }
 .aiWorkspace.is-expanded .aiWorkHeader { min-height: 42px; padding-block: 4px; }
 
@@ -349,6 +353,7 @@
   .aiToolNote { height: 29px; line-height: 1.25; }
   .aiToolNote span:first-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; }
   .aiWorkspace.is-expanded .aiToolGroup .aiWorkTool > span { display: none; }
+  .aiWorkspace.is-expanded .aiToolRow { flex-wrap: wrap; justify-content: start; }
 }
 @media (max-height: 510px) and (orientation: landscape) {
   .aiWorkspace:not(.is-expanded) { min-height: 340px; }

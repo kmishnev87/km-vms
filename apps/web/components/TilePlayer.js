@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import CompactVideoCanvas from "./CompactVideoCanvas";
 import VideoZoomPanSurface from "./VideoZoomPanSurface";
+import LiveAiOverlay from "./LiveAiOverlay";
 import PtzPointSurface from "./cameras/PtzPointSurface";
 import { createLiveMsePlayer } from "../lib/liveMsePlayer";
 import { isMseCompatibilityFailure, wantsFastOnline } from "../lib/onlineMode";
@@ -68,6 +69,8 @@ export default function TilePlayer({
   onPtzAimCancel,
   onLowLatencyUnavailable,
   onTransportFallback,
+  aiOverlay = null,
+  onAiStatus,
 }) {
   const { text } = useI18n();
   const videoRef = useRef(null);
@@ -895,6 +898,8 @@ export default function TilePlayer({
           onFrameState={handleCanvasFrameState}
           className="liveCompactVideoCanvas"
         />
+        {aiOverlay ? <LiveAiOverlay key={`${cameraId}:${stream}`} overlay={aiOverlay} videoRef={videoRef}
+          onStatus={onAiStatus} /> : null}
       </VideoZoomPanSurface>
       {pointActive || areaZoomActive ? <PtzPointSurface key={`${cameraId}:${stream}:${areaZoomActive ? "area" : "point"}`}
         dimensions={naturalResolution} ready={status === "playing" && readyState >= 2}

@@ -454,6 +454,7 @@ def system_backup_create(
             submission_id=payload.submission_id,
             actor=current_user,
             migration_plan_summary=build_migration_plan(db),
+            trial_restore=True,
         )
         create_event(
             db=db,
@@ -470,6 +471,8 @@ def system_backup_create(
                 "state": response.get("state"),
                 "phase": response.get("phase"),
                 "replayed": bool(response.get("replayed")),
+                "restore_validation_status": (response.get("result") or {}).get("restore_validation_status"),
+                "restore_validation_reason": response.get("reason_code"),
                 "source": "manual_admin",
                 "video_archive_files_included": False,
             },

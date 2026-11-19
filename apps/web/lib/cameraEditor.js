@@ -17,7 +17,7 @@ const PROOF_FIELDS = ["preview_token", "validation_token", "main_validation_toke
 
 export function cameraEditorDraft(camera = null) {
   const draft = {
-    name: "", enabled: true, events_enabled: false, protocol: "onvif", host: "", port: 80,
+    name: "", enabled: true, protocol: "onvif", host: "", port: 80,
     username: "", password: "", rtsp_main_url: "", rtsp_sub_url: "",
     rtsp_host: "", rtsp_port: 554, rtsp_transport: "tcp", onvif_path: "",
     onvif_profile_token: "", onvif_sub_profile_token: "", onvif_channel_id: "",
@@ -56,7 +56,7 @@ export function patchCameraEditor(draft, key, value) {
       ...next, port: value === "onvif" ? 80 : (draft.rtsp_port || 554),
       rtsp_host: value === "onvif" ? draft.host : "",
       rtsp_port: value === "onvif" ? (Number(draft.port) || 554) : 554,
-      onvif_path: "", onvif_profile_token: "", onvif_sub_profile_token: "", onvif_channel_id: "", events_enabled: false,
+      onvif_path: "", onvif_profile_token: "", onvif_sub_profile_token: "", onvif_channel_id: "",
     };
   }
   // Follow the address until the user has deliberately set a separate video endpoint.

@@ -75,6 +75,8 @@ private fun profileHint(profile: String) = when (profile) {
 private fun actualStatus(camera: RecordingCamera): Int {
     if (!camera.enabled) return R.string.rec_status_paused
     if (camera.state in listOf("recording", "extended") && camera.emergencyRecording) return R.string.rec_emergency_active
+    if (camera.state in setOf("waiting", "recording", "extended") && camera.ai?.rulesView == "checking_profile")
+        return R.string.live_ai_profile_unknown
     if (camera.state == "waiting" && camera.ai?.rulesView in setOf("view_unconfirmed", "invalid_rules")) return R.string.ai_rule_view_short
     return when (camera.state) {
         "waiting" -> R.string.rec_status_waiting
@@ -99,6 +101,7 @@ private fun actualStatus(camera: RecordingCamera): Int {
 
 private fun tone(camera: RecordingCamera): Color = when {
     !camera.enabled -> Muted
+    camera.state in setOf("waiting", "recording", "extended") && camera.ai?.rulesView == "checking_profile" -> Color(0xFF805018)
     camera.state == "waiting" && camera.ai?.rulesView in setOf("view_unconfirmed", "invalid_rules") -> Color(0xFF805018)
     camera.state in listOf("recording", "extended") && camera.emergencyRecording -> Color(0xFF805018)
     camera.state in listOf("recording", "extended") -> Color(0xFF166448)
@@ -378,7 +381,17 @@ private fun PolicyEditor(camera: RecordingCamera, draft: RecordingDraft, sources
                         (1..5).map { it.toString() to it.toString() }, !busy, "recording-minutes") {
                         edit(draft.copy(minutes = it.toInt()))
                     }
-                    if (draft.source != "ai" || draft.aiRules == null) {
+                    if (draft.source == "camera" && !camera.canUseEvents) Text(stringResource(missingEventKey), color = MaterialTheme.colorScheme.error)
+                }
+                if (draft.hasAlertInterval) {
+                    Text(stringResource(R.string.rec_alert_profile), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    LabeledChoice(stringResource(R.string.rec_alert_quiet), draft.alertQuietMinutes.toString(),
+                        (1..5).map { it.toString() to it.toString() }, !busy, "recording-alert-quiet") {
+                        edit(draft.copy(alertQuietMinutes = it.toInt()))
+                    }
+                    Text(stringResource(R.string.rec_alert_quiet_help), color = Muted, fontSize = 12.sp)
+                }
+                if (draft.source == "camera" && camera.canUseEvents || draft.source == "ai" && draft.aiRules == null) {
                     TextButton(onClick = { showKinds = !showKinds }, enabled = !busy, modifier = Modifier.testTag("recording-event-types")) {
                         Text(stringResource(R.string.rec_event_types))
                     }
@@ -399,8 +412,6 @@ private fun PolicyEditor(camera: RecordingCamera, draft: RecordingDraft, sources
                         }
                     }
                     if (draft.kinds.isEmpty()) Text(stringResource(R.string.rec_event_select_one), color = MaterialTheme.colorScheme.error)
-                    }
-                    if (draft.source == "camera" && !camera.canUseEvents) Text(stringResource(missingEventKey), color = MaterialTheme.colorScheme.error)
                 }
                 if (draft.source == "ai" && camera.aiAvailable) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -410,7 +421,7 @@ private fun PolicyEditor(camera: RecordingCamera, draft: RecordingDraft, sources
                         draft.aiRules?.let { Text(stringResource(R.string.ai_rule_count, it.rules.size),
                             color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp)) }
                     }
-                    draft.aiRules?.issue(event)?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
+                    draft.aiRules?.issue()?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
                 }
                 if (draft.source == "ai" && draft.rules.isNotEmpty()) Text(stringResource(R.string.rec_ai_rules_pending), color = Muted, fontSize = 12.sp)
                 error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
@@ -436,6 +447,7 @@ private fun RecordingDetails(camera: RecordingCamera, allowed: Boolean?, busy: B
                 if (ai.version != null && ai.runtime != null) Text(stringResource(R.string.rec_ai_version, ai.version, ai.runtime))
                 val view = when (ai.rulesView) {
                     "checking_view" -> R.string.ai_rule_view_checking_view
+                    "checking_profile" -> R.string.ai_rule_view_checking_profile
                     "aligned" -> R.string.ai_rule_view_aligned
                     "view_unconfirmed" -> R.string.ai_rule_view_view_unconfirmed
                     "invalid_rules" -> R.string.ai_rule_view_invalid_rules

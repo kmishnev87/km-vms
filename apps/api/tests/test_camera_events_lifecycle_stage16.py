@@ -1,13 +1,16 @@
-"""Actual property lifecycle, without claiming a timer proves an event ended."""
+"""ONVIF property parsing and safe closure of pre-upgrade property history."""
 from dataclasses import replace
 from datetime import timedelta
+import hashlib
+import json
+import uuid
 
 from lxml import etree
 
 from app.models.audit_event import AuditEvent
 from app.services import camera_events as events
 from app.services import onvif_events as onvif
-from test_camera_events_stage172 import db, group, notification
+from test_camera_events_stage172 import db, group, notification, register_fixture_cameras
 
 
 def signal(operation="Changed", key="first", active="true", topic="RuleEngine/FieldDetector/ObjectsInside"):
@@ -28,11 +31,21 @@ def record(db, value):
     return events.record_signal(db, group(), group()["cameras"][0], value)
 
 
+def legacy_open(db, value):
+    identity = [group()["device_id"], value.topic, value.source]
+    if value.key:
+        identity.append(value.key)
+    identifier = str(uuid.uuid4())
+    db.add(AuditEvent(id=identifier, category=events.CATEGORY, event_type="camera." + value.kind, severity="info",
+        message_ru="", message_en="", target_type="camera", target_id="1", target_name="Front",
+        event_metadata={"episode": hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(), "active": True}))
+    db.commit()
+    return identifier
+
+
 def test_deleted_without_data_ends_the_matching_object_only(db):
-    first = record(db, signal())
-    # Independent classification is retained; equal classifications from two
-    # object IDs are intentionally filtered by the approved 45-second rule.
-    second = record(db, replace(signal(key="second"), object_kind="vehicle", object_kinds=("vehicle",)))
+    first = legacy_open(db, signal())
+    second = legacy_open(db, replace(signal(key="second"), object_kind="vehicle", object_kinds=("vehicle",)))
     assert first != second
     ending = signal("Deleted")
     assert ending.active is False and ending.key == {"ObjectId": "first"}
@@ -43,7 +56,7 @@ def test_deleted_without_data_ends_the_matching_object_only(db):
 
 
 def test_end_after_disconnect_reconciles_the_old_episode(db):
-    identifier = record(db, signal())
+    identifier = legacy_open(db, signal())
     events.source_disconnected(db, group())
     record(db, signal(active="false"))
     value = events.serialize(db.get(AuditEvent, identifier))
@@ -51,25 +64,26 @@ def test_end_after_disconnect_reconciles_the_old_episode(db):
     assert value["ended_at"] and events.event_query(db).count() == 1
 
 
-def test_initialization_reconciles_without_an_extra_occurrence_or_alert(db):
+def test_initialization_never_extends_or_alerts_after_reconnect(db):
     identifier = record(db, signal())
+    deadline = db.get(AuditEvent, identifier).event_metadata["alert_episode_until"]
     events.source_disconnected(db, group())
     assert record(db, signal("Initialized")) is None
     value = events.serialize(db.get(AuditEvent, identifier))
     assert value["active"] is True and not value["state_unconfirmed"]
     assert value["occurrences"] == 1 and events.event_query(db).count() == 1
     record(db, signal("Initialized", active="false"))
-    assert db.get(AuditEvent, identifier).event_metadata["ended_at"]
+    assert db.get(AuditEvent, identifier).event_metadata["alert_episode_until"] == deadline
 
 
-def test_new_positive_property_initialization_is_not_silently_discarded(db):
+def test_property_snapshots_cannot_start_an_episode(db):
     assert record(db, signal("Initialized", active="false")) is None
-    identifier = record(db, signal("Initialized"))
-    assert identifier and events.serialize(db.get(AuditEvent, identifier))["initial_state"]
+    assert record(db, signal("Initialized")) is None
+    assert events.event_query(db).count() == 0
 
 
 def test_a_long_event_can_end_after_more_than_a_day(db):
-    identifier = record(db, signal())
+    identifier = legacy_open(db, signal())
     row = db.get(AuditEvent, identifier)
     row.created_at -= timedelta(days=3)
     db.commit()
@@ -78,17 +92,9 @@ def test_a_long_event_can_end_after_more_than_a_day(db):
     assert events.event_query(db).count() == 1
 
 
-def test_state_less_classification_cannot_erase_an_open_property(db):
-    identifier = record(db, signal())
-    record(db, replace(signal(), active=None))
-    assert db.get(AuditEvent, identifier).event_metadata["active"] is True
-    record(db, signal("Deleted"))
-    assert db.get(AuditEvent, identifier).event_metadata["ended_at"]
-
-
 def test_data_only_kind_can_still_be_closed_by_a_deleted_without_data(db):
     start = replace(signal(topic="Smart/Alarm"), kind="person")
-    identifier = record(db, start)
+    identifier = legacy_open(db, start)
     assert record(db, replace(start, active=False, operation="Deleted", kind="other")) is None
     assert db.get(AuditEvent, identifier).event_metadata["active"] is False
     assert record(db, replace(start, key={"ObjectId": "absent"}, active=False, kind="other")) is None
@@ -98,7 +104,7 @@ def test_data_only_kind_can_still_be_closed_by_a_deleted_without_data(db):
 def test_disconnect_invalidates_all_open_rows_not_just_the_first_batch(db):
     template = signal()
     for index in range(270):
-        record(db, replace(template, key={"ObjectId": str(index)}, source={"VideoSourceConfigurationToken": "lens1", "Rule": str(index)}))
+        legacy_open(db, replace(template, key={"ObjectId": str(index)}, source={"VideoSourceConfigurationToken": "lens1", "Rule": str(index)}))
     events.source_disconnected(db, group())
     assert all(row.event_metadata["active"] is None and row.event_metadata["state_unconfirmed"]
                for row in events.event_query(db).all())
@@ -113,6 +119,8 @@ def test_receiver_diagnostics_explain_initialized_ends_and_observed_capabilities
     engine = create_engine("sqlite:///" + str(tmp_path / "receiver.sqlite3"))
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False)
+    with factory() as session:
+        register_fixture_cameras(session)
     current_group = {**group(), "host": "192.0.2.1", "port": 80, "username": "fixture", "password": "fixture-only", "onvif_path": "/onvif/device_service"}
     current_group["cameras"][0]["events_enabled"] = True
     started = notification(topic="Smart/Alarm")
@@ -154,6 +162,6 @@ def test_receiver_diagnostics_explain_initialized_ends_and_observed_capabilities
         assert result["kinds"] == ["motion", "person"]
         with factory() as session:
             assert events.event_query(session).count() == 1
-            assert events.event_query(session).one().event_metadata["active"] is False
+            assert events.serialize(events.event_query(session).one())["active"] is True
     finally:
         engine.dispose()

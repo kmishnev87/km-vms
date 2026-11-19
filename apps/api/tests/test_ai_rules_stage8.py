@@ -46,16 +46,14 @@ def run(rule, samples, *, start=1_700_000_000):
     return [rule.process(result, start+i) for i, result in enumerate(samples)]
 
 
-def test_strict_geometry_actions_bounded_configuration_and_camera_bound_reference():
+def test_strict_geometry_legacy_actions_and_camera_bound_reference():
     with pytest.raises(ValidationError, match="invalid_ai_polygon|self_intersecting_ai_polygon"):
         config("enter", points=[[200,200], [750,750], [750,200], [200,750]])
     with pytest.raises(ValidationError, match="invalid_ai_line"):
         config("crossing", points=[[100,100], [105,105]])
-    with pytest.raises(ValidationError, match="ai_rule_action_required"):
-        config("presence", record=False)
-    with pytest.raises(ValidationError, match="ai_record_rule_required"):
-        RecordingPolicy(mode="events", source="ai", profile="full_quality",
-                        ai_rules=config("presence", record=False, notify=True))
+    compatible = config("presence", record=False, notify=False)
+    assert compatible["rules"][0]["record"] and compatible["rules"][0]["notify"]
+    assert RecordingPolicy(mode="events", source="ai", profile="full_quality", ai_rules=compatible)
     with pytest.raises(ValidationError, match="ai_frame_reference_required"):
         AiRules(rules=[{"id":"gate","kind":"enter","points":ZONE}])
     signed = make_reference(camera(), 800, 450, LUMA, now=1000)
@@ -151,7 +149,7 @@ def test_confidence_privacy_overlap_and_ambiguous_teleport_do_not_start_recordin
     hits = run(rule, [sample(object_at(.52))]*4 + [sample(object_at(.8,confidence=.64))]*4
                   + [sample(object_at(.8,confidence=.92))]*3)
     assert not any(hits[:9])
-    assert hits[9] and hits[9][0].record
+    assert hits[9] and hits[9][0].started
     line = RuleEngine(config("crossing", points=SIGNED_LINE), "UTC")
     assert not any(run(line, [sample(object_at(x)) for x in [.8,.81,.80,.2,.20,.21]]))
 
@@ -162,7 +160,7 @@ def test_scene_is_explicit_exposure_tolerant_and_reset_does_not_fire():
     turned = bytes(255-n for n in LUMA)
     hit = run(rule, [sample(), sample(image=bright), sample(image=turned)])
     assert not any(hit[:2])
-    assert hit[2][0].notify and not hit[2][0].record
+    assert hit[2][0].started and hit[2][0].kind == "scene"
     rule.reset()
     assert not rule.process(sample(image=bright), 1_700_000_003)
     no_masked_motion = RuleEngine(config("scene", masks=[ZONE]), "UTC")
@@ -198,17 +196,19 @@ def test_schedule_uses_nas_local_date_and_previous_day_for_an_overnight_window()
                        [sample(object_at(.8))]*2, start=start))
 
 
-def test_notifications_only_never_extend_recording_or_turn_failed_view_into_engine_outage(monkeypatch):
+def test_legacy_toggles_do_not_block_activity_and_failed_view_is_not_an_engine_outage(monkeypatch):
     monkeypatch.setattr("recorder_core.ai_supervisor.time.monotonic", lambda: 103.5)
     source = Source("policy", frozenset({"person"}), 100., stream="fixed")
     manager = AiSupervisor()
     manager.sources[1] = source
     manager.backend = {"backend":"cpu"}
-    source.rules = RuleEngine(config("presence", points=ZONE, record=False, notify=True), "UTC")
+    legacy = config("presence", points=ZONE)
+    legacy["rules"][0].update(record=False, notify=False)  # Stored before the update, not normalized by the editor.
+    source.rules = RuleEngine(legacy, "UTC")
     for i in range(3):
         manager._accept(Frame(1,"policy","fixed","h264",b"",b"",100.+i,1_700_000_000+i,True), sample(object_at(.5)))
     assert manager.observe(1,"policy").phase == "healthy"
-    assert manager.observe(1,"policy").activity is None
+    assert manager.observe(1,"policy").activity == 1_700_000_002
     manager._accept(Frame(1,"policy","fixed","h264",b"",b"",103.,1_700_000_003,True), sample(object_at(.5), size=(480,640)))
     evidence = manager.observe(1,"policy")
     assert evidence.phase == "healthy" and evidence.info["rules_view"] == "view_unconfirmed"

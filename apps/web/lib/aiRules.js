@@ -6,7 +6,7 @@ export const aiRuleCount = (config) => (config?.rules?.length ?? 0) + (config?.e
 export const needsPolygon = (kind) => ["enter", "exit", "dwell"].includes(kind);
 export const defaultRule = (id) => ({
   id, name: "", kind: "presence", classes: ["person"], points: [], direction: "both",
-  confidence: 50, confirm_seconds: 0, release_seconds: 2, dwell_seconds: 10, schedule: null, record: true, notify: false,
+  confidence: 50, confirm_seconds: 0, release_seconds: 2, dwell_seconds: 10, schedule: null, record: true, notify: true,
 });
 export function polygonValid(points) {
   if (points.length < 3 || new Set(points.map(p => p.join(":"))).size !== points.length) return false;
@@ -19,14 +19,12 @@ export function polygonValid(points) {
     !edges.some(([a, b], i) => edges.some(([c, d], j) => j >= i+2 && (i > 0 || j < edges.length-1) && hit(a, b, c, d)));
 }
 
-export function ruleError(config, needsRecording) {
+export function ruleError(config) {
   if (!config) return "";
   if (!config.rules.length) return "rule_add_prompt";
-  if (needsRecording && !config.rules.some(rule => rule.record)) return "rule_record_required";
   if ((config.exclusions.length || config.rules.some(rule => rule.points.length)) && !config.reference) return "rule_capture_first";
   if (config.exclusions.some(points => !polygonValid(points))) return "rule_polygon_invalid";
   for (const rule of config.rules) {
-    if (!rule.record && !rule.notify) return "rule_action_required";
     if (rule.kind !== "scene" && !rule.classes.length) return "rule_class_required";
     if (rule.schedule && !rule.schedule.days.length) return "rule_days_required";
     if (rule.kind === "crossing") {

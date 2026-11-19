@@ -1,6 +1,7 @@
 package ru.kmvms.mobile.ui.live
 
 import android.view.LayoutInflater
+import android.view.TextureView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -36,6 +37,7 @@ import ru.kmvms.mobile.core.CameraStep
 import ru.kmvms.mobile.media.LivePlaybackSession
 import ru.kmvms.mobile.media.VideoState
 import ru.kmvms.mobile.media.VideoStatus
+import ru.kmvms.mobile.data.LiveAiGeometry
 
 @UnstableApi
 @Composable fun CameraVideo(session: LivePlaybackSession?, modifier: Modifier = Modifier,
@@ -43,10 +45,11 @@ import ru.kmvms.mobile.media.VideoStatus
                            aspect: Float? = null, mode: VideoGestureMode = VideoGestureMode.DIGITAL,
                            onPoint: (Double, Double) -> Unit = { _, _ -> },
                            onArea: (Double, Double, Double, Double) -> Unit = { _, _, _, _ -> },
-                           onCameraSwipe: ((CameraStep) -> Unit)? = null) {
+                           onCameraSwipe: ((CameraStep) -> Unit)? = null, aiOverlay: LiveAiGeometry? = null,
+                           onAiStatus: ((LiveAiStatus) -> Unit)? = null) {
     val observed = session?.state?.collectAsStateWithLifecycle()
     val state = observed?.value ?: VideoState()
-    VideoSurface(session?.player, state, { session?.retry() }, modifier, crop, zoomable, onTap, aspect, mode, onPoint, onArea, onCameraSwipe)
+    VideoSurface(session?.player, state, { session?.retry() }, modifier, crop, zoomable, onTap, aspect, mode, onPoint, onArea, onCameraSwipe, aiOverlay, onAiStatus)
 }
 
 @UnstableApi
@@ -54,7 +57,8 @@ import ru.kmvms.mobile.media.VideoStatus
                              modifier: Modifier = Modifier, crop: Boolean = false, zoomable: Boolean = false,
                              onTap: (() -> Unit)? = null, aspect: Float? = null, mode: VideoGestureMode = VideoGestureMode.DIGITAL,
                              onPoint: (Double, Double) -> Unit = { _, _ -> }, onArea: (Double, Double, Double, Double) -> Unit = { _, _, _, _ -> },
-                             onCameraSwipe: ((CameraStep) -> Unit)? = null) {
+                             onCameraSwipe: ((CameraStep) -> Unit)? = null, aiOverlay: LiveAiGeometry? = null,
+                             onAiStatus: ((LiveAiStatus) -> Unit)? = null) {
     val transform = remember(player) { VideoTransform() }
     var size by remember { mutableStateOf(IntSize.Zero) }
     val tap by rememberUpdatedState(onTap)
@@ -62,6 +66,11 @@ import ru.kmvms.mobile.media.VideoStatus
     val area by rememberUpdatedState(onArea)
     val swipe by rememberUpdatedState(onCameraSwipe)
     val videoSize = player?.videoSize
+    var texture by remember { mutableStateOf<TextureView?>(null) }
+    val aiFrame = matchingLiveAspect(aiOverlay, texture, player, state.status == VideoStatus.PLAYING)
+    val confirmedAspect = aiFrame.aspect
+    val aiListener by rememberUpdatedState(onAiStatus)
+    LaunchedEffect(aiFrame.status, aiOverlay) { aiListener?.invoke(aiFrame.status) }
     val sourceAspect = aspect ?: if (videoSize != null && videoSize.height > 0) videoSize.width.toFloat()/videoSize.height else 16f/9f
     val zoomDescription = stringResource(R.string.digital_zoom_level, transform.scale)
     Box(modifier.background(Color.Black).clipToBounds().onSizeChanged { size = it }, contentAlignment = Alignment.Center) {
@@ -71,12 +80,14 @@ import ru.kmvms.mobile.media.VideoStatus
             }
         }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = transform.scale; scaleY = transform.scale; translationX = transform.pan.x; translationY = transform.pan.y },
             update = { view -> view.resizeMode = if (crop) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
-                if (view.player !== player) view.player = player },
-            onRelease = { it.player = null })
+                if (view.player !== player) view.player = player
+                texture = view.videoSurfaceView as? TextureView },
+            onRelease = { if (texture === it.videoSurfaceView) texture = null; it.player = null })
         Canvas(Modifier.fillMaxSize().testTag("video-gesture-surface").semantics { stateDescription = zoomDescription }
             .videoGestures(transform, mode, zoomable, size, sourceAspect, { tap?.invoke() },
             { x, y -> point(x, y) }, { left, top, right, bottom -> area(left, top, right, bottom) },
                 if (onCameraSwipe != null) { step -> swipe?.invoke(step) } else null)) {
+            if (aiOverlay != null && confirmedAspect != null) drawLiveAi(aiOverlay, confirmedAspect, crop, transform)
             transform.rectangle?.let { selection ->
                 drawRect(Color(0x302563EB), selection.topLeft, selection.size)
                 drawRect(Color(0xFF60A5FA), selection.topLeft, selection.size, style = Stroke(2.dp.toPx()))

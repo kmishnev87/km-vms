@@ -9,7 +9,6 @@ import { formatProductDateTime } from "../lib/timezone";
 import { AI_EVENT_CONDITIONS, CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, CAMERA_EVENT_HUB_OPEN, eventErrorKey, eventHistoryQuery, eventLabelKey, eventObjectLabelKeys } from "../lib/cameraEvents";
 import AiEventDetails from "./AiEventDetails";
 import CameraEventPreferences from "./CameraEventPreferences";
-import CameraEventReceiving from "./CameraEventReceiving";
 import { mergeEventPreferenceDraft } from "../lib/cameraEventPreferences";
 import { OperationDialog, OperationToast } from "./OperationFeedback";
 import { eventIsSelected, filteredSelectionBody, selectedEventCount, snapshotHistoryQuery, toggleSnapshotEvent } from "../lib/cameraEventSelection";
@@ -60,8 +59,6 @@ export default function CameraEventsHub({ currentUser }) {
   const [errorToast, setErrorToast] = useState(null);
   const [eventToast, setEventToast] = useState(null);
   const preferenceServerRef = useRef(null);
-  const [receivingRefresh, setReceivingRefresh] = useState(0);
-  const [receivingLoading, setReceivingLoading] = useState(false);
   const generation = useRef(0);
   const selectionGeneration = useRef(0);
   const selectPageRef = useRef(null);
@@ -148,18 +145,6 @@ export default function CameraEventsHub({ currentUser }) {
       .catch(error => { if (!controller.signal.aborted && current()) showError(error); });
     return () => controller.abort();
   }, [open, session]);
-
-  useEffect(() => {
-    if (!open || tab !== "receiving" || !manage) return undefined;
-    const controller = new AbortController();
-    const current = captureAuthSession();
-    setReceivingLoading(true);
-    apiFetch("/camera-events/cameras", { signal: controller.signal }).then(value => {
-      if (!controller.signal.aborted && current()) setCameras(value.items || []);
-    }).catch(error => { if (!controller.signal.aborted && current()) showError(error); })
-      .finally(() => { if (!controller.signal.aborted && current()) setReceivingLoading(false); });
-    return () => controller.abort();
-  }, [open, tab, manage, session, receivingRefresh]);
 
   useEffect(() => {
     if (!open || tab !== "history") return undefined;
@@ -351,14 +336,6 @@ export default function CameraEventsHub({ currentUser }) {
       const value = await apiFetch("/camera-events/preferences", { method: "PUT", headers, body: JSON.stringify(preference) });
       if (current()) { receivePreferences(value, true); setErrorToast({ id: `event-saved-${Date.now()}`, title: t("cameraEvents.saved"), tone: "info" }); }
     })}/>;
-  const receivingContent = <CameraEventReceiving cameras={cameras} busy={busy || receivingLoading} onRefresh={() => setReceivingRefresh(value => value + 1)}
-    onChange={(camera, events_enabled) => act(async current => {
-      // This is the same shared choice as CameraEditor, with the same server
-      // permission, support validation and receiver revision fence.
-      await apiFetch(`/cameras/${camera.id}`, { method: "PUT", headers, body: JSON.stringify({ events_enabled }) });
-      const value = await apiFetch("/camera-events/cameras");
-      if (current()) setCameras(value.items || []);
-    })}/>;
 
   if (!enabled) return null;
   return <>
@@ -367,7 +344,7 @@ export default function CameraEventsHub({ currentUser }) {
     <OperationToast toast={errorToast} onClose={() => setErrorToast(null)}/>
     {eventToast ? <aside className="cameraEventArrival" role="status"><button className="cameraEventArrivalClose" type="button" aria-label={t("cameraEvents.close")} onClick={() => setEventToast(null)}>×</button><strong>{eventToast.camera_name}</strong><span>{t(eventLabelKey(eventToast))}{eventObjectLabelKeys(eventToast).map(key => ` · ${t(key)}`).join("")}</span><time dateTime={eventToast.occurred_at}>{formatProductDateTime(eventToast.occurred_at, eventToast.timezone, locale)}</time>{rowActions(eventToast)}</aside> : null}
     <OperationDialog dialog={open && !detail ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
-      content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications", ...(manage ? ["receiving"] : [])].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : tab === "notifications" ? preferenceContent : manage ? receivingContent : null}</div>
+      content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications"].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : preferenceContent}</div>
     } : null} onClose={() => setOpen(false)}/>
     {open && detail ? <AiEventDetails event={detail} timezone={history?.timezone || "UTC"} canReview={manage}
       onClose={() => setDetail(null)} onChanged={() => setRefresh(n => n + 1)} busy={busy}

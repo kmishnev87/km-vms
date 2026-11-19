@@ -3,6 +3,7 @@
 from datetime import timezone
 
 from app.services.ai_recording import SOURCE_FAULTS, ai_policy_supported, ai_retry_candidate, event_policy_supported
+from app.services.camera_event_settings import camera_event_reception_selected
 from app.services.camera_events_worker import receiver_fault_snapshots
 
 
@@ -55,7 +56,7 @@ def build_source_issues(cameras, recorder_states, now, *, storage_suspended=Fals
         subscription = receiver.get(camera.id)
         if subscription:
             register(camera, "camera", **subscription)
-        elif (camera.enabled and camera.protocol == "onvif" and camera.events_enabled and event_policy_supported(camera)
+        elif (camera.enabled and camera_event_reception_selected(camera) and event_policy_supported(camera)
               and control.get("source_status") in SOURCE_FAULTS):
             channel = (camera.recording_signal_state or {}).get("channel") or {}
             incident = (channel.get("incident") or {}) if channel.get("policy_revision") == camera.recording_policy["revision"] else {}

@@ -61,6 +61,7 @@
     <string name="ai_rule_days_required">Выбери хотя бы один день расписания.</string>
     <string name="ai_rule_range">Проверь диапазоны уверенности и времени.</string>
     <string name="ai_rule_view_checking_view">AI сверяет ракурс с кадром настройки.</string>
+    <string name="ai_rule_view_checking_profile">Тип объектива не подтверждён. Пока не применяются линии, зоны и исключения.</string>
     <string name="ai_rule_view_aligned">Ракурс подтверждён. Зоны и линии применяются.</string>
     <string name="ai_rule_view_view_unconfirmed">Ракурс не подтверждён. Зоны, линии и исключения приостановлены.</string>
     <string name="ai_rule_view_invalid_rules">Не удалось применить правила. Проверь их в редакторе.</string>

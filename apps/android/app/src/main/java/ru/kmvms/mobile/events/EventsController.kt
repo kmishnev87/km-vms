@@ -129,11 +129,6 @@ class EventsController(private val api: EventsApi) {
         val saved = api.save(preferences)
         mutable.update { it.copy(preferences = saved) }
     }
-    fun receiving(cameraId: Long, enabled: Boolean) = action {
-        api.receiving(cameraId, enabled)
-        val cameras = api.cameras()
-        mutable.update { it.copy(cameras = cameras) }
-    }
     private fun action(block: suspend () -> Unit) {
         if (mutable.value.busy) return
         mutable.update { it.copy(busy = true) }

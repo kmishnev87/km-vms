@@ -117,21 +117,6 @@ import ru.kmvms.mobile.data.NasApi
         }
         Text(stringResource(R.string.events_schedule_help), color = Muted, style = MaterialTheme.typography.bodySmall)
     }
-    Panel {
-        Text(stringResource(R.string.events_types), style = MaterialTheme.typography.titleMedium)
-        CameraEventKind.useful.toList().chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                row.forEach { kind -> Row(Modifier.weight(1f).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(value.kinds?.contains(kind) ?: true, { selected ->
-                        val prior = value.kinds ?: CameraEventKind.useful
-                        change(value.copy(kinds = if (selected) prior + kind else prior - kind))
-                    }, enabled = !busy, modifier = Modifier.testTag("events-pref-kind-${kind.code}"))
-                    Text(stringResource(kind.label()), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                } }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
-    }
 }
 
 @Composable private fun ScheduleMode(selected: Boolean, label: Int, enabled: Boolean, modifier: Modifier, tag: String, choose: () -> Unit) {

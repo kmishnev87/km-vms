@@ -314,9 +314,10 @@ def _ensure_area_zoom(ctx):
             ctx.area_zoom_probe = None
 
 
-def capabilities(**credentials):
+def capabilities(*, include_area_zoom=True, **credentials):
     ctx = get_context(**credentials)
-    _ensure_area_zoom(ctx)
+    if include_area_zoom:
+        _ensure_area_zoom(ctx)
     return {"ok": ctx.supported is not None, "supported": ctx.supported,
             "source": "unknown" if ctx.supported is None else "onvif_ptz_service" if ctx.supported else "unsupported",
             "can_pan_tilt": bool(ctx.modes.get("pan_tilt")), "can_zoom": bool(ctx.modes.get("zoom")),

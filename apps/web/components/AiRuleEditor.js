@@ -114,14 +114,6 @@ function Properties({ rule, patch, t, r, locale }) {
         <small>{r("rule_local_time")}</small>
       </> : null}
     </details>
-    <div className="aiRuleOutcomes">
-      <div className="aiHintLabel">{r("rule_outcomes")}</div>
-      <label className="aiRuleCheck"><input type="checkbox" checked={rule.record}
-        onChange={e=>patch({record:e.target.checked})}/>{r("rule_action_record")}</label>
-      <label className="aiRuleCheck"><input type="checkbox" checked={rule.notify}
-        onChange={e=>patch({notify:e.target.checked})}/>{r("rule_action_notify")}</label>
-      <p className="aiHintBox">{r("rule_outcomes_help")}</p>
-    </div>
   </>;
 }
 
@@ -360,11 +352,6 @@ export default function AiRuleEditor({ camera,draft,update,issue,dirty,saving,on
             <span>{r(captureError||(loading||restoring?"rule_frame_wait":config.reference?"rule_frame_no_saved":"rule_frame_hint"))}</span></>}/>
         <div className="aiStageStrip">
           <div className="aiToolRow">
-            {expanded && shapes.length ? <select className="aiShapeSwitcher" value={active||""} aria-label={r("work_shapes")}
-              onChange={e=>e.target.value?choose(e.target.value):overview()}>
-              <option value="">{r("work_overview")}</option>
-              {shapes.map(s=><option value={s.id} key={s.id}>{s.mark} · {s.name}</option>)}
-            </select>:null}
             <div className="aiToolGroup">
               <Tool icon="point" pressed={tool==="add"} disabled={!canEdit||points.length>=maximum}
                 onClick={()=>{setTool(tool==="add"?"points":"add");pick(null);}}>{r("work_add_points")}</Tool>
@@ -387,7 +374,7 @@ export default function AiRuleEditor({ camera,draft,update,issue,dirty,saving,on
         </div>
       </div>
 
-      <aside hidden={expanded} className="aiRuleSidebar" aria-label={r("work_heading")}>
+      <aside className="aiRuleSidebar" aria-label={r("work_heading")}>
         <div className="aiSideTabs" role="group" aria-label={r("work_heading")}>
           <button type="button" aria-pressed={pane==="rules"} onClick={()=>openPane("rules")}>{r("rule_items")}
             {config.rules.length?<span>{config.rules.length}</span>:null}</button>

@@ -12,6 +12,7 @@ import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationToast } from "../../components/OperationFeedback";
 import TilePlayer from "../../components/TilePlayer";
+import { aiLiveCopy, aiLiveStatusCopy } from "../../lib/aiLiveView";
 import { CameraPtzBadge, CameraPtzControls } from "../../components/cameras/CameraPtz";
 import FloatingCameraPtz from "../../components/cameras/FloatingCameraPtz";
 import { usePtzCapabilities, usePtzController } from "../../lib/useCameraPtz";
@@ -298,6 +299,8 @@ export default function LivePage() {
   const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [fullscreenTileId, setFullscreenTileId] = useState(null);
+  const [aiVisible, setAiVisible] = useState({});
+  const [aiStatuses, setAiStatuses] = useState({});
   const [activeAudioTileId, setActiveAudioTileId] = useState("");
   const [audioRequestId, setAudioRequestId] = useState(0);
   const [audioFactsByTileId, setAudioFactsByTileId] = useState({});
@@ -422,7 +425,7 @@ export default function LivePage() {
     setTiles([]); setSidebarCameraOrder([]); setLastPersistedSidebarCameraOrder([]);
     setFrameLayoutActive(false);
     setWorkspaceLayoutReady(false);
-    setCameras([]); setCamerasLoaded(false); setActiveAudioTileId(""); setFullscreenTileId(null);
+    setCameras([]); setCamerasLoaded(false); setActiveAudioTileId(""); setFullscreenTileId(null); setAiVisible({});
     closePtz(); setPtzPreferences({}); setPtzPositions({});
     const writer = createSerializedLayoutWriter((payload) => apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -988,7 +991,7 @@ export default function LivePage() {
   }
 
   function handleTileSurfacePointerUp(event, tileId) {
-    if (event.target?.closest?.("[data-ptz-controls], [data-ptz-point-surface], [data-live-fullscreen-stream-switch]")) return;
+    if (event.target?.closest?.("[data-ptz-controls], [data-ptz-point-surface], [data-live-fullscreen-stream-switch], [data-live-ai]")) return;
     if (event.target?.closest?.("button, select, input, textarea, a")) return;
     if (dragState || resizeState) return;
     if (event.pointerType === "mouse" || event.pointerType === "touch") return;
@@ -1373,6 +1376,19 @@ export default function LivePage() {
               ? tile.stream
               : defaultStream(camera);
             const audioState = audioButtonState(tile.id);
+            const overlay = camera?.ai_overlay?.shapes?.length ? camera.ai_overlay : null;
+            const showContours = Boolean(overlay && aiVisible[camera.id]);
+            const aiStatus = aiStatuses[camera?.id]?.stream === stream ? aiStatuses[camera.id].state : "waiting";
+            const aiReason = showContours && aiLiveStatusCopy(locale, aiStatus);
+            const aiLabel = aiLiveCopy(locale) + (aiReason ? ` — ${aiReason}` : "");
+            const aiButton = overlay ? <button type="button" className="liveWorkspaceIconButton liveAiButton"
+              data-live-ai="true" data-live-ai-status={showContours ? aiStatus : "off"} title={aiLabel}
+              aria-label={aiLabel} aria-pressed={showContours}
+              onPointerDown={event => event.stopPropagation()}
+              onClick={() => {
+                setAiStatuses(value => ({ ...value, [camera.id]: { stream, state: "waiting" } }));
+                setAiVisible(value => ({ ...value, [camera.id]: !value[camera.id] }));
+              }}>AI</button> : null;
 
             return (
               <div
@@ -1403,49 +1419,52 @@ export default function LivePage() {
                   toggleTileFullscreen(tile.id);
                 }}
               >
-                <div className={`liveWorkspaceTileBar ${ptzCapabilities[camera?.id]?.supported ? "hasPtz" : ""}`}>
+                <div className="liveWorkspaceTileBar">
                   <div className="liveWorkspaceTileTitle">
                     <span className="liveWorkspaceCameraName">{camera?.name || TEXT.camera}</span>
                     {hlsFallbacks[tile.id] === `${camera?.id}:${tile.stream}` ? <span className="liveHlsFallback"
                       title={onlineCopy.fallback} role="status">{onlineCopy.fallback}</span> : null}
                   </div>
-                  {camera ? <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
-                    expanded={ptzCameraId === camera.id}
-                    onClick={() => { setIsSidebarCollapsed(false); togglePtz(camera.id); }} /> : null}
-                  <button
-                    type="button"
-                    className={`liveWorkspaceIconButton liveWorkspaceAudioButton ${audioState.active ? "isActive" : ""}`}
-                    title={audioState.title}
-                    aria-label={audioState.title}
-                    aria-pressed={audioState.active ? "true" : "false"}
-                    disabled={audioState.disabled}
-                    data-live-audio-button="true"
-                    data-audio-state={audioState.active ? "active" : audioState.disabled ? "unavailable" : "available"}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={() => toggleTileAudio(tile.id)}
-                  >
-                    <LiveAudioIcon />
-                  </button>
-                  <select
-                    className="liveWorkspaceTileSelect"
-                    value={stream}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
-                  >
-                    {streams.map((item) => (
-                      <option key={item.key} value={item.key}>{item.label}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="liveWorkspaceIconButton"
-                    title={TEXT.close}
-                    aria-label={TEXT.close}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={() => removeTile(tile.id)}
-                  >
-                    {"\u00d7"}
-                  </button>
+                  <div className="liveWorkspaceTileActions">
+                    {camera ? <CameraPtzBadge camera={camera} capability={ptzCapabilities[camera.id]}
+                      expanded={ptzCameraId === camera.id}
+                      onClick={() => { setIsSidebarCollapsed(false); togglePtz(camera.id); }} /> : null}
+                    {aiButton}
+                    <button
+                      type="button"
+                      className={`liveWorkspaceIconButton liveWorkspaceAudioButton ${audioState.active ? "isActive" : ""}`}
+                      title={audioState.title}
+                      aria-label={audioState.title}
+                      aria-pressed={audioState.active ? "true" : "false"}
+                      disabled={audioState.disabled}
+                      data-live-audio-button="true"
+                      data-audio-state={audioState.active ? "active" : audioState.disabled ? "unavailable" : "available"}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={() => toggleTileAudio(tile.id)}
+                    >
+                      <LiveAudioIcon />
+                    </button>
+                    <select
+                      className="liveWorkspaceTileSelect"
+                      value={stream}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
+                    >
+                      {streams.map((item) => (
+                        <option key={item.key} value={item.key}>{item.label}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="liveWorkspaceIconButton"
+                      title={TEXT.close}
+                      aria-label={TEXT.close}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={() => removeTile(tile.id)}
+                    >
+                      {"\u00d7"}
+                    </button>
+                  </div>
                 </div>
 
                 <div
@@ -1461,6 +1480,10 @@ export default function LivePage() {
                     <TilePlayer
                       cameraId={camera.id}
                       stream={stream}
+                      aiOverlay={showContours ? overlay : null}
+                      onAiStatus={state => setAiStatuses(value =>
+                        value[camera.id]?.stream === stream && value[camera.id]?.state === state ? value
+                          : { ...value, [camera.id]: { stream, state } })}
                       lowLatency={ptzCameraId === camera.id}
                       onTransportFallback={(active) => setHlsFallbacks(current => {
                         const next = active ? `${camera.id}:${tile.stream}` : null;
@@ -1498,6 +1521,7 @@ export default function LivePage() {
                       onPointerDown={(event) => event.stopPropagation()}
                       onDoubleClick={(event) => event.stopPropagation()}
                     >
+                      {aiButton}
                       <button
                         type="button"
                         className={`liveWorkspaceAudioButton ${audioState.active ? "isActive" : ""}`}

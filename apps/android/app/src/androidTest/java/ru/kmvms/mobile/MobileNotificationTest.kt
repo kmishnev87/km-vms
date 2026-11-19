@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -47,6 +48,22 @@ class MobileNotificationTest {
             MobileNotifications.show(context, profile, event)
             SystemClock.sleep(100)
             assertEquals(posted.postTime, manager.activeNotifications.first { it.tag == posted.tag }.postTime)
+            val preview = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
+            try {
+                preview.eraseColor(0xff356080.toInt())
+                MobileNotifications.addPreview(context, posted.tag, preview)
+                val until = SystemClock.elapsedRealtime() + 3000
+                var updated = manager.activeNotifications.first { it.tag == posted.tag }
+                while (!updated.notification.extras.getString(Notification.EXTRA_TEMPLATE).orEmpty().endsWith("BigPictureStyle")
+                    && SystemClock.elapsedRealtime() < until) {
+                    SystemClock.sleep(50)
+                    updated = manager.activeNotifications.first { it.tag == posted.tag }
+                }
+                assertTrue(updated.notification.extras.getString(Notification.EXTRA_TEMPLATE).orEmpty().endsWith("BigPictureStyle"))
+                assertEquals(posted.key, updated.key)
+                assertEquals(2, updated.notification.actions.size)
+                assertTrue(updated.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+            } finally { preview.recycle() }
         } finally {
             MobileNotifications.clear(context, profile.id)
             val prior = JSONArray(history.getString("delivered_v1", "[]"))

@@ -8,6 +8,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from fractions import Fraction
@@ -15,7 +16,8 @@ from pathlib import Path
 
 MAX_PENDING = 256
 MAX_JPEG = 128 * 1024
-REPEAT_SECONDS = 45
+PROGRESS_INTERVAL = 5
+SOURCE_LIMIT = 64
 
 
 def thumbnail(packet):
@@ -74,66 +76,110 @@ def _thumbnail_worker(codec):
 class AiEventOutbox:
     def __init__(self, root):
         self.root = Path(root) / "inbox" if root else None
-        self.queue = queue.Queue(4)
+        self.queue = queue.Queue(SOURCE_LIMIT)
         self.closed = threading.Event()
         self.thread = None
+        self.guard = threading.Lock()
         self.recent = OrderedDict()
+        self.progress = {}
+        self.pending_starts = set()
 
-    def offer(self, frame, revision, starts):
-        if self.root is None or self.closed.is_set() or not starts or not revision:
+    def offer(self, frame, revision, starts, window_seconds=60):
+        if self.root is None or self.closed.is_set() or not revision:
             return
-        # Mirror the history's sliding filter before decoding or writing any JPEG.
-        accepted = []
-        for rule_id, condition, kinds in starts[:8]:
-            key = (frame.camera, revision, rule_id, condition, kinds)
-            previous = self.recent.pop(key, None)
+        key = (frame.camera, revision)
+        with self.guard:
+            previous = self.recent.get(key)
+            if previous is not None and frame.captured <= previous:
+                return
+            opening = previous is None or frame.captured >= previous + window_seconds
+            if opening:
+                if not starts or key in self.pending_starts:
+                    return
+                rule_id, condition, kinds = starts[0]
+                try:
+                    # Optional JPEG packets keep the original four-frame
+                    # memory budget. Captions can queue independently of that.
+                    self.queue.put_nowait((key, frame.captured, rule_id, condition, kinds,
+                                           frame if self.queue.qsize() < 4 else None))
+                except queue.Full:
+                    return
+                self.pending_starts.add(key)
+            else:
+                # Retime from the latest positive frame; coalesce the previous
+                # positives, including sustained presence without a new start.
+                due, _ = self.progress.get(key, (time.monotonic() + PROGRESS_INTERVAL, None))
+                self.progress[key] = due, frame.captured
             self.recent[key] = frame.captured
-            if previous is None or not 0 <= frame.captured - previous < REPEAT_SECONDS:
-                accepted.append((rule_id, condition, kinds))
-        while len(self.recent) > 512:
-            self.recent.popitem(last=False)
-        if not accepted:
-            return
-        if self.thread is None:
-            self.thread = threading.Thread(target=self._run, name="ai-event-evidence", daemon=True)
-            self.thread.start()
+            self.recent.move_to_end(key)
+            while len(self.recent) > SOURCE_LIMIT:
+                dropped, _ = self.recent.popitem(last=False)
+                self.progress.pop(dropped, None)
+            if self.thread is None:
+                self.thread = threading.Thread(target=self._run, name="ai-event-evidence", daemon=True)
+                self.thread.start()
+
+    def _write(self, header, jpeg=b""):
+        self.root.mkdir(parents=True, exist_ok=True)
+        with os.scandir(self.root) as entries:
+            if sum(item.name.endswith(".evt") for item in entries) >= MAX_PENDING:
+                return
+        event_id = uuid.uuid4().hex
+        path = self.root / (event_id + ".evt")
+        temporary = self.root / (event_id + ".part")
+        payload = json.dumps(header, separators=(",", ":"), allow_nan=False).encode()
         try:
-            self.queue.put_nowait((frame, revision, accepted))
-        except queue.Full:
-            pass   # Evidence can be dropped under pressure; recording is never blocked.
+            with temporary.open("xb") as writer:
+                writer.write(payload + b"\n")
+                writer.write(jpeg)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _write_progress(self, key, captured):
+        self._write({"v": 2, "camera_id": key[0], "revision": key[1], "captured": captured, "progress": True})
+
+    def _flush_progress(self):
+        now = time.monotonic()
+        with self.guard:
+            due = [(key, value[1]) for key, value in self.progress.items()
+                   if key not in self.pending_starts and (self.closed.is_set() or now >= value[0])]
+            for key, _ in due:
+                del self.progress[key]
+        for key, captured in due:
+            try:
+                self._write_progress(key, captured)
+            except (OSError, ValueError):
+                continue
 
     def _run(self):
         while not self.closed.is_set() or not self.queue.empty():
+            self._flush_progress()
             try:
-                frame, revision, starts = self.queue.get(timeout=.5)
+                key, captured, rule_id, condition, kinds, frame = self.queue.get(timeout=.5)
             except queue.Empty:
                 continue
             try:
-                self.root.mkdir(parents=True, exist_ok=True)
-                with os.scandir(self.root) as entries:
-                    remaining = MAX_PENDING - sum(item.name.endswith(".evt") for item in entries)
-                if remaining <= 0:
-                    continue
+                with self.guard:
+                    older = self.progress.get(key)
+                    if older and older[1] < captured:
+                        del self.progress[key]
+                    else:
+                        older = None
+                if older:
+                    self._write_progress(key, older[1])
                 try:
-                    jpeg = isolated_thumbnail(frame)
+                    jpeg = isolated_thumbnail(frame) if frame is not None else b""
                 except Exception:
                     jpeg = b""  # Detection remains useful without a still.
-                for rule_id, condition, kinds in starts[:remaining]:
-                    event_id = uuid.uuid4().hex
-                    path = self.root / (event_id + ".evt")
-                    temporary = self.root / (event_id + ".part")
-                    header = json.dumps({"v": 1, "camera_id": frame.camera, "revision": revision,
-                                         "captured": frame.captured, "rule_id": rule_id, "condition": condition,
-                                         "objects": kinds}, separators=(",", ":"), allow_nan=False).encode()
-                    try:
-                        with temporary.open("xb") as writer:
-                            writer.write(header + b"\n")
-                            writer.write(jpeg)
-                        os.replace(temporary, path)
-                    finally:
-                        temporary.unlink(missing_ok=True)
+                self._write({"v": 2, "camera_id": key[0], "revision": key[1], "captured": captured,
+                             "rule_id": rule_id, "condition": condition, "objects": kinds}, jpeg)
             except (OSError, ValueError):
-                continue
+                pass
+            finally:
+                with self.guard:
+                    self.pending_starts.discard(key)
+        self._flush_progress()
 
     def stop(self):
         self.closed.set()

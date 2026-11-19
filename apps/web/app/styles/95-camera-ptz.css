@@ -10,10 +10,8 @@
 .liveWorkspaceCameraIdentity .liveWorkspaceCameraName { min-width:0; }
 .liveWorkspaceCameraIdentity .cameraPtzBadge { width:22px; height:22px; flex-basis:22px; padding:2px; }
 .liveWorkspaceCameraIdentity .cameraPtzBadge svg { transform:translateY(-1px); }
-/* Keep the common audio/stream/close columns intact; PTZ gets its own preceding column. */
-.liveWorkspaceTileBar.hasPtz { grid-template-columns:minmax(0,1fr) 30px 30px 76px 30px; }
-.liveWorkspaceTileBar > .cameraPtzBadge { position:relative; z-index:40; width:26px; height:26px; padding:4px; color:#f8fafc; background:rgba(248,250,252,.1); border-radius:8px; }
-.liveWorkspaceTileBar > .cameraPtzBadge:hover,.liveWorkspaceTileBar > .cameraPtzBadge[aria-expanded="true"] { color:#fff; background:rgba(96,165,250,.3); }
+.liveWorkspaceTileActions > .cameraPtzBadge { position:relative; z-index:40; width:26px; height:26px; flex-basis:26px; padding:4px; color:#f8fafc; background:rgba(248,250,252,.1); border-radius:8px; }
+.liveWorkspaceTileActions > .cameraPtzBadge:hover,.liveWorkspaceTileActions > .cameraPtzBadge[aria-expanded="true"] { color:#fff; background:rgba(96,165,250,.3); }
 .liveSidebarPtz { margin:10px -26px 0 0; padding:9px 0 0; border-top:1px solid #dbe3ef; cursor:default; touch-action:pan-y; }
 .liveWorkspaceCameraItem:has(> .liveSidebarPtz) > .workspaceSidebarDragHandle { top:6px; }
 .cameraPtzControls { --ptz-bg:#f8fafc; --ptz-button:#fff; --ptz-line:#cbd5e1; --ptz-text:#334155; --ptz-muted:#64748b; color:var(--ptz-text); min-width:0; font-size:11px; user-select:none; }

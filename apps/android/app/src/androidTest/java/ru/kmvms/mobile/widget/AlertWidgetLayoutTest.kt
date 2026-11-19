@@ -42,7 +42,7 @@ class AlertWidgetLayoutTest {
                         val settings = root.findViewById<View>(R.id.alert_widget_settings)
                         val bell = root.findViewById<ImageView>(R.id.alert_widget_bell)
                         val live = root.findViewById<ImageView>(R.id.alert_widget_live)
-                        val count = root.findViewById<View>(R.id.alert_widget_count)
+                        val count = root.findViewById<View>(R.id.alert_widget_count_area)
                         assertEquals(detail, settings.right, live.left)
                         assertEquals(detail, live.right, count.left)
                         assertEquals(detail, settings.height, live.height)
@@ -80,7 +80,7 @@ class AlertWidgetLayoutTest {
             val compact = RemoteViews(context.packageName, R.layout.alert_widget).apply(context, null)
             assertNull(compact.findViewById<View>(R.id.alert_widget_count))
             assertNull(compact.findViewById<View>(R.id.alert_widget_live))
-            for (number in listOf("0", "17", "100000")) {
+            for (number in listOf("0", "17", "99")) {
                 val root = RemoteViews(context.packageName, R.layout.alert_widget_count).apply {
                     setTextViewText(R.id.alert_widget_count, number)
                 }.apply(context, null)
@@ -91,8 +91,17 @@ class AlertWidgetLayoutTest {
                 assertEquals(number, count.text.toString())
                 assertEquals(android.graphics.Color.parseColor("#475569"), count.currentTextColor)
                 assertNull(count.background)
-                assertTrue(count.right <= root.width && count.width >= 44 * density)
+                val left = count.left
+                val right = count.right
                 assertTrue(count.paint.measureText(number) <= count.width - count.paddingLeft - count.paddingRight)
+                val suffix = root.findViewById<TextView>(R.id.alert_widget_count_plus)
+                suffix.visibility = View.VISIBLE
+                root.measure(View.MeasureSpec.makeMeasureSpec((180 * density).toInt(), View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec((90 * density).toInt(), View.MeasureSpec.EXACTLY))
+                root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+                assertEquals(left, count.left)
+                assertEquals(right, count.right)
+                assertEquals("+", suffix.text.toString())
             }
         }
     }

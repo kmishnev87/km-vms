@@ -61,6 +61,7 @@
     <string name="ai_rule_days_required">请至少选择一天。</string>
     <string name="ai_rule_range">请检查置信度和时间的范围。</string>
     <string name="ai_rule_view_checking_view">AI 正在对比当前视角与设置画面。</string>
+    <string name="ai_rule_view_checking_profile">无法确认摄像机配置，暂不应用线条、区域和排除区域。</string>
     <string name="ai_rule_view_aligned">已确认视角，区域和线条规则生效。</string>
     <string name="ai_rule_view_view_unconfirmed">视角未确认，区域、线条和排除规则已暂停。</string>
     <string name="ai_rule_view_invalid_rules">无法应用规则，请在编辑器中检查。</string>

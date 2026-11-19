@@ -42,6 +42,7 @@ from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 from app.services.update_check import run_startup_due_check
 from app.services.camera_events_worker import start_camera_events_worker, stop_camera_events_worker
+from app.services import ai_camera_view
 from app.services import ai_event_history
 from app.services.mobile_push_worker import start_mobile_push_worker, stop_mobile_push_worker
 
@@ -189,6 +190,7 @@ def startup():
     start_archive_migration_worker()
     start_cleanup_worker()
     start_camera_events_worker()
+    ai_camera_view.start()
     ai_event_history.start()
     start_mobile_push_worker()
 
@@ -197,6 +199,7 @@ def startup():
 def shutdown():
     stop_mobile_push_worker()
     ai_event_history.stop()
+    ai_camera_view.stop()
     stop_camera_events_worker()
     stop_archive_migration_worker()
     stop_archive_integrity_worker()

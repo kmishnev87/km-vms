@@ -149,7 +149,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
             val service = EventsApi(api)
             val (event, zone) = service.single(pending.eventId)
             val action = if (state.user?.can("view_timeline") == true) pending.action else EventAction.LIVE
-            val result = EventVideoNavigation(api).open(event, action, zone)
+            val result = EventVideoNavigation(api).open(event, action, zone, fromPush = true)
             val request = result.request
             if (request != null) {
                 videoRequest = request

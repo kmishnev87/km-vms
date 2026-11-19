@@ -4,6 +4,11 @@ import java.time.Duration
 import java.time.Instant
 
 enum class EventAction { OPEN, LIVE, RECORDING }
+
+fun notificationEventAction(action: EventAction, occurredAt: Instant, now: Instant): EventAction =
+    if (action != EventAction.OPEN) action
+    else if (occurredAt.isAfter(now.minus(Duration.ofHours(1)))) EventAction.LIVE
+    else EventAction.RECORDING
 enum class ArchiveAvailability { READY, WRITING, MISSING, UNKNOWN }
 sealed interface EventDestination {
     data object Live : EventDestination

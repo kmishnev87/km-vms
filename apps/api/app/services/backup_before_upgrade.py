@@ -521,6 +521,7 @@ def run_backup_create_operation(
     actor: Any,
     backup_root: str | Path | None = None,
     migration_plan_summary: dict[str, Any] | None = None,
+    trial_restore: bool = False,
 ) -> dict[str, Any]:
     root = configured_backup_root(backup_root)
     planned_id = new_backup_artifact_id()
@@ -606,12 +607,11 @@ def run_backup_create_operation(
         )
         receipt = update_backup_operation(
             receipt,
-            state="completed",
-            phase="completed",
+            state="running" if trial_restore else "completed",
+            phase="integrity_preflight" if trial_restore else "completed",
             result=public_result,
             backup_root=root,
         )
-        return safe_receipt(receipt)
     except BackupSafetyBlocked as exc:
         receipt = update_backup_operation(
             receipt,
@@ -642,6 +642,17 @@ def run_backup_create_operation(
                 "receipt": safe_receipt(receipt),
             },
         ) from exc
+
+    if not trial_restore:
+        return safe_receipt(receipt)
+    # Use the same receipt and disposable-target workflow as a manual check.
+    # A failed trial does not make the successfully created copy disappear.
+    from app.services.restore_maintenance import RestoreMaintenanceBlocked, validate_backup_receipt
+
+    try:
+        return validate_backup_receipt(db, receipt, planned_id, actor=actor, root=root)
+    except RestoreMaintenanceBlocked as exc:
+        return exc.diagnostics["receipt"]
 
 
 def verify_backup_manifest(

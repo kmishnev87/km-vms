@@ -91,7 +91,7 @@ from app.services.storage_operation_conflicts import (
 from app.services.storage_operations_foundation import StorageOperationContractError, claim_operation, safe_reason_code
 from app.services.recording_storage import resolve_segment_file_path
 from app.services.camera_stream_dimensions import read_dimensions
-from app.services.camera_event_settings import validate_event_receiving
+from app.services.camera_event_settings import camera_event_reception_selected
 from app.services.camera_events_worker import camera_receiving_revision, wake_camera_events
 from app.services.ai_recording import reset_recording_cutoff
 from app.services.ai_rule_frame import prune_editor_images
@@ -174,6 +174,9 @@ def list_viewer_cameras(
     if not (user_has_permission(role, "view_live") or user_has_permission(role, "view_timeline")):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
 
+    from app.services.ai_recording import live_rule_overlay
+
+    live_allowed = user_has_permission(role, "view_live")
     cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.name.asc()).all()
     return [
         {
@@ -185,6 +188,7 @@ def list_viewer_cameras(
             "status": camera.status,
             "default_live_stream": camera.default_live_stream,
             "stream_dimensions": read_dimensions(camera),
+            "ai_overlay": live_rule_overlay(camera) if live_allowed else None,
             "rtsp_main_url": bool(camera.rtsp_main_url),
             "rtsp_sub_url": bool(camera.rtsp_sub_url),
         }
@@ -320,7 +324,6 @@ def create_camera(
     rtsp_host, rtsp_port = final_connection_payload["rtsp_host"], final_connection_payload["rtsp_port"]
     rtsp_main_url, rtsp_sub_url = final_connection_payload["rtsp_main_url"], final_connection_payload["rtsp_sub_url"]
     manual_unverified = require_save_gate(final_connection_payload, connection_sensitive_change=True)
-    validate_event_receiving(payload.events_enabled, final_connection_payload)
     folder_name = build_unique_folder_name(db, payload.name)
     ensure_camera_folder(folder_name)
 
@@ -328,7 +331,7 @@ def create_camera(
         name=payload.name,
         storage_folder_name=folder_name,
         enabled=payload.enabled,
-        events_enabled=payload.events_enabled,
+        events_enabled=False,
         protocol=payload.protocol,
         host=payload.host,
         port=payload.port,
@@ -788,6 +791,9 @@ def update_camera(
     receiving_revision = camera_receiving_revision(camera)
     raw_payload = payload.model_dump(exclude_unset=True)
     data = dict(raw_payload)
+    # Older clients may still send the retired switch with a normal camera edit.
+    # Accept their payload without letting it change the recording source.
+    data.pop("events_enabled", None)
     preview_token = data.pop("preview_token", None)
     validation_token = data.pop("validation_token", None)
     main_validation_token = data.pop("main_validation_token", None)
@@ -858,17 +864,11 @@ def update_camera(
     }
     manual_unverified = require_save_gate(gate_payload, connection_sensitive_change=connection_sensitive_change)
 
-    if proposed_values["protocol"] != "onvif":
-        if data.get("events_enabled"):
-            validate_event_receiving(True, gate_payload)
-        data["events_enabled"] = False
-    elif proposed_values.get("events_enabled") and (not old_values["events_enabled"] or connection_sensitive_change):
-        validate_event_receiving(True, gate_payload)
-
     if data.get("enabled") is False:
         preserve_manual_camera_disable(db, camera.id)
     for key, value in data.items():
         setattr(camera, key, value)
+    camera.events_enabled = camera_event_reception_selected(camera)
     source_changed = receiving_revision != camera_receiving_revision(camera)
     if source_changed or old_values["enabled"] != bool(camera.enabled):
         reset_recording_cutoff(db, camera, keep_channel=not source_changed)
@@ -890,6 +890,11 @@ def update_camera(
     db.commit()
     db.refresh(camera)
     wake_camera_events()
+    if connection_sensitive_change:
+        from app.services.ai_camera_view import spatial_ai, wake as wake_ai_view
+
+        if spatial_ai(camera):
+            wake_ai_view()
     persist_verified_stream_dimensions(camera, gate_payload)
     attach_test_preview_to_camera(preview_token, camera.id)
     changed = {}

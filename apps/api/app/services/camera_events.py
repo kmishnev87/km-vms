@@ -17,8 +17,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import aliased
 
 from app.models.audit_event import AuditEvent
+from app.models.camera import Camera
 from app.models.workspace_layout import UserWorkspaceLayout
 from app.services.onvif_events import EVENT_KINDS, KINDS, LEGACY_TOPIC_KINDS, SERVICE_HISTORY_TOPICS
+from app.services import camera_alert_episodes as episodes
 from app.services.timezone_contract import format_storage_utc_iso, format_system_iso, timezone_context
 
 CATEGORY = "camera_event"
@@ -73,7 +75,7 @@ def preferences(db, user_id, *, lock=False):
 def preference_value(layout):
     value = dict(layout or {})
     return {"notifications": bool(value.get("notifications", True)), "camera_ids": value.get("camera_ids"),
-            "kinds": [kind for kind in value["kinds"] if kind in EVENT_KINDS] if isinstance(value.get("kinds"), list) else None,
+            "kinds": None,  # Old clients still parse the field; it no longer filters delivery.
             "hours_enabled": bool(value.get("hours_enabled", False)),
             "start_minute": int(value.get("start_minute", 0)), "end_minute": int(value.get("end_minute", 0)),
             "schedule_mode": value.get("schedule_mode", "all"), "camera_schedules": value.get("camera_schedules") or {}}
@@ -93,8 +95,7 @@ def lock_notification_preferences(db, user_id):
 
 
 def save_preferences(db, user_id, value):
-    value = {**value, "kinds": [kind for kind in value["kinds"] if kind in EVENT_KINDS]
-             if isinstance(value.get("kinds"), list) else None}
+    value = {**value, "kinds": None}
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
     else:
@@ -159,6 +160,9 @@ def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread
 
 def serialize(row, read=False, ctx=None):
     data = row.event_metadata or {}
+    expires = episodes.timestamp(data.get("alert_episode_until"))
+    active = data.get("active") if expires is None else episodes.epoch(now_utc()) < expires
+    ended_at = data.get("ended_at") if expires is None else episodes.iso(expires) if not active else None
     kind = row.event_type.removeprefix("camera.")
     if kind == "other":
         kind = LEGACY_TOPIC_KINDS.get(data.get("topic"), kind)
@@ -167,7 +171,7 @@ def serialize(row, read=False, ctx=None):
             "camera_name": row.target_name, "kind": kind if kind in KINDS else "other",
             "occurred_at": data.get("occurred_at") or format_storage_utc_iso(row.created_at),
             "received_at": row.created_at.replace(tzinfo=timezone.utc).isoformat(),
-            "ended_at": data.get("ended_at"), "active": data.get("active"), "clock_uncertain": bool(data.get("clock_uncertain")),
+            "ended_at": ended_at, "active": active, "clock_uncertain": bool(data.get("clock_uncertain")),
             # This is an observation, not a promise that an old alarm is live now.
             "state_observed_at": data.get("last_seen_at") or format_storage_utc_iso(row.created_at),
             "initial_state": bool(data.get("initial_state")),
@@ -330,15 +334,11 @@ def delete_camera_events(db, *, ids=None, through=None, actor=None):
     return deleted
 
 
-def record_signal(db, group, camera, signal, *, diagnostics=None, history_allowed=True):
+def record_signal(db, group, camera, signal, *, diagnostics=None):
     if signal.kind not in EVENT_KINDS and signal.active is not False:
         return None  # Unknown signals belong to bounded receiver diagnostics.
     received = now_utc()
-    from app.services.ai_recording import observe_camera_signal
-    observe_camera_signal(db, group, camera, signal, received=received)
-    if not history_allowed:
-        db.commit()
-        return None
+    from app.services.ai_recording import camera_history_matches_policy, observe_camera_signal
     target_type = "camera" if camera else "camera_device"
     target_id = str(camera["id"]) if camera else group["device_id"]
     name = camera["name"] if camera else " / ".join(c["name"] for c in group["cameras"])[:255]
@@ -346,22 +346,16 @@ def record_signal(db, group, camera, signal, *, diagnostics=None, history_allowe
     if signal.key:
         identity.append(signal.key)
     episode = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    # A property's Key identifies the individual object. Without it, one
-    # person's end could close another person's event in the same rule/zone.
-    # Do not invent keys for legacy rows: an unknowable old end stays unknown.
-    property_query = event_query(db).filter(AuditEvent.target_type == target_type, AuditEvent.target_id == target_id,
-                AuditEvent.event_metadata["episode"].as_string() == episode)
-    prior = property_query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).with_for_update().first()
-    if prior is not None and not (prior.event_metadata.get("active") is True or
-                                  prior.event_metadata.get("state_unconfirmed") is True or
-                                  signal.active is None and (received - prior.created_at).total_seconds() < 10):
-        prior = None
     if signal.active is False:
+        observe_camera_signal(db, group, camera, signal, received=received)
+        # Close pre-upgrade property alarms without changing the new episode's
+        # deadline. The end of one object is not the end of all activity.
         changed = False
-        # Distinct useful classifications can have independent alert rows for
-        # the SAME property/object. Its end closes them all, never other keys.
-        pending = property_query.filter(or_(AuditEvent.event_metadata["active"].as_boolean().is_(True),
-                                            AuditEvent.event_metadata["state_unconfirmed"].as_boolean().is_(True)))
+        pending = event_query(db).filter(AuditEvent.target_type == target_type, AuditEvent.target_id == target_id,
+            AuditEvent.event_metadata["episode"].as_string() == episode,
+            AuditEvent.event_metadata["alert_episode_until"].as_float().is_(None),
+            or_(AuditEvent.event_metadata["active"].as_boolean().is_(True),
+                AuditEvent.event_metadata["state_unconfirmed"].as_boolean().is_(True)))
         while True:
             rows = pending.order_by(AuditEvent.created_at, AuditEvent.id).with_for_update().limit(256).all()
             if not rows:
@@ -376,47 +370,39 @@ def record_signal(db, group, camera, signal, *, diagnostics=None, history_allowe
         if changed:
             notify_change()
         return None
-    if signal.initialized and signal.active is not True:
+    if signal.initialized or getattr(signal, "operation", None) == "Initialized":
         return None
-    from app.services import camera_event_repeats as repeats
-    repeat_key = repeats.signature(group, signal)
-    if prior is not None and prior.event_metadata.get("repeat_signature") not in {None, repeat_key}:
-        prior = property_query.filter(AuditEvent.event_metadata["repeat_signature"].as_string() == repeat_key,
-            or_(AuditEvent.event_metadata["active"].as_boolean().is_(True),
-                AuditEvent.event_metadata["state_unconfirmed"].as_boolean().is_(True))).order_by(
-                    AuditEvent.created_at.desc(), AuditEvent.id.desc()).with_for_update().first()
-    suppressed = repeats.check(db, target_type, target_id, repeat_key, received)
-    if suppressed and diagnostics is not None:
-        diagnostics["messages_suppressed"] = diagnostics.get("messages_suppressed", 0) + 1
-    if suppressed and prior is None:
+    owner_id = camera["id"] if camera else min((lens["id"] for lens in group["cameras"]), default=None)
+    owner = db.query(Camera).filter(Camera.id == owner_id, Camera.deleted_at.is_(None),
+                                   Camera.status != "deleting").populate_existing().with_for_update().first()
+    if owner is None or not camera_history_matches_policy(db, group, camera, signal):
         db.commit()
         return None
-    if prior is not None:
-        previous_state = (prior.event_metadata.get("active"), bool(prior.event_metadata.get("state_unconfirmed")))
-        observed_state = signal.active if signal.active is not None else previous_state[0]
-        unconfirmed = previous_state[1] if signal.active is None else False
-        classes = set(prior.event_metadata.get("object_kinds") or [prior.event_metadata.get("object_kind")])
-        classes.update(getattr(signal, "object_kinds", ()) or [getattr(signal, "object_kind", None)])
-        classes = [kind for kind in ("person", "vehicle", "animal") if kind in classes]
-        changed = classes != (prior.event_metadata.get("object_kinds") or []) or (
-            not prior.event_metadata.get("rule_kind") and getattr(signal, "rule_kind", None))
-        prior.event_metadata = {**prior.event_metadata, "last_seen_at": received.replace(tzinfo=timezone.utc).isoformat(),
-                                "active": observed_state, "state_unconfirmed": unconfirmed,
-                                "occurrences": min(1000000, int(prior.event_metadata.get("occurrences", 1)) + int(not signal.initialized and not suppressed)),
-                                "object_kinds": classes, "object_kind": next(iter(classes), None),
-                                "rule_kind": prior.event_metadata.get("rule_kind") or getattr(signal, "rule_kind", None),
-                                **repeats.attributes(repeat_key, received)}
-        if changed:
-            # A later object classification must still qualify a phone's filters
-            # after the initial unclassified start was already consumed.
-            prior.event_metadata = {**prior.event_metadata, "mobile_notification_at": received.strftime("%Y-%m-%d %H:%M:%S.%f")}
-            from app.services.mobile_push import signal_change
-            signal_change(db)
+    policy = owner.recording_policy or {}
+    fingerprint = None
+    if signal.camera_at is not None:
+        fingerprint = hashlib.sha256(json.dumps(
+            [episode, signal.camera_at.isoformat(), signal.kind, getattr(signal, "rule_kind", None),
+             getattr(signal, "object_kind", None), sorted(getattr(signal, "object_kinds", ()) or ())],
+            separators=(",", ":")).encode()).hexdigest()
+    device = None if camera else group["device_id"]
+    if episodes.is_replay(owner, source="camera", device=device, fingerprint=fingerprint):
         db.commit()
-        if changed or previous_state != (observed_state, unconfirmed):
-            notify_change()
+        return None  # A new ONVIF subscription generation can replay a device stamp.
+    observed = observe_camera_signal(db, group, camera, signal, received=received)
+    if camera and policy.get("mode") == "events" and not observed:
+        db.commit()
+        return None  # The same validation prevents stale pulses extending the Recorder window.
+    identifier = str(uuid.uuid4())
+    admitted = episodes.admit(db, owner, source="camera", at=episodes.epoch(received),
+        minutes=episodes.settings_from(policy if camera else None), identifier=identifier,
+        device=device, fingerprint=fingerprint)
+    if admitted is None or not admitted.opening:
+        if diagnostics is not None:
+            diagnostics["messages_suppressed"] = diagnostics.get("messages_suppressed", 0) + 1
+        db.commit()
         return None
-    row = AuditEvent(id=str(uuid.uuid4()), created_at=received, category=CATEGORY, event_type="camera." + signal.kind,
+    row = AuditEvent(id=identifier, created_at=received, category=CATEGORY, event_type="camera." + signal.kind,
                      severity="info", message_ru="Событие камеры", message_en="Camera event", target_type=target_type,
                      target_id=target_id, target_name=name, event_metadata={
                          "episode": episode, "topic": signal.topic, "occurred_at": signal.occurred_at.replace(tzinfo=timezone.utc).isoformat(),
@@ -426,7 +412,7 @@ def record_signal(db, group, camera, signal, *, diagnostics=None, history_allowe
                          "rule_kind": getattr(signal, "rule_kind", None),
                          "object_kind": getattr(signal, "object_kind", None),
                          "object_kinds": list(getattr(signal, "object_kinds", ()) or filter(None, [getattr(signal, "object_kind", None)])),
-                         **repeats.attributes(repeat_key, received),
+                         **admitted.metadata,
                      })
     db.add(row)
     db.flush()
@@ -438,6 +424,10 @@ def record_signal(db, group, camera, signal, *, diagnostics=None, history_allowe
     db.commit()
     notify_change()
     wake_local()
+    if camera and camera.get("revision") and not signal.clock_uncertain:
+        from app.services.camera_event_frames import queue_frame
+
+        queue_frame(camera["id"], row.id, camera["revision"], signal.occurred_at)
     return row.id
 
 
@@ -445,7 +435,9 @@ def source_disconnected(db, group):
     from app.services.ai_recording import invalidate_camera_signals
     invalidate_camera_signals(db, group)
     ids = [str(c["id"]) for c in group["cameras"]] + [group["device_id"]]
-    query = event_query(db).filter(AuditEvent.target_id.in_(ids), AuditEvent.event_metadata["active"].as_boolean().is_(True))
+    query = event_query(db).filter(AuditEvent.target_id.in_(ids), AuditEvent.event_metadata["active"].as_boolean().is_(True),
+        AuditEvent.event_metadata["alert_episode_until"].as_float().is_(None),
+        AuditEvent.event_metadata["origin"].as_string().is_distinct_from(AI_ORIGIN))
     changed = False
     while True:
         rows = query.order_by(AuditEvent.created_at, AuditEvent.id).limit(256).with_for_update().all()
@@ -493,10 +485,6 @@ def notifications_allowed(preference, event, ctx, *, at=None):
     if not preference.get("notifications", True):
         return False
     if preference.get("camera_ids") is not None and event.get("camera_id") not in preference["camera_ids"]:
-        return False
-    event_kinds = {event.get("kind"), event.get("rule_kind"), event.get("object_kind")} - {None}
-    event_kinds.update(event.get("object_kinds") or [])
-    if preference.get("kinds") is not None and not event_kinds.intersection(preference["kinds"]):
         return False
     if preference.get("hours_enabled"):
         # Arrival uses the NAS clock, not a camera's possibly wrong timestamp.
