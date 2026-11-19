@@ -2,6 +2,7 @@ export const CAMERA_EVENT_KINDS = ["motion", "person", "vehicle", "animal", "int
 export const CAMERA_EVENT_REFRESH = "km-vms-camera-events-updated";
 export const CAMERA_EVENT_OPEN = "km-vms-open-camera-event";
 export const CAMERA_EVENT_HUB_OPEN = "km-vms-open-camera-events";
+export const AI_EVENT_CONDITIONS = ["presence", "enter", "exit", "crossing", "dwell", "scene"];
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 export function cameraEventId(search) {
@@ -11,7 +12,7 @@ export function cameraEventId(search) {
 
 export function eventErrorKey(error) {
   const code = error?.code || error?.detail?.code;
-  return ["event_camera_not_available", "event_source_ambiguous", "event_archive_unavailable", "event_not_found",
+  return ["event_camera_not_available", "event_source_ambiguous", "event_archive_unavailable", "event_archive_pending", "event_not_found",
     "event_access_denied", "detector_state_changed", "detector_change_unconfirmed", "detector_switch_not_exposed",
     "detector_read_failed", "analytics_unsupported", "analytics_profile_unavailable", "event_selection_expired",
     "event_selection_too_large", "event_reception_onvif_required", "event_reception_support_unconfirmed"].includes(code) ? code : "request_failed";
@@ -21,6 +22,9 @@ export function eventHistoryQuery(filters = {}, offset = 0) {
   const params = new URLSearchParams({ limit: "25", offset: String(Math.max(0, Number(offset) || 0)) });
   if (filters.camera) params.set("camera_id", filters.camera);
   if (CAMERA_EVENT_KINDS.includes(filters.kind)) params.set("kind", filters.kind);
+  if (filters.source === "ai" || filters.source === "camera") params.set("source", filters.source);
+  if (filters.rule?.trim()) params.set("rule", filters.rule.trim().slice(0, 48));
+  if (AI_EVENT_CONDITIONS.includes(filters.condition)) params.set("condition", filters.condition);
   if (filters.unread) params.set("unread", "true");
   const days = [1, 7, 30].includes(Number(filters.days)) ? Number(filters.days) : 30;
   params.set("since", new Date(Date.now() - days * 86400000).toISOString());
@@ -31,6 +35,9 @@ export function eventHistoryQuery(filters = {}, offset = 0) {
 // Keep the received person/vehicle classification when the camera supplied it;
 // standard rule topics also give older unclassified events a useful label.
 export function eventLabelKey(event) {
+  if (event?.ai?.condition !== "presence" && AI_EVENT_CONDITIONS.includes(event?.ai?.condition)) {
+    return `cameraEvents.ai.conditions.${event.ai.condition}`;
+  }
   const kind = CAMERA_EVENT_KINDS.includes(event?.kind) ? event.kind : "other";
   if (kind !== "other") return `cameraEvents.kinds.${kind}`;
   const topic = String(event?.topic || "").replace(/(^|\/)[A-Za-z_][\w.-]*:/g, "$1");

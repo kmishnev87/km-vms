@@ -23,6 +23,10 @@ class NasUpdatesTest {
         override fun save(value:NasUpdateAttempt?){this.value=value}
     }
     private fun api(server:MockWebServer)=NasUpdatesApi(NasApi(ServerAddress.parse(server.url("/").toString())).apply{useSession("fixture")})
+    private suspend fun NasUpdatesController.closeForTest() {
+        close()
+        withTimeout(5_000) { awaitClosed() }
+    }
     @Test fun onlyTheNasCanAuthorizeAnUpdateCandidate(){
         assertNull(NasUpdateCheck.from(JSONObject(available).put("can_apply_from_ui",false)).candidate)
         assertEquals(candidate,NasUpdateCheck.from(JSONObject(available)).candidate)
@@ -56,7 +60,7 @@ class NasUpdatesTest {
             withTimeout(15000){first.state.first{!it.loading}}
             first.start(candidate)
             withTimeout(15000){first.state.first{!it.posting&&it.reconnecting}}
-            val id=store.value!!.id;first.close()
+            val id=store.value!!.id;first.closeForTest()
             val second=NasUpdatesController(api(server),store)
             try{
                 withTimeout(15000){second.state.first{!it.loading}}
@@ -65,7 +69,7 @@ class NasUpdatesTest {
                 withTimeout(15000){second.state.first{!it.posting&&it.pending==null}}
                 assertEquals(listOf(id,id),posted.toList());assertTrue(second.state.value.progress!!.completed(null))
                 assertNull(store.value);assertFalse(second.state.value.watching)
-            }finally{second.close()}
+            }finally{second.closeForTest()}
         }}finally{Dispatchers.resetMain()}
     }
     @Test fun aDefinitiveRejectionReloadsAvailabilityInsteadOfKeepingAStaleApplyButton()=runBlocking {
@@ -84,7 +88,7 @@ class NasUpdatesTest {
                 controller.start(candidate)
                 withTimeout(15000){controller.state.first{!it.loading&&!it.posting&&it.check?.status=="blocked"}}
                 assertNull(controller.state.value.check?.candidate);assertNull(controller.state.value.pending);assertNull(store.value)
-            }finally{controller.close()}
+            }finally{controller.closeForTest()}
         }}finally{Dispatchers.resetMain()}
     }
 
@@ -106,7 +110,7 @@ class NasUpdatesTest {
                 assertEquals(1,paths.count{it=="POST /api/system/update/check"})
                 assertFalse(controller.state.value.watching)
                 assertTrue(paths.none{it=="POST /api/system/update/apply"})
-            } finally { controller.close() }
+            } finally { controller.closeForTest() }
         }} finally { Dispatchers.resetMain() }
     }
 
@@ -138,7 +142,7 @@ class NasUpdatesTest {
                 withTimeout(15000){controller.state.first{!it.loading}}
                 assertTrue(controller.state.value.statusCheckFailed)
                 assertEquals("verifying_images",controller.state.value.progress?.phase)
-            } finally { controller.close() }
+            } finally { controller.closeForTest() }
         }} finally { Dispatchers.resetMain() }
     }
 

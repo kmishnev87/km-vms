@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, Integer, String, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -16,6 +16,7 @@ class SystemSettings(Base):
     storage_path: Mapped[str] = mapped_column(String(1024), default="/storage/archive")
     recording_format: Mapped[str] = mapped_column(String(16), default="mkv")
     online_mode: Mapped[str] = mapped_column(String(16), default="stable", server_default="stable", nullable=False)
+    event_recording_emergency_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     recording_format_apply_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     recording_format_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     hardware_preferred_backend: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -4,3 +4,6 @@ services:
   api:
     devices:
       - /dev/dri:/dev/dri
+  recorder:
+    devices:
+      - /dev/dri:/dev/dri

@@ -35,7 +35,7 @@ class LiveController(private val context: Context, val api: NasApi) {
     fun visible(ids: Set<Long>) { visible = ids; reconcile() }
     fun foreground(active: Boolean) { foreground = active; reconcile() }
     fun focus(id: Long?) {
-        if (id == null) focused?.let { previous ->
+        if (id != focused) focused?.let { previous ->
             selections.update { old -> old[previous]?.let { value -> old + (previous to value.copy(
                 stream = if (cameras[previous]?.hasSub == true) Stream.SUB else Stream.MAIN,
                 sound = false, ptz = false, talk = false, talkDuck = false, soundBeforeCall = null)) } ?: old }

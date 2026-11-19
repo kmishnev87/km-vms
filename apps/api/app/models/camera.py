@@ -1,7 +1,7 @@
 from datetime import datetime
 from urllib.parse import urlsplit
 
-from sqlalchemy import BigInteger, String, Integer, Boolean, DateTime, Text, false
+from sqlalchemy import BigInteger, String, Integer, Boolean, DateTime, Text, JSON, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -39,6 +39,9 @@ class Camera(Base):
     onvif_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     recording_mode: Mapped[str] = mapped_column(String(50), default="always")
+    # Versioned policy and bounded signal/runtime state. NULL keeps legacy intent.
+    recording_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    recording_signal_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     default_live_stream: Mapped[str] = mapped_column(String(20), default="sub")
     default_record_stream: Mapped[str] = mapped_column(String(20), default="main")
 

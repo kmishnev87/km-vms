@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.Role
@@ -66,6 +67,7 @@ import ru.kmvms.mobile.ui.events.PushSetupOffer
 import ru.kmvms.mobile.push.PushStore
 import ru.kmvms.mobile.events.MobileVideoRequest
 import ru.kmvms.mobile.events.EventsApi
+import ru.kmvms.mobile.events.CameraEvent
 import ru.kmvms.mobile.events.EventVideoNavigation
 import ru.kmvms.mobile.core.EventAction
 import ru.kmvms.mobile.push.NotificationNavigation
@@ -75,6 +77,7 @@ import ru.kmvms.mobile.ui.camera.LabeledChoice
 import ru.kmvms.mobile.ui.server.StorageScreen
 import ru.kmvms.mobile.ui.server.SystemScreen
 import ru.kmvms.mobile.ui.server.ServerSettingsScreen
+import ru.kmvms.mobile.ui.recording.RecordingCenterScreen
 import kotlinx.coroutines.launch
 
 enum class Section(val label: Int, val image: Int?, val permission: String?) {
@@ -83,6 +86,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     CAMERAS(R.string.cameras, R.drawable.kmvms_camera, "manage_cameras"),
     EVENTS(R.string.events, R.drawable.kmvms_events, "view_live"), CHRONOLOGY(R.string.chronology, R.drawable.kmvms_chronology, "view_timeline"),
     STORAGE(R.string.storage, R.drawable.kmvms_storage, "manage_settings"),
+    RECORDING_CENTER(R.string.rec_title, R.drawable.kmvms_ai_recording_v2, "manage_cameras"),
     SYSTEM(R.string.system_status, R.drawable.kmvms_system_status, "run_diagnostics"),
     SETTINGS(R.string.settings, R.drawable.kmvms_settings, null),
     SERVER_SETTINGS(R.string.server_settings, R.drawable.kmvms_settings, "manage_settings"),
@@ -97,6 +101,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     var removeConfirmation by remember { mutableStateOf<ServerProfile?>(null) }
     var immersive by remember { mutableStateOf(false) }
     var videoRequest by rememberSaveable(state.active?.id, stateSaver = videoRequestSaver) { mutableStateOf<MobileVideoRequest?>(null) }
+    var focusedEvent by remember(state.active?.id, state.user?.id) { mutableStateOf<Pair<CameraEvent, java.time.ZoneId>?>(null) }
     val snackbars = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
     val screenState = rememberSaveableStateHolder()
@@ -132,8 +137,10 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
         val pending = notification ?: return@LaunchedEffect
         if (state.active?.id != pending.profileId || state.user == null || state.showConnection) return@LaunchedEffect
         if (pending.eventId == null) {
-            videoRequest = null
-            section = Section.EVENTS
+            if (state.user?.can("view_live") == true) {
+                videoRequest = null
+                section = if (pending.action == EventAction.LIVE) Section.LIVE else Section.EVENTS
+            }
             NotificationNavigation.consume(pending.key)
             return@LaunchedEffect
         }
@@ -149,14 +156,17 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                 section = if (request.archiveTime == null) Section.LIVE else Section.CHRONOLOGY
                 runCatching { service.read(setOf(event.id)) }.onFailure { if (it is CancellationException) throw it }
                 if (result.liveFallback) snackbars.showSnackbar(eventFallback)
-            } else { section = Section.EVENTS; snackbars.showSnackbar(eventUnavailable) }
+            } else {
+                section = Section.EVENTS
+                if (event.ai != null) focusedEvent = event to zone else snackbars.showSnackbar(eventUnavailable)
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { section = Section.EVENTS; snackbars.showSnackbar(eventUnavailable) }
         finally { NotificationNavigation.consume(pending.key) }
     }
     LaunchedEffect(problemText) { if (problemText != null) { snackbars.showSnackbar(problemText); model.clearProblem() } }
     // The foundation build only exposes complete screens. Further stages add destinations here.
-    val implemented = setOf(Section.HOME, Section.LIVE, Section.RECORDINGS, Section.CHRONOLOGY, Section.EVENTS, Section.CAMERAS, Section.STORAGE, Section.SYSTEM, Section.SETTINGS, Section.SERVER_SETTINGS)
+    val implemented = setOf(Section.HOME, Section.LIVE, Section.RECORDINGS, Section.CHRONOLOGY, Section.EVENTS, Section.CAMERAS, Section.STORAGE, Section.RECORDING_CENTER, Section.SYSTEM, Section.SETTINGS, Section.SERVER_SETTINGS)
     val allowed = Section.entries.filter { it in implemented && (it.permission == null || state.user?.can(it.permission) == true) }
     LaunchedEffect(allowed, state.user?.id) { if (state.user != null && section !in allowed) section=Section.HOME }
     BackHandler(enabled = state.showConnection && state.profiles.isNotEmpty()) { model.cancelConnection() }
@@ -215,13 +225,21 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                         { text -> uiScope.launch { snackbars.showSnackbar(text) } }, initial = videoRequest) }
                     section == Section.EVENTS -> model.api()?.let { api -> EventsScreen(api, state.user?.can("manage_cameras") == true,
                         state.user?.can("view_timeline") == true, { request -> videoRequest = request; section = if (request.archiveTime == null) Section.LIVE else Section.CHRONOLOGY },
-                        { text -> uiScope.launch { snackbars.showSnackbar(text) } }, profileId = state.active?.id) }
+                        { text -> uiScope.launch { snackbars.showSnackbar(text) } }, profileId = state.active?.id,
+                        canClip = state.user?.can("export_recordings") == true, focusedEvent = focusedEvent, onFocusHandled = { focusedEvent = null }) }
                     section == Section.CAMERAS && Section.CAMERAS in allowed -> model.api()?.let { api -> CameraManagementScreen(api,state,model,
                         { text -> uiScope.launch { snackbars.showSnackbar(text) } },
                         openLive = if (Section.LIVE in allowed) { camera ->
                             videoRequest = MobileVideoRequest(camera.id, camera.name, singleCamera = true); section = Section.LIVE
                         } else null) }
                     section == Section.STORAGE -> model.api()?.let{api->StorageScreen(api,state.active!!.id,state.user?.can("run_diagnostics")==true){text->uiScope.launch{snackbars.showSnackbar(text)}}}
+                    section == Section.RECORDING_CENTER && Section.RECORDING_CENTER in allowed -> model.api()?.let { api ->
+                        key(api, state.user?.id) {
+                            RecordingCenterScreen(api, state.user?.can("manage_settings") == true) { text ->
+                                uiScope.launch { snackbars.showSnackbar(text) }
+                            }
+                        }
+                    }
                     section == Section.SYSTEM -> model.api()?.let{api->SystemScreen(api){text->uiScope.launch{snackbars.showSnackbar(text)}}}
                     section == Section.SERVER_SETTINGS -> model.api()?.let{api->state.user?.let{actor->
                         key(api,actor.id) { ServerSettingsScreen(api,state.active!!.id,actor,
@@ -296,7 +314,8 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     LazyVerticalGrid(columns = GridCells.Adaptive(160.dp), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            HomeBrandHeader(state,selectServer,addServer)
+            HomeBrandHeader(state, selectServer, addServer,
+                listOf(Section.RECORDING_CENTER, Section.SYSTEM).filter { it in sections }, select)
         }
         items(visibleSections) { section ->
             Surface(onClick = { select(section) }, shape = RoundedCornerShape(14.dp), color = Color.White,
@@ -315,22 +334,33 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     }
 }
 
-@Composable private fun HomeBrandHeader(state:MobileState,selectServer:(ServerProfile)->Unit,addServer:()->Unit) {
+@Composable private fun HomeBrandHeader(state:MobileState,selectServer:(ServerProfile)->Unit,addServer:()->Unit,
+                                       shortcuts: List<Section> = emptyList(), openSection: (Section) -> Unit = {}) {
     var serverMenu by remember{mutableStateOf(false)}
     Box(Modifier.fillMaxWidth().height(76.dp).testTag("home-brand-header")) {
                 Image(painterResource(R.drawable.kmvms_home_header),null,Modifier.matchParentSize(),contentScale=ContentScale.Crop,alignment=Alignment.CenterEnd)
                 Box(Modifier.matchParentSize().background(Brush.horizontalGradient(listOf(PageBackground,PageBackground.copy(alpha=.8f),Color.Transparent))))
-                Column(Modifier.fillMaxSize().padding(horizontal=8.dp),verticalArrangement=Arrangement.Center) {
-                    Text("KM VMS",fontSize=24.sp,fontWeight=FontWeight.Medium,color=Ink)
-                    Box {
-                        TextButton(onClick={serverMenu=true},modifier=Modifier.height(36.dp).testTag("server-switch"),
-                            contentPadding=PaddingValues(0.dp),colors=ButtonDefaults.textButtonColors(contentColor=Ink)) {
-                            Text(state.active?.name.orEmpty(),fontSize=15.sp,fontWeight=FontWeight.Normal,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=260.dp))
-                            Text(" ▾",fontSize=14.sp,color=Muted)
+                Row(Modifier.fillMaxSize().padding(horizontal=8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement=Arrangement.Center) {
+                        Text("KM VMS",fontSize=24.sp,fontWeight=FontWeight.Medium,color=Ink)
+                        Box {
+                            TextButton(onClick={serverMenu=true},modifier=Modifier.height(36.dp).testTag("server-switch"),
+                                contentPadding=PaddingValues(0.dp),colors=ButtonDefaults.textButtonColors(contentColor=Ink)) {
+                                Text(state.active?.name.orEmpty(),fontSize=15.sp,fontWeight=FontWeight.Normal,maxLines=1,overflow=TextOverflow.Ellipsis,
+                                    modifier=Modifier.weight(1f, fill=false).widthIn(max=260.dp))
+                                Text(" ▾",fontSize=14.sp,color=Muted)
+                            }
+                            DropdownMenu(serverMenu,{serverMenu=false}) {
+                                state.profiles.forEach{profile->DropdownMenuItem(text={Text(profile.name)},onClick={serverMenu=false;selectServer(profile)})}
+                                DropdownMenuItem(text={Text(stringResource(R.string.add_server))},leadingIcon={Icon(Icons.Default.Add,null)},onClick={serverMenu=false;addServer()})
+                            }
                         }
-                        DropdownMenu(serverMenu,{serverMenu=false}) {
-                            state.profiles.forEach{profile->DropdownMenuItem(text={Text(profile.name)},onClick={serverMenu=false;selectServer(profile)})}
-                            DropdownMenuItem(text={Text(stringResource(R.string.add_server))},leadingIcon={Icon(Icons.Default.Add,null)},onClick={serverMenu=false;addServer()})
+                    }
+                    shortcuts.forEach { target ->
+                        val label = stringResource(target.label)
+                        IconButton(onClick = { openSection(target) }, modifier = Modifier.size(44.dp)
+                            .testTag("home-shortcut-${target.name}").semantics { contentDescription = label }) {
+                            SectionIcon(target, Modifier.size(29.dp))
                         }
                     }
                 }

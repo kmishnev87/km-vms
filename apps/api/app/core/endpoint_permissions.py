@@ -49,6 +49,15 @@ class EndpointPermission:
 
 
 ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
+    EndpointPermission("ai-recording", "GET", "/ai-recording/cameras", PERMISSION_MANAGE_CAMERAS, "require_permission", "Shared recording configuration and Recorder evidence; no connection secrets."),
+    EndpointPermission("ai-recording", "GET", "/ai-recording/cameras/{camera_id}", PERMISSION_MANAGE_CAMERAS, "require_permission"),
+    EndpointPermission("ai-recording", "GET", "/ai-recording/cameras/{camera_id}/rule-frame", PERMISSION_MANAGE_CAMERAS, "require_permission", "One fresh, uncached AI calibration frame; no archive or path."),
+    EndpointPermission("ai-recording", "POST", "/ai-recording/cameras/{camera_id}/rule-frame", PERMISSION_MANAGE_CAMERAS, "require_permission", "Capture a bounded candidate reference frame for the Web AI editor."),
+    EndpointPermission("ai-recording", "GET", "/ai-recording/cameras/{camera_id}/rule-frame/saved", PERMISSION_MANAGE_CAMERAS, "require_permission", "Read only the committed AI calibration frame for this camera."),
+    EndpointPermission("ai-recording", "PUT", "/ai-recording/cameras/{camera_id}", PERMISSION_MANAGE_CAMERAS, "require_permission + optimistic revision + graph lock"),
+    EndpointPermission("ai-recording", "POST", "/ai-recording/cameras/{camera_id}/retry", PERMISSION_MANAGE_CAMERAS, "require_permission", "Coalesces one manual recovery attempt on an exhausted current receiver."),
+    EndpointPermission("ai-recording", "GET", "/ai-recording/emergency", PERMISSION_MANAGE_SETTINGS, "require_permission"),
+    EndpointPermission("ai-recording", "PUT", "/ai-recording/emergency", PERMISSION_MANAGE_SETTINGS, "require_permission + optimistic value", "Sets default-off authorization for temporary recording on eligible source failures."),
     EndpointPermission("camera-talk", "GET", "/talk/cameras/{camera_id}", PERMISSION_TALK_CAMERAS, "require_permission", "Read-only standard/protocol capability negotiation."),
     EndpointPermission("camera-talk", "PUT", "/talk/cameras/{camera_id}/credentials", PERMISSION_TALK_CAMERAS, "require_permission", "Optional encrypted camera talk credential; never returned."),
     EndpointPermission("camera-talk", "POST", "/talk/sessions", PERMISSION_TALK_CAMERAS, "require_permission", "Actor-bound bounded exclusive physical output reservation."),
@@ -82,6 +91,9 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("camera-events", "GET", "/camera-events/cameras/{camera_id}/detectors", PERMISSION_MANAGE_CAMERAS, "require_permission", "Read-only camera rule discovery."),
     EndpointPermission("camera-events", "PUT", "/camera-events/cameras/{camera_id}/detectors/{rule_id}", PERMISSION_MANAGE_CAMERAS, "require_permission", "Supported boolean only; optimistic revision and readback."),
     EndpointPermission("camera-events", "GET", "/camera-events/{event_id}/target", PERMISSION_VIEW_LIVE, "require_permission + resource validation", "Archive mode additionally requires view_timeline; no media token or camera secret is returned."),
+    EndpointPermission("camera-events", "GET", "/camera-events/{event_id}/evidence", PERMISSION_VIEW_LIVE, "require_permission + resource validation", "AI event detail. Archive and clip hints are permission-gated separately."),
+    EndpointPermission("camera-events", "GET", "/camera-events/{event_id}/snapshot", PERMISSION_VIEW_LIVE, "require_permission + resource validation", "Read only the retained private snapshot belonging to an AI event and an existing camera."),
+    EndpointPermission("camera-events", "POST", "/camera-events/{event_id}/review", PERMISSION_MANAGE_CAMERAS, "require_permission + resource validation", "Shared false-positive assessment; never changes the model or recordings."),
     EndpointPermission("users", "GET", "/users/me", AUTHENTICATED, "get_current_user"),
     EndpointPermission("users", "GET", "/users", PERMISSION_MANAGE_USERS, "require_permission"),
     EndpointPermission("users", "POST", "/users", PERMISSION_MANAGE_USERS, "require_permission"),

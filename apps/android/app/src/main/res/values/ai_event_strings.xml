@@ -1,0 +1,27 @@
+<resources>
+    <string name="ai_event_title">AI event</string>
+    <string name="ai_event_both">All sources</string>
+    <string name="ai_event_nas">NAS analytics</string>
+    <string name="ai_event_camera">Camera</string>
+    <string name="ai_event_rule">Rule / zone</string>
+    <string name="ai_event_conditions">All conditions</string>
+    <string name="ai_event_presence">Object in frame or zone</string>
+    <string name="ai_event_enter">Zone entry</string>
+    <string name="ai_event_exit">Zone exit</string>
+    <string name="ai_event_scene">Scene change</string>
+    <string name="ai_event_frame">Detection frame</string>
+    <string name="ai_event_no_frame">Snapshot unavailable</string>
+    <string name="ai_event_whole_frame">Whole frame</string>
+    <string name="ai_event_unnamed_zone">Unnamed zone</string>
+    <string name="ai_event_unnamed_line">Unnamed line</string>
+    <string name="ai_event_pending">The segment is still recording. Check again after it finishes.</string>
+    <string name="ai_event_forbidden">This account cannot access Timeline.</string>
+    <string name="ai_event_ready">Recording available</string>
+    <string name="ai_event_check">Check recording</string>
+    <string name="ai_event_false">False positive</string>
+    <string name="ai_event_mark_false">Mark as false positive</string>
+    <string name="ai_event_clear_false">Clear label</string>
+    <string name="ai_event_review_help">This label does not train the AI.</string>
+    <string name="ai_event_save_clip">Save a separate clip</string>
+    <string name="ai_event_clip_help">The finished clip is kept separately from the original recording.</string>
+</resources>

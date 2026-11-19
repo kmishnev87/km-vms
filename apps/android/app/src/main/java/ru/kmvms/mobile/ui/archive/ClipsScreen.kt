@@ -41,13 +41,13 @@ import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun ClipsScreen(api: ArchiveApi, cameras: List<ArchiveCamera>, zone: ZoneId,
-                            close: () -> Unit, message: (String) -> Unit) {
+                            close: () -> Unit, message: (String) -> Unit, initial: ClipDraft? = null) {
     val controller=remember(api){ClipsController(api)}
     val state by controller.state.collectAsStateWithLifecycle()
     val context=LocalContext.current
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     val scope=rememberCoroutineScope()
-    var tab by rememberSaveable{mutableIntStateOf(0)}
+    var tab by rememberSaveable{mutableIntStateOf(if (initial == null) 0 else 1)}
     var confirmation by remember{mutableStateOf<Clip?>(null)}
     var pending by remember{mutableStateOf<Clip?>(null)}
     var downloading by remember{mutableStateOf(false)}
@@ -77,7 +77,7 @@ import java.time.format.DateTimeFormatter
             Tab(selected=tab==1,onClick={tab=1},modifier=Modifier.testTag("clip-create-tab"),text={Text(stringResource(R.string.create_clip))})
         }
         Box(Modifier.fillMaxWidth().height(6.dp)){if(state.loading||state.working||downloading)LinearProgressIndicator(Modifier.fillMaxWidth())}
-        if(tab==1)ClipForm(cameras,zone,state.maxDuration,state.working){camera,title,start,end->controller.create(camera,title,start,end);tab=0}
+        if(tab==1)ClipForm(cameras,zone,state.maxDuration,state.working,initial){camera,title,start,end->controller.create(camera,title,start,end);tab=0}
         else LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
             if(state.items.isEmpty()&&!state.loading)item{Text(stringResource(R.string.no_saved_clips),color=Muted)}
             items(state.items,key={it.id}){clip->Surface(shape=RoundedCornerShape(14.dp),color=Color.White,modifier=Modifier.fillMaxWidth()){

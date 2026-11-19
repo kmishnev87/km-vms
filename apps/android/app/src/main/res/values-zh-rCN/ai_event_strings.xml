@@ -1,0 +1,27 @@
+<resources>
+    <string name="ai_event_title">AI 事件</string>
+    <string name="ai_event_both">全部来源</string>
+    <string name="ai_event_nas">NAS 分析</string>
+    <string name="ai_event_camera">摄像机</string>
+    <string name="ai_event_rule">规则 / 区域</string>
+    <string name="ai_event_conditions">全部条件</string>
+    <string name="ai_event_presence">画面或区域内出现目标</string>
+    <string name="ai_event_enter">进入区域</string>
+    <string name="ai_event_exit">离开区域</string>
+    <string name="ai_event_scene">场景变化</string>
+    <string name="ai_event_frame">检测画面</string>
+    <string name="ai_event_no_frame">快照不可用</string>
+    <string name="ai_event_whole_frame">整个画面</string>
+    <string name="ai_event_unnamed_zone">未命名区域</string>
+    <string name="ai_event_unnamed_line">未命名线</string>
+    <string name="ai_event_pending">仍在录制此片段，请在录制完成后查看。</string>
+    <string name="ai_event_forbidden">此帐户没有时间线访问权限。</string>
+    <string name="ai_event_ready">录像可用</string>
+    <string name="ai_event_check">检查录像</string>
+    <string name="ai_event_false">误报</string>
+    <string name="ai_event_mark_false">标记为误报</string>
+    <string name="ai_event_clear_false">清除标记</string>
+    <string name="ai_event_review_help">此标记不用于训练 AI。</string>
+    <string name="ai_event_save_clip">另存为片段</string>
+    <string name="ai_event_clip_help">完成的片段独立于原录像保存。</string>
+</resources>

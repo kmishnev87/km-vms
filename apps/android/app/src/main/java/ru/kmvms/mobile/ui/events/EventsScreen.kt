@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -38,16 +40,23 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import ru.kmvms.mobile.R
+import ru.kmvms.mobile.archive.ArchiveApi
+import ru.kmvms.mobile.archive.ArchiveCamera
 import ru.kmvms.mobile.core.EventAction
 import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.events.*
 import ru.kmvms.mobile.ui.Accent
 import ru.kmvms.mobile.ui.Muted
+import ru.kmvms.mobile.ui.archive.ClipDraft
+import ru.kmvms.mobile.ui.archive.ClipsScreen
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun EventsScreen(api: NasApi, canDelete: Boolean, canArchive: Boolean,
-                             open: (MobileVideoRequest) -> Unit, message: (String) -> Unit, profileId: String? = null) {
+                             open: (MobileVideoRequest) -> Unit, message: (String) -> Unit, profileId: String? = null,
+                             canClip: Boolean = false, focusedEvent: Pair<CameraEvent, ZoneId>? = null, onFocusHandled: () -> Unit = {}) {
     val service = remember(api) { EventsApi(api) }
     val controller = remember(service) { EventsController(service) }
     val state by controller.state.collectAsStateWithLifecycle()
@@ -66,6 +75,12 @@ import java.time.format.DateTimeFormatter
     BackHandler(preferencesOpen) { preferencesOpen=false; receivingOpen=false }
     var deletion by remember { mutableStateOf<EventDeletion?>(null) }
     var opening by remember { mutableStateOf(false) }
+    var detail by remember(service) { mutableStateOf<CameraEvent?>(null) }
+    var detailZone by remember(service) { mutableStateOf<ZoneId?>(null) }
+    var clip by remember(service) { mutableStateOf<Pair<ClipDraft, ArchiveCamera>?>(null) }
+    LaunchedEffect(focusedEvent, service) {
+        focusedEvent?.let { (event, zone) -> detail = event; detailZone = zone; onFocusHandled() }
+    }
     val failure = stringResource(R.string.server_error)
     val unavailable = stringResource(R.string.events_video_unavailable)
     val fallback = stringResource(R.string.events_live_fallback)
@@ -84,7 +99,9 @@ import java.time.format.DateTimeFormatter
             try {
                 val result = navigator.open(event, action, state.page?.zone ?: java.time.ZoneOffset.UTC)
                 val request = result.request
-                if (request == null) message(unavailable) else {
+                if (request == null) {
+                    if (event.ai != null) { detailZone = null; detail = event } else message(unavailable)
+                } else {
                     try { service.read(setOf(event.id)) }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { message(failure) }
@@ -95,6 +112,12 @@ import java.time.format.DateTimeFormatter
             catch (_: Exception) { message(failure) }
             finally { opening = false }
         }
+    }
+    clip?.let { (draft, camera) ->
+        BackHandler { clip = null }
+        ClipsScreen(remember(api) { ArchiveApi(api) }, listOf(camera), detailZone ?: state.page?.zone ?: ZoneOffset.UTC,
+            { clip = null }, message, initial = draft)
+        return
     }
     Column(Modifier.fillMaxSize()) {
         Surface(color = Color.White) {
@@ -156,7 +179,8 @@ import java.time.format.DateTimeFormatter
                     Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) { Text(stringResource(R.string.events_empty), color = Muted) }
                 }
                 items(page?.items.orEmpty(), key = { it.id }) { event ->
-                    EventRow(event, state, canArchive, opening, { controller.select(event.id, it) }) { navigate(event, it) }
+                    EventRow(event, state, canArchive, opening, { controller.select(event.id, it) },
+                        { navigate(event, it) }, { detailZone = null; detail = event })
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 }
             }
@@ -171,11 +195,21 @@ import java.time.format.DateTimeFormatter
     }
     if(filtersOpen)ModalBottomSheet(onDismissRequest={filtersOpen=false},containerColor=Color.White) {
         Text(stringResource(R.string.events_filters),style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(horizontal=16.dp))
-        EventFilters(state.copy(filter=editedFilter)){editedFilter=it}
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            EventFilters(state.copy(filter=editedFilter)){editedFilter=it}
+        }
         Row(Modifier.fillMaxWidth().padding(16.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
             OutlinedButton(onClick={editedFilter=EventFilter(unread=editedFilter.unread)},modifier=Modifier.weight(1f)){Text(stringResource(R.string.events_reset_filters))}
             Button(onClick={controller.filter(editedFilter);filtersOpen=false},modifier=Modifier.weight(1f).testTag("events-apply-filters")){Text(stringResource(R.string.apply))}
         }
+    }
+    detail?.let { event ->
+        AiEventSheet(service, event, detailZone ?: state.page?.zone ?: ZoneOffset.UTC, canDelete, canClip, opening,
+            onDismiss = { detail = null; detailZone = null },
+            open = { navigate(event, it) }, onReview = { controller.refresh(state.page?.offset ?: 0) },
+            onClip = { range, title ->
+                clip = ClipDraft(range.cameraId, title, range.start, range.end) to ArchiveCamera(range.cameraId, event.camera, false)
+            })
     }
     deletion?.let { target -> AlertDialog(onDismissRequest = { deletion = null }, modifier = Modifier.semantics { testTagsAsResourceId = true },
         text = { Text(stringResource(R.string.events_delete_confirmation, target.count)) },
@@ -216,12 +250,14 @@ import java.time.format.DateTimeFormatter
 }
 
 @Composable internal fun EventRow(event: CameraEvent, state: EventsState, canArchive: Boolean, opening: Boolean,
-                                  select: (Boolean) -> Unit, open: (EventAction) -> Unit) {
+                                  select: (Boolean) -> Unit, open: (EventAction) -> Unit, showDetails: (() -> Unit)? = null) {
     val color = if (event.read) Muted else MaterialTheme.colorScheme.onSurface
     Surface(color = Color.White) {
         Row(Modifier.fillMaxWidth().heightIn(min = 92.dp).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(state.isSelected(event.id), select, enabled = !state.busy && state.canSelect(event.id), modifier = Modifier.testTag("event-check-${event.id}"))
-            Column(Modifier.weight(1f).clickable(enabled = !opening && event.cameraId != null && !event.ambiguous) { open(if (canArchive) EventAction.OPEN else EventAction.LIVE) }
+            Column(Modifier.weight(1f).clickable(enabled = !opening && (event.ai != null || event.cameraId != null && !event.ambiguous)) {
+                    if (event.ai != null && showDetails != null) showDetails() else open(if (canArchive) EventAction.OPEN else EventAction.LIVE)
+                }
                 .padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Box(Modifier.fillMaxWidth()) {
                     Box(Modifier.align(Alignment.CenterStart).offset(x=(-9).dp).size(5.dp)
@@ -229,10 +265,18 @@ import java.time.format.DateTimeFormatter
                     Text(event.camera, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.bodyMedium, modifier=Modifier.testTag("event-camera-${event.id}"))
                 }
-                val kinds = listOf(event.kind) + event.objects.filter { it != event.kind }
-                val labels = kinds.map { stringResource(it.label()) }
-                Text(labels.joinToString(" · "),maxLines=2,overflow=TextOverflow.Ellipsis,
-                    color = color, style = MaterialTheme.typography.bodySmall, modifier=Modifier.testTag("event-kind-${event.id}"))
+                val labels = eventLabels(event.kind, event.objects, event.ai?.condition).map { stringResource(it) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (event.ai != null) Text("AI", color = Accent, style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.background(Accent.copy(alpha = .09f), CircleShape).padding(horizontal = 5.dp, vertical = 1.dp))
+                    Text(labels.joinToString(" · "),maxLines=2,overflow=TextOverflow.Ellipsis,
+                        color = color, style = MaterialTheme.typography.bodySmall, modifier=Modifier.testTag("event-kind-${event.id}"))
+                }
+                event.ai?.let { ai ->
+                    val note = listOfNotNull(ai.ruleName.takeIf(String::isNotBlank), if (ai.falsePositive) stringResource(R.string.ai_event_false) else null)
+                    if (note.isNotEmpty()) Text(note.joinToString(" · "), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = Muted, style = MaterialTheme.typography.labelSmall)
+                }
                 Text(event.occurred.atZone(state.page?.zone ?: java.time.ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")), color = Muted, style = MaterialTheme.typography.labelSmall, modifier=Modifier.testTag("event-time-${event.id}"))
                 if (event.ambiguous) Text(stringResource(R.string.events_source_unknown), color = Muted, style = MaterialTheme.typography.labelSmall)
             }
@@ -260,6 +304,19 @@ import java.time.format.DateTimeFormatter
             }
             val days = listOf("1" to stringResource(R.string.events_day), "7" to stringResource(R.string.events_week), "30" to stringResource(R.string.events_month))
             EventChoice(days.first { it.first == filter.days.toString() }.second, days, Modifier.fillMaxWidth(), "events-filter-days") { choose(filter.copy(days = it.toInt())) }
+            val sources = listOf("" to stringResource(R.string.ai_event_both), "ai" to stringResource(R.string.ai_event_nas),
+                "camera" to stringResource(R.string.ai_event_camera))
+            EventChoice(sources.first { it.first == filter.source }.second, sources, Modifier.fillMaxWidth(), "events-filter-source") {
+                choose(filter.copy(source = it, rule = "", condition = null))
+            }
+            if (filter.source == "ai") {
+                val conditions = listOf("" to stringResource(R.string.ai_event_conditions)) + AiEventCondition.entries.map { it.code to stringResource(it.label()) }
+                EventChoice(conditions.first { it.first == (filter.condition?.code ?: "") }.second, conditions, Modifier.fillMaxWidth(), "events-filter-ai-condition") {
+                    choose(filter.copy(condition = AiEventCondition.parse(it)))
+                }
+                OutlinedTextField(filter.rule, { choose(filter.copy(rule = it.take(48))) }, singleLine = true,
+                    label = { Text(stringResource(R.string.ai_event_rule)) }, modifier = Modifier.fillMaxWidth().testTag("events-filter-ai-rule"))
+            }
         }
     }
 }

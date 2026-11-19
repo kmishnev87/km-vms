@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.sanitization import redact_text
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
+from app.services.ai_recording import ai_policy_supported, controlled_recording_configured, event_policy_supported, link_configured
 from app.services.timezone_contract import TimezoneContext, format_system_iso, timestamp_matches_filename, timezone_context, utc_now_storage
 
 ACTIVE_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
@@ -121,31 +122,18 @@ def compact_error(value: str | None) -> str | None:
 def read_recorder_heartbeat(db: Session) -> dict[str, Any]:
     ctx = timezone_context(db)
     try:
-        row = (
-            db.execute(
-                text(
-                    """
-                    SELECT recorder_instance_id,
-                           service_status,
-                           loop_state,
-                           started_at,
-                           heartbeat_at,
-                           active_jobs_count,
-                           recording_cameras_count,
-                           failed_cameras_count,
-                           last_error,
-                           last_exit_code,
-                           updated_at
-                    FROM recorder_runtime_status
-                    ORDER BY CASE WHEN loop_state IN ('shutdown', 'replaced') THEN 1 ELSE 0 END,
-                             heartbeat_at DESC
-                    LIMIT 1
-                    """
-                )
-            )
-            .mappings()
-            .first()
-        )
+        # Recorder creates its heartbeat table. Preserve the caller's
+        # transaction if it is absent on first startup or after recovery.
+        with db.begin_nested():
+            row = db.execute(text("""
+                SELECT recorder_instance_id, service_status, loop_state, started_at, heartbeat_at,
+                       active_jobs_count, recording_cameras_count, failed_cameras_count,
+                       last_error, last_exit_code, updated_at
+                FROM recorder_runtime_status
+                ORDER BY CASE WHEN loop_state IN ('shutdown', 'replaced') THEN 1 ELSE 0 END,
+                         heartbeat_at DESC
+                LIMIT 1
+                """)).mappings().first()
     except Exception as exc:
         return {
             "available": False,
@@ -187,7 +175,7 @@ def _latest_rows_by_camera(db: Session, query, model, *ordering) -> dict:
     return {int(row.camera_id): row for row in rows}
 
 
-def current_recording_jobs(db: Session, instance_id: str | None = None) -> dict[int, RecordingJob]:
+def current_recording_jobs(db: Session, instance_id: str | None = None, *, camera_ids=None) -> dict[int, RecordingJob]:
     if instance_id is None:
         heartbeat = read_recorder_heartbeat(db)
         instance_id = str(heartbeat.get("recorder_instance_id") or "") if heartbeat.get("available") else ""
@@ -203,6 +191,8 @@ def current_recording_jobs(db: Session, instance_id: str | None = None) -> dict[
             Camera.deleted_at.is_(None),
         )
     )
+    if camera_ids is not None:
+        query = query.filter(RecordingJob.camera_id.in_(camera_ids))
     return _latest_rows_by_camera(
         db, query, RecordingJob,
         RecordingJob.started_at.desc(), RecordingJob.updated_at.desc().nullslast(), RecordingJob.id.desc(),
@@ -211,7 +201,8 @@ def current_recording_jobs(db: Session, instance_id: str | None = None) -> dict[
 
 def summarize_recorder_jobs(db: Session) -> dict[str, Any]:
     ctx = timezone_context(db)
-    enabled_ids = {int(row.id) for row in db.query(Camera).filter(Camera.enabled.is_(True), Camera.deleted_at.is_(None), Camera.recording_mode == "always").all()}
+    enabled = db.query(Camera).filter(Camera.enabled.is_(True), Camera.deleted_at.is_(None)).all()
+    enabled_ids = {int(row.id) for row in enabled if row.recording_mode == "always" or controlled_recording_configured(row)}
     jobs = [job for camera_id, job in current_recording_jobs(db).items() if camera_id in enabled_ids]
     state_counts = dict(Counter(str(job.state or "unknown") for job in jobs))
     active_jobs = [
@@ -240,9 +231,12 @@ def summarize_recorder_jobs(db: Session) -> dict[str, Any]:
     }
 
 
-def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
+def list_camera_recording_states(db: Session, *, camera_ids=None, include_finalized_history=True) -> list[dict[str, Any]]:
     ctx = timezone_context(db)
-    cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.id.asc()).all()
+    cameras_query = db.query(Camera).filter(Camera.deleted_at.is_(None))
+    if camera_ids is not None:
+        cameras_query = cameras_query.filter(Camera.id.in_(camera_ids))
+    cameras = cameras_query.order_by(Camera.id.asc()).all()
     now = utc_now()
     heartbeat = read_recorder_heartbeat(db)
     heartbeat_instance_id = str(heartbeat.get("recorder_instance_id") or "")
@@ -254,7 +248,7 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
         and heartbeat_age <= HEARTBEAT_STALE_SECONDS
         and str(heartbeat.get("loop_state") or "") not in {"shutdown", "replaced"}
     )
-    latest_jobs = current_recording_jobs(db, heartbeat_instance_id)
+    latest_jobs = current_recording_jobs(db, heartbeat_instance_id, camera_ids=camera_ids)
 
     writing_query = (
         db.query(RecordingSegment)
@@ -267,26 +261,32 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             RecordingSegment.deleted_at.is_(None),
         )
     )
+    if camera_ids is not None:
+        writing_query = writing_query.filter(RecordingSegment.camera_id.in_(camera_ids))
     writing_segments = _latest_rows_by_camera(
         db, writing_query, RecordingSegment, RecordingSegment.started_at.desc(), RecordingSegment.id.desc(),
     )
 
-    finalized_query = (
-        db.query(RecordingSegment)
-        .join(Camera, Camera.id == RecordingSegment.camera_id)
-        .filter(
-            Camera.deleted_at.is_(None),
-            RecordingSegment.status.in_(("finalized", "ready")),
-            RecordingSegment.source == RECORDER_SOURCE,
-            RecordingSegment.started_at.isnot(None),
-            RecordingSegment.deleted_at.is_(None),
+    finalized_segments = {}
+    if include_finalized_history:
+        finalized_query = (
+            db.query(RecordingSegment)
+            .join(Camera, Camera.id == RecordingSegment.camera_id)
+            .filter(
+                Camera.deleted_at.is_(None),
+                RecordingSegment.status.in_(("finalized", "ready")),
+                RecordingSegment.source == RECORDER_SOURCE,
+                RecordingSegment.started_at.isnot(None),
+                RecordingSegment.deleted_at.is_(None),
+            )
         )
-    )
-    finalized_segments = _latest_rows_by_camera(
-        db, finalized_query, RecordingSegment,
-        RecordingSegment.finalized_at.desc().nullslast(), RecordingSegment.ended_at.desc().nullslast(),
-        RecordingSegment.started_at.desc(), RecordingSegment.id.desc(),
-    )
+        if camera_ids is not None:
+            finalized_query = finalized_query.filter(RecordingSegment.camera_id.in_(camera_ids))
+        finalized_segments = _latest_rows_by_camera(
+            db, finalized_query, RecordingSegment,
+            RecordingSegment.finalized_at.desc().nullslast(), RecordingSegment.ended_at.desc().nullslast(),
+            RecordingSegment.started_at.desc(), RecordingSegment.id.desc(),
+        )
 
     rows = []
     for camera in cameras:
@@ -294,6 +294,17 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
         current_segment = writing_segments.get(camera.id)
         latest_finalized_segment = finalized_segments.get(camera.id)
         job_state = job.state if job else None
+        event_configured = event_policy_supported(camera)
+        ai_configured = ai_policy_supported(camera)
+        linked_configured = link_configured(camera)
+        controlled = event_configured or linked_configured or ai_configured
+        control = (camera.recording_signal_state or {}).get("recorder") if controlled else None
+        if control and (not heartbeat_current or control.get("instance") != heartbeat_instance_id
+                        or control.get("policy_revision") != camera.recording_policy.get("revision")):
+            control = None
+        recording_expected = bool(camera.enabled and (
+            (bool(control and control.get("request")) or job_state in ACTIVE_JOB_STATES)
+            if controlled else camera.recording_mode == "always"))
         # A process attempt has a stable UTC start time. Do not use heartbeat or
         # mutable job.updated_at as a clock that could keep extending the grace.
         startup_started_at = job.started_at if job and job_state in {"starting", "recording"} else (
@@ -382,6 +393,12 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             "camera_name": camera.name,
             "enabled": bool(camera.enabled),
             "recording_mode": camera.recording_mode,
+            "recording_expected": recording_expected,
+            "event_policy_configured": event_configured,
+            "ai_policy_configured": ai_configured,
+            "linked_policy_configured": linked_configured,
+            "controlled_policy_configured": controlled,
+            "event_control": control,
             "camera_status": camera.status,
             "camera_last_error": camera_last_error,
             "job_state": job_state,

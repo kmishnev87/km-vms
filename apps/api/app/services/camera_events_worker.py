@@ -8,16 +8,21 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from app.core.security import decrypt_text
 from app.db.session import SessionLocal
 from app.models.camera import Camera
 from app.models.system_settings import SystemSettings
+from app.services.camera_event_health import HEALTH_SAMPLE_SECONDS, Recovery, publish_channel, pull_delay, record_transition
 from app.services.camera_events import cleanup_history, record_signal, source_disconnected
 from app.services.onvif_events import EVENT_KINDS, DeviceClient, EventDeviceError, ignored_notification, kind_for, parse_notification, profile_identities, resolve_source
-from app.services.storage_operations_foundation import acquire_worker_lease, release_worker_lease, renew_worker_lease
+from app.services.storage_operations_foundation import StorageOperationLeaseLost, acquire_worker_lease, release_worker_lease, renew_worker_lease
 
 MAX_CONNECTIONS = 64
+LEASE_SECONDS = 150
+LEASE_MAINTENANCE_SECONDS = 55
+MANUAL_RETRY_COOLDOWN_SECONDS = 30
 _stop = threading.Event()
 _wake = threading.Event()
 _guard = threading.RLock()
@@ -32,6 +37,10 @@ def camera_receiving_revision(camera):
     return hashlib.sha256(json.dumps([getattr(camera, key, None) for key in fields]).encode()).hexdigest()
 
 
+def connection_id(camera):
+    return hashlib.sha256(json.dumps([camera.host.lower(), camera.port, camera.username, camera.onvif_path]).encode()).hexdigest()
+
+
 def connection_groups():
     with SessionLocal() as db:
         configured = db.query(SystemSettings).first()
@@ -43,7 +52,7 @@ def connection_groups():
         for camera in db.query(Camera).filter(Camera.deleted_at.is_(None), Camera.status != "deleting", Camera.protocol == "onvif").all():
             if not camera.username or not camera.password_encrypted or not camera.onvif_profile_token:
                 continue
-            device_id = hashlib.sha256(json.dumps([camera.host.lower(), camera.port, camera.username, camera.onvif_path]).encode()).hexdigest()
+            device_id = connection_id(camera)
             group = groups.setdefault(device_id, {"device_id": device_id, "host": camera.host, "port": camera.port,
                 "username": camera.username, "password": decrypt_text(camera.password_encrypted), "onvif_path": camera.onvif_path, "cameras": []})
             group["cameras"].append({"id": camera.id, "name": camera.name, "profile_token": camera.onvif_profile_token,
@@ -63,6 +72,37 @@ def receiver_states():
         return {key: dict(value) for key, value in _states.items()}
 
 
+def receiver_fault_snapshots(cameras):
+    """Read the existing receiver state, without probing a camera or decrypting credentials."""
+    faults = {}
+    now = time.monotonic()
+    with _guard:
+        for camera in cameras:
+            if camera.protocol != "onvif" or not camera.events_enabled:
+                continue
+            state = _states.get(str(camera.id)) or {}
+            status = state.get("status")
+            incident = state.get("incident") or {}
+            if status not in {"reconnecting", "unsupported", "retry_exhausted"} or not incident.get("id"):
+                continue
+            job = _jobs.get(connection_id(camera))
+            if (job is None or job.stopping() or not job.thread or not job.thread.is_alive()
+                    or job.recovery.incident_id != incident["id"]):
+                continue
+            revision = camera_receiving_revision(camera)
+            if not any(item["id"] == camera.id and item["events_enabled"] and item["revision"] == revision
+                       for item in job.group["cameras"]):
+                continue
+            faults[camera.id] = {
+                "group": incident["id"],
+                "phase": "exhausted" if status == "retry_exhausted" else "failed",
+                "next_attempt_at": incident.get("next_attempt_at"),
+                "retry_available": bool(status == "retry_exhausted" and job.manual_ready_at is not None
+                                        and now >= job.manual_ready_at and not job.retry_requested.is_set()),
+            }
+    return faults
+
+
 def _state(group, status, **fields):
     with _guard:
         for camera in group["cameras"]:
@@ -74,7 +114,7 @@ def group_is_current(db, group):
     # Lock until the current record/commit finishes. A completed opt-out cannot
     # race a late PullMessages response into another history insert.
     rows = db.query(Camera).filter(Camera.id.in_([c["id"] for c in group["cameras"]]),
-        Camera.deleted_at.is_(None), Camera.status != "deleting", Camera.protocol == "onvif").populate_existing().with_for_update().all()
+        Camera.deleted_at.is_(None), Camera.status != "deleting", Camera.protocol == "onvif").order_by(Camera.id).populate_existing().with_for_update().all()
     current = {c.id: camera_receiving_revision(c) for c in rows}
     return current == {c["id"]: c["revision"] for c in group["cameras"]}
 
@@ -88,146 +128,282 @@ def signal_camera(group, identities, signal):
     return None, all(c["events_enabled"] for c in group["cameras"])
 
 
+class ReceivingConfigurationChanged(Exception):
+    pass
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def retry_camera_events(camera):
+    """Queue at most one manual attempt on the current, exhausted receiver."""
+    with _guard:
+        revision = camera_receiving_revision(camera)
+        for job in _jobs.values():
+            if not job.stopping() and any(
+                item["id"] == camera.id and item["events_enabled"] and item["revision"] == revision
+                for item in job.group["cameras"]
+            ):
+                return job.request_retry()
+    return "receiver_unavailable"
+
+
 @dataclass
 class Receiver:
     group: dict = field(repr=False)
     stop: threading.Event = field(default_factory=threading.Event)
     client: object = field(default=None, repr=False)
     thread: object = None
+    recovery: Recovery = field(default_factory=Recovery)
+    retry_requested: threading.Event = field(default_factory=threading.Event)
+    manual_ready_at: float | None = None
+    generation: str | None = None
 
     def cancel(self):
         self.stop.set()
-        if self.client is not None:
-            threading.Thread(target=self.client.close, name="camera-events-unsubscribe", daemon=True).start()
+        self.retry_requested.set()
 
-    def run(self):
-        group, handle, failures = self.group, None, 0
-        while not self.stop.is_set() and not _stop.is_set():
-            try:
-                with SessionLocal() as db:
-                    handle = acquire_worker_lease(db, worker_key="camera_events_" + group["device_id"][:32], owner_instance_id=_owner, lease_seconds=150)
-                if handle is None:
-                    _state(group, "other_receiver")
-                    self.stop.wait(60)
-                    continue
-                with SessionLocal() as db:
-                    renew_worker_lease(db, handle, lease_seconds=150)
-                    if not group_is_current(db, group):
-                        _wake.set()
-                        return
-                    # A process crash can leave an old positive observation.
-                    # Re-subscription reconciles it; a missing end is not proof
-                    # of an ongoing event and must not be closed by a timer.
-                    source_disconnected(db, group)
-                _state(group, "connecting")
-                self.client = DeviceClient(group["host"], group["port"], group["username"], group["password"], group["onvif_path"])
-                topics = self.client.topics()
-                identities = profile_identities(self.client.profiles())
-                self.client.subscribe()
-                failures = 0
-                counts = {"messages_received": 0, "messages_parsed": 0, "messages_rejected": 0,
-                          "messages_ignored": 0, "messages_unsupported": 0, "events_saved": 0, "excluded_source": 0,
-                          "messages_initialized": 0, "messages_inactive": 0, "messages_deleted": 0,
-                          "messages_without_state": 0, "messages_unclassified_end": 0, "messages_suppressed": 0}
-                unclassified = {}
-                supported_kinds = sorted({kind_for(topic) for topic in topics} & set(EVENT_KINDS))
-                observed_kinds = set()
-                _state(group, "waiting", kinds=supported_kinds, advertised_kinds=supported_kinds, observed_kinds=[], dropped=0, unclassified=[], **counts)
-                minute, accepted, dropped = time.monotonic(), 0, 0
-                while not self.stop.is_set() and not _stop.is_set():
+    def stopping(self):
+        return self.stop.is_set() or _stop.is_set()
+
+    def request_retry(self):
+        if self.retry_requested.is_set():
+            return "queued"
+        if self.manual_ready_at is None:
+            return "receiver_not_exhausted"
+        if time.monotonic() < self.manual_ready_at:
+            return "retry_cooldown"
+        self.retry_requested.set()
+        return "queued"
+
+    def _lock_group(self, db, lease):
+        renew_worker_lease(db, lease, lease_seconds=LEASE_SECONDS, commit=False)
+        if not group_is_current(db, self.group):
+            raise ReceivingConfigurationChanged
+
+    def _publish(self, lease, phase, *, generation=None, disconnected=False, transitions=()):
+        with SessionLocal() as db:
+            self._lock_group(db, lease)
+            publish_channel(db, self.group, lease, generation, phase, sample=_utcnow(), recovery=self.recovery)
+            for transition in transitions:
+                record_transition(db, self.group, transition, self.recovery.details())
+            if disconnected:
+                source_disconnected(db, self.group)
+            else:
+                db.commit()
+
+    def _disconnect(self, lease):
+        try:
+            self._publish(lease, "disconnected", disconnected=True)
+        except ReceivingConfigurationChanged:
+            # Opt-outs still reconcile old "ongoing" history. A camera moved
+            # to another live receiver belongs to that receiver instead.
+            ids = [item["id"] for item in self.group["cameras"]]
+            with SessionLocal() as db:
+                renew_worker_lease(db, lease, lease_seconds=LEASE_SECONDS, commit=False)
+                rows = db.query(Camera).filter(Camera.id.in_(ids)).order_by(Camera.id).with_for_update().all()
+                local_ids = {camera.id for camera in rows if (
+                    not camera.events_enabled or camera.deleted_at is not None
+                    or camera.status == "deleting" or camera.protocol != "onvif"
+                    or connection_id(camera) == self.group["device_id"]
+                )}
+                source_disconnected(db, {**self.group, "cameras": [
+                    item for item in self.group["cameras"] if item["id"] in local_ids
+                ]})
+
+    def _wait_to_retry(self, lease, delay):
+        deadline = time.monotonic() + delay if delay is not None else None
+        with _guard:
+            self.retry_requested.clear()
+            self.manual_ready_at = time.monotonic() + MANUAL_RETRY_COOLDOWN_SECONDS if deadline is None else None
+        try:
+            while not self.stopping():
+                remaining = deadline - time.monotonic() if deadline is not None else LEASE_MAINTENANCE_SECONDS
+                if remaining <= 0 or self.retry_requested.wait(min(remaining, LEASE_MAINTENANCE_SECONDS)):
+                    break
+                if not self.stopping() and (deadline is None or time.monotonic() < deadline):
+                    # Retain physical ownership across the backoff. This is a
+                    # local DB write; an exhausted receiver contacts no camera.
                     with SessionLocal() as db:
-                        renew_worker_lease(db, handle, lease_seconds=150)
-                    started = time.monotonic()
-                    messages = self.client.pull()
-                    if self.stop.is_set() or _stop.is_set():
+                        renew_worker_lease(db, lease, lease_seconds=LEASE_SECONDS)
+        finally:
+            with _guard:
+                self.manual_ready_at = None
+                self.retry_requested.clear()
+
+    def _wait_between_pulls(self, started, has_messages):
+        deadline = time.monotonic() + pull_delay(time.monotonic() - started, has_messages)
+        while not self.stopping():
+            now = time.monotonic()
+            if now >= deadline:
+                return
+            renew_at = getattr(self.client, "renew_at", float("inf"))
+            if now >= renew_at:
+                self.client.renew_if_due()
+            else:
+                self.stop.wait(min(deadline, renew_at) - now)
+
+    def _receive(self, lease):
+        group = self.group
+        recovering = self.recovery.incident_id is not None
+        self.recovery.next_attempt_at = None
+        self.generation = None
+        self._publish(lease, "failed" if recovering else "connecting", disconnected=True)
+        if self.stopping():
+            return
+        _state(group, "reconnecting" if recovering else "connecting", incident=self.recovery.details())
+        self.client = DeviceClient(group["host"], group["port"], group["username"], group["password"], group["onvif_path"])
+        topics = self.client.topics()
+        identities = profile_identities(self.client.profiles())
+        if self.stopping():
+            return
+        self.client.subscribe()
+        generation = uuid.uuid4().hex
+        self.generation = generation
+        signal_group = {**group, "recording_generation": generation}
+        counts = {"messages_received": 0, "messages_parsed": 0, "messages_rejected": 0,
+                  "messages_ignored": 0, "messages_unsupported": 0, "events_saved": 0, "excluded_source": 0,
+                  "messages_initialized": 0, "messages_inactive": 0, "messages_deleted": 0,
+                  "messages_without_state": 0, "messages_unclassified_end": 0, "messages_suppressed": 0}
+        unclassified = {}
+        supported_kinds = sorted({kind_for(topic) for topic in topics} & set(EVENT_KINDS))
+        observed_kinds = set()
+        minute, accepted, dropped = time.monotonic(), 0, 0
+        next_sample = minute
+        while not self.stopping():
+            with SessionLocal() as db:
+                renew_worker_lease(db, lease, lease_seconds=LEASE_SECONDS)
+            started = time.monotonic()
+            messages = self.client.pull()
+            completed = time.monotonic()
+            if self.stopping():
+                break
+            recovered = self.recovery.received(completed)
+            with SessionLocal() as db:
+                self._lock_group(db, lease)
+                if completed >= next_sample or recovered:
+                    publish_channel(
+                        db, group, lease, generation, "recovering" if self.recovery.incident_id else "healthy",
+                        sample=_utcnow(), recovery=self.recovery,
+                    )
+                    next_sample = completed + HEALTH_SAMPLE_SECONDS
+                if recovered:
+                    record_transition(db, group, "recovered", recovered)
+                db.commit()
+                for message in messages:
+                    if self.stopping():
                         break
-                    with SessionLocal() as db:
-                        # A late response cannot write after its lease was replaced.
-                        renew_worker_lease(db, handle, lease_seconds=150)
-                        if not group_is_current(db, group):
-                            _wake.set()
-                            return
-                        for message in messages:
-                            counts["messages_received"] += 1
-                            if time.monotonic() - minute > 60:
-                                minute, accepted = time.monotonic(), 0
-                            signal = parse_notification(message)
-                            if signal is None:
-                                counts["messages_ignored" if ignored_notification(message) else "messages_rejected"] += 1
-                                continue
-                            counts["messages_parsed"] += 1
-                            counts["messages_initialized"] += int(signal.initialized)
-                            counts["messages_inactive"] += int(signal.active is False)
-                            counts["messages_deleted"] += int(signal.operation == "Deleted")
-                            counts["messages_without_state"] += int(signal.active is None)
-                            if signal.kind not in EVENT_KINDS:
-                                counts["messages_unclassified_end" if signal.active is False else "messages_unsupported"] += 1
-                                # Bounded, in-memory diagnostic types/field names only;
-                                # never XML, field values, credentials or history spam.
-                                unclassified[signal.topic] = {"topic": signal.topic, "fields": list(signal.data_keys)}
-                                if len(unclassified) > 16:
-                                    unclassified.pop(next(iter(unclassified)))
-                                if signal.active is not False:
-                                    continue
-                            else:
-                                observed_kinds.add(signal.kind)
-                            if accepted >= 120 and (signal is None or signal.active is not False):
-                                dropped += 1
-                                continue
-                            if not group_is_current(db, group):
-                                _wake.set()
-                                return
-                            camera, allowed = signal_camera(group, identities, signal)
-                            if allowed:
-                                saved = record_signal(db, group, camera, signal, diagnostics=counts)
-                                counts["events_saved"] += int(saved is not None)
-                            else:
-                                counts["excluded_source"] += 1
-                            accepted += 1
-                    status = ("partial_messages" if counts["messages_rejected"] else "connected") if counts["messages_parsed"] else "invalid_messages" if counts["messages_rejected"] else "waiting"
-                    _state(group, status, kinds=sorted(set(supported_kinds) | observed_kinds),
-                           advertised_kinds=supported_kinds, observed_kinds=sorted(observed_kinds),
-                           unclassified=list(unclassified.values()), dropped=dropped, **counts)
-                    # Some devices ignore the requested timeout. Empty replies must
-                    # not turn a long-poll into a hot retry loop.
-                    elapsed = time.monotonic() - started
-                    if (not messages or accepted >= 120) and elapsed < 1:
-                        self.stop.wait(30)
-                    elif elapsed < 1:
-                        # Also bound service/unknown-only fast replies; unlike a
-                        # 30s empty-response backoff this keeps detections timely.
-                        self.stop.wait(1 - elapsed)
+                    counts["messages_received"] += 1
+                    if time.monotonic() - minute > 60:
+                        minute, accepted = time.monotonic(), 0
+                    signal = parse_notification(message)
+                    if signal is None:
+                        counts["messages_ignored" if ignored_notification(message) else "messages_rejected"] += 1
+                        continue
+                    counts["messages_parsed"] += 1
+                    counts["messages_initialized"] += int(signal.initialized)
+                    counts["messages_inactive"] += int(signal.active is False)
+                    counts["messages_deleted"] += int(signal.operation == "Deleted")
+                    counts["messages_without_state"] += int(signal.active is None)
+                    if signal.kind not in EVENT_KINDS:
+                        counts["messages_unclassified_end" if signal.active is False else "messages_unsupported"] += 1
+                        # Diagnostic names only, never raw messages or field values.
+                        unclassified[signal.topic] = {"topic": signal.topic, "fields": list(signal.data_keys)}
+                        if len(unclassified) > 16:
+                            unclassified.pop(next(iter(unclassified)))
+                        if signal.active is not False:
+                            continue
+                    else:
+                        observed_kinds.add(signal.kind)
+                    if not group_is_current(db, group):
+                        raise ReceivingConfigurationChanged
+                    camera, allowed = signal_camera(group, identities, signal)
+                    if allowed:
+                        history_allowed = accepted < 120 or signal.active is False
+                        dropped += int(not history_allowed)
+                        saved = record_signal(db, signal_group, camera, signal, diagnostics=counts, history_allowed=history_allowed)
+                        counts["events_saved"] += int(saved is not None)
+                    else:
+                        counts["excluded_source"] += 1
+                    accepted += 1
+            if counts["messages_parsed"]:
+                status = "partial_messages" if counts["messages_rejected"] else "connected"
+            else:
+                status = "invalid_messages" if counts["messages_rejected"] else "waiting"
+            _state(group, status, kinds=sorted(set(supported_kinds) | observed_kinds),
+                   advertised_kinds=supported_kinds, observed_kinds=sorted(observed_kinds),
+                   unclassified=list(unclassified.values()), dropped=dropped, incident=self.recovery.details(), **counts)
+            self._wait_between_pulls(started, bool(messages))
+
+    def _serve(self, lease):
+        while not self.stopping():
+            try:
+                self._receive(lease)
+                return
+            except (StorageOperationLeaseLost, ReceivingConfigurationChanged):
+                raise
             except Exception as exc:
-                failures += 1
-                status = "unsupported" if isinstance(exc, EventDeviceError) and exc.code == "events_unsupported" else "reconnecting"
-                _state(group, status, reason=getattr(exc, "code", "events_connection_failed"))
+                if self.stopping():
+                    return
+                reason = exc.code if isinstance(exc, EventDeviceError) else "events_connection_failed"
+                delay, transitions = self.recovery.failed(reason, _utcnow())
+                phase = "exhausted" if delay is None else "failed"
+                self._publish(lease, phase, generation=self.generation, disconnected=True, transitions=transitions)
+                status = "retry_exhausted" if delay is None else "unsupported" if reason == "events_unsupported" else "reconnecting"
+                _state(self.group, status, reason=reason, incident=self.recovery.details())
             finally:
                 if self.client is not None:
                     self.client.close()
                     self.client = None
-                if handle is not None:
-                    try:
-                        with SessionLocal() as db:
-                            renew_worker_lease(db, handle, lease_seconds=150)
-                            source_disconnected(db, group)
-                            release_worker_lease(db, handle)
-                    except Exception:
-                        pass
-                    handle = None
-            if not self.stop.is_set() and not _stop.is_set():
-                self.stop.wait(min(600, 30 * 2 ** min(failures, 4)))
+            self._wait_to_retry(lease, delay)
+
+    def run(self):
+        lease = None
+        try:
+            while not self.stopping() and lease is None:
+                with SessionLocal() as db:
+                    lease = acquire_worker_lease(
+                        db, worker_key="camera_events_" + self.group["device_id"][:32],
+                        owner_instance_id=_owner, lease_seconds=LEASE_SECONDS,
+                    )
+                if lease is None:
+                    _state(self.group, "other_receiver")
+                    self.stop.wait(LEASE_MAINTENANCE_SECONDS)
+            if lease is not None:
+                self._serve(lease)
+        except (StorageOperationLeaseLost, ReceivingConfigurationChanged):
+            pass
+        except Exception:
+            # A DB outage must neither cause unbounded replacement threads nor
+            # turn an uncommitted incident into a second notification stream.
+            self.stop.wait(LEASE_MAINTENANCE_SECONDS)
+        finally:
+            if lease is not None:
+                try:
+                    self._disconnect(lease)
+                except Exception:
+                    pass
+                try:
+                    with SessionLocal() as db:
+                        release_worker_lease(db, lease)
+                except Exception:
+                    pass
+            _wake.set()
 
 
 def _run():
     last_cleanup = 0
     while not _stop.is_set():
+        _wake.clear()
         try:
             groups = connection_groups()
             for key, job in list(_jobs.items()):
-                if key not in groups or groups[key]["fingerprint"] != job.group["fingerprint"] or not job.thread.is_alive():
+                if key not in groups or groups[key]["fingerprint"] != job.group["fingerprint"]:
                     job.cancel()
-                    job.thread.join(timeout=.1)
-                    _jobs.pop(key, None)
+                if not job.thread.is_alive():
+                    with _guard:
+                        _jobs.pop(key, None)
             active_ids = {str(c["id"]) for group in groups.values() for c in group["cameras"] if c["events_enabled"]}
             with _guard:
                 for key in list(_states):
@@ -241,7 +417,8 @@ def _run():
                     continue
                 receiver = Receiver(group)
                 receiver.thread = threading.Thread(target=receiver.run, name="camera-events-device", daemon=True)
-                _jobs[key] = receiver
+                with _guard:
+                    _jobs[key] = receiver
                 receiver.thread.start()
             if time.monotonic() - last_cleanup > 300:
                 with SessionLocal() as db:
@@ -251,13 +428,13 @@ def _run():
             # Transient DB/setup/maintenance unavailability must not kill the API.
             pass
         _wake.wait(60)
-        _wake.clear()
     for receiver in list(_jobs.values()):
         receiver.cancel()
     deadline = time.monotonic() + 6
     for receiver in list(_jobs.values()):
         receiver.thread.join(timeout=max(0, deadline - time.monotonic()))
-    _jobs.clear()
+    with _guard:
+        _jobs.clear()
 
 
 def start_camera_events_worker():

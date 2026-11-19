@@ -103,6 +103,7 @@ PROBLEM_INTEGRITY_STATUSES = {
     "storage_unavailable",
 }
 TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
+BUFFERED_ARCHIVE_PART_RE = re.compile(r"-ev4-(main|sub)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{6}Z\.(mp4|mkv)$")
 _GENERATION_LOCKS: dict[str, threading.Lock] = {}
 _GENERATION_LOCKS_GUARD = threading.Lock()
 
@@ -710,6 +711,65 @@ def _concat_segments(parts: list[Path], output: Path, concat_file: Path) -> None
         raise RuntimeError("incompatible_segments")
 
 
+def _needs_buffered_clip_normalization(sources: list[ResolvedExportSegment]) -> bool:
+    # The filename marker is created by Recorder for native event parts. Do
+    # not change the historical fast-copy path for ordinary archives.
+    return (any(BUFFERED_ARCHIVE_PART_RE.search(source.path.name) for source in sources)
+            and len({(source.segment.job_id, source.segment.stream_type) for source in sources}) > 1)
+
+
+def _probe_clip_inputs(sources: list[ResolvedExportSegment]) -> tuple[tuple[int, int], dict[Path, bool]]:
+    sizes, audio = [], {}
+    for source in sources:
+        if source.path in audio:
+            continue
+        probe = _run_media_tool([
+            "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height",
+            "-of", "json", str(source.path),
+        ], timeout=20)
+        if probe.returncode != 0:
+            raise RuntimeError("incompatible_segments")
+        try:
+            streams = json.loads(probe.stdout)["streams"]
+            video = next(stream for stream in streams if stream["codec_type"] == "video")
+            width, height = int(video["width"]), int(video["height"])
+        except (ValueError, TypeError, KeyError, StopIteration) as exc:
+            raise RuntimeError("incompatible_segments") from exc
+        if min(width, height) < 2:
+            raise RuntimeError("incompatible_segments")
+        sizes.append((width, height))
+        audio[source.path] = any(stream["codec_type"] == "audio" for stream in streams)
+    width, height = max(sizes, key=lambda shape: shape[0] * shape[1])
+    # Only the requested compatible clip is normalized (up to 1080p); the
+    # separately downloadable original Main and Sub are never modified.
+    ratio = min(1, 1920 / width, 1080 / height)
+    return (max(2, int(width * ratio) // 2 * 2), max(2, int(height * ratio) // 2 * 2)), audio
+
+
+def _normalize_event_clip_part(source, target, clip_start, clip_end, *, size, has_audio):
+    offset = (clip_start - source.start_ts).total_seconds()
+    duration = (clip_end - clip_start).total_seconds()
+    width, height = size
+    args = [
+        "ffmpeg", "-hide_banner", "-y", "-filter_threads", "1", "-threads", "2",
+        "-ss", f"{offset:.6f}", "-i", str(source.path),
+    ]
+    if not has_audio:
+        args.extend(["-f", "lavfi", "-i", "anullsrc=sample_rate=48000:channel_layout=mono"])
+    args.extend([
+        "-t", f"{duration:.6f}", "-map", "0:v:0", "-map", "0:a:0" if has_audio else "1:a:0",
+        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+               f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,format=yuv420p",
+        "-af", "aresample=48000:async=1:first_pts=0,apad",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-threads", "2",
+        "-maxrate", "8M", "-bufsize", "16M", "-c:a", "aac", "-ar", "48000", "-ac", "1",
+        str(target),
+    ])
+    result = _run_media_tool(args, timeout=max(GENERATION_TIMEOUT_SECONDS, math.ceil(duration * 8 + 30)))
+    if result.returncode != 0 or not target.exists() or target.stat().st_size <= 0:
+        raise RuntimeError("incompatible_segments")
+
+
 def _validate_output(job: ArchiveExportJob, output: Path) -> tuple[int, float | None]:
     root = _export_root()
     try:
@@ -745,10 +805,15 @@ def _copy_timeout(size_bytes: int) -> int:
 
 def _check_export_space(sources: list[ResolvedExportSegment], job: ArchiveExportJob) -> None:
     estimated = 0
+    normalize = _needs_buffered_clip_normalization(sources)
     for index, start, end in _coverage_plan(job.start_ts, job.end_ts, [(s.start_ts, s.end_ts) for s in sources]):
         source = sources[index]
         fraction = (end - start).total_seconds() / max(0.001, (source.end_ts - source.start_ts).total_seconds())
-        estimated += min(source.source_size, math.ceil(source.source_size * fraction * 1.5))
+        if normalize:
+            duration = (end - start).total_seconds()
+            estimated += math.ceil(duration * 1_100_000 + 2_000_000)
+        else:
+            estimated += min(source.source_size, math.ceil(source.source_size * fraction * 1.5))
     # During concat both the trimmed parts and output exist. This is a space
     # estimate, not a clip-size cap; the original recordings are untouched.
     if shutil.disk_usage(_export_root()).free < estimated * 2 + EXPORT_FREE_SPACE_RESERVE_BYTES:
@@ -832,15 +897,26 @@ def generate_archive_export_job(
             output_path = _safe_child(output_dir, f"stage11_clip_{job.id}.mkv")
             plan = _coverage_plan(job.start_ts, job.end_ts, [(source.start_ts, source.end_ts) for source in sources])
             part_paths = [_safe_child(temp_dir, f"part_{index:03d}.mkv") for index, _ in enumerate(plan)]
+            mixed = _needs_buffered_clip_normalization([sources[index] for index, _, _ in plan])
+            if mixed:
+                dimensions, audio = _probe_clip_inputs([sources[index] for index, _, _ in plan])
             for (source_index, clip_start, clip_end), part_path in zip(plan, part_paths):
-                _trim_segment(source=sources[source_index], job=job, target=part_path,
-                              clip_start=clip_start, clip_end=clip_end)
+                source = sources[source_index]
+                if mixed:
+                    _normalize_event_clip_part(source, part_path, clip_start, clip_end, size=dimensions,
+                                               has_audio=audio[source.path])
+                else:
+                    _trim_segment(source=source, job=job, target=part_path, clip_start=clip_start, clip_end=clip_end)
             if len(part_paths) == 1:
                 shutil.move(str(part_paths[0]), str(output_path))
             else:
                 _concat_segments(part_paths, output_path, _safe_child(temp_dir, "concat.txt"))
 
             size, _duration = _validate_output(job, output_path)
+            if mixed:
+                covered = sum((end - start).total_seconds() for _, start, end in plan)
+                if abs(_duration - covered) > max(.5, .08 * len(plan)):
+                    raise RuntimeError("output_validation_failed")
             _assert_sources_unchanged(sources)
             job.status = EXPORT_STATUS_DONE
             job.progress_percent = 100

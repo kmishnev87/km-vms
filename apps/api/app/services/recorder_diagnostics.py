@@ -112,7 +112,9 @@ def _health_from(
     storage_state: dict[str, Any],
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
-    enabled_always = [item for item in camera_states if item["enabled"] and item["recording_mode"] == "always"]
+    enabled_always = [item for item in camera_states
+                      if item["enabled"] and item["recording_mode"] == "always"
+                      and not (item.get("event_policy_configured") or item.get("linked_policy_configured"))]
     failed_cameras = [item for item in camera_states if item.get("current_failure")]
 
     if not heartbeat.get("available"):
@@ -214,7 +216,9 @@ def build_recorder_summary(db: Session) -> dict[str, Any]:
         heartbeat = {key: value for key, value in heartbeat.items() if key != "heartbeat_raw"}
     job_summary = _job_summary(db)
     camera_states = _camera_recording_states(db)
-    enabled_always = [item for item in camera_states if item["enabled"] and item["recording_mode"] == "always"]
+    enabled_always = [item for item in camera_states
+                      if item["enabled"] and item["recording_mode"] == "always"
+                      and not (item.get("event_policy_configured") or item.get("linked_policy_configured"))]
     failed_cameras = [item for item in camera_states if item.get("current_failure")]
     reasons: list[str] = []
     if not heartbeat.get("available"):

@@ -32,6 +32,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import ru.kmvms.mobile.R
+import ru.kmvms.mobile.core.CameraStep
 import ru.kmvms.mobile.media.LivePlaybackSession
 import ru.kmvms.mobile.media.VideoState
 import ru.kmvms.mobile.media.VideoStatus
@@ -41,22 +42,25 @@ import ru.kmvms.mobile.media.VideoStatus
                            crop: Boolean = false, zoomable: Boolean = false, onTap: (() -> Unit)? = null,
                            aspect: Float? = null, mode: VideoGestureMode = VideoGestureMode.DIGITAL,
                            onPoint: (Double, Double) -> Unit = { _, _ -> },
-                           onArea: (Double, Double, Double, Double) -> Unit = { _, _, _, _ -> }) {
+                           onArea: (Double, Double, Double, Double) -> Unit = { _, _, _, _ -> },
+                           onCameraSwipe: ((CameraStep) -> Unit)? = null) {
     val observed = session?.state?.collectAsStateWithLifecycle()
     val state = observed?.value ?: VideoState()
-    VideoSurface(session?.player, state, { session?.retry() }, modifier, crop, zoomable, onTap, aspect, mode, onPoint, onArea)
+    VideoSurface(session?.player, state, { session?.retry() }, modifier, crop, zoomable, onTap, aspect, mode, onPoint, onArea, onCameraSwipe)
 }
 
 @UnstableApi
 @Composable fun VideoSurface(player: ExoPlayer?, state: VideoState, retry: () -> Unit,
                              modifier: Modifier = Modifier, crop: Boolean = false, zoomable: Boolean = false,
                              onTap: (() -> Unit)? = null, aspect: Float? = null, mode: VideoGestureMode = VideoGestureMode.DIGITAL,
-                             onPoint: (Double, Double) -> Unit = { _, _ -> }, onArea: (Double, Double, Double, Double) -> Unit = { _, _, _, _ -> }) {
+                             onPoint: (Double, Double) -> Unit = { _, _ -> }, onArea: (Double, Double, Double, Double) -> Unit = { _, _, _, _ -> },
+                             onCameraSwipe: ((CameraStep) -> Unit)? = null) {
     val transform = remember(player) { VideoTransform() }
     var size by remember { mutableStateOf(IntSize.Zero) }
     val tap by rememberUpdatedState(onTap)
     val point by rememberUpdatedState(onPoint)
     val area by rememberUpdatedState(onArea)
+    val swipe by rememberUpdatedState(onCameraSwipe)
     val videoSize = player?.videoSize
     val sourceAspect = aspect ?: if (videoSize != null && videoSize.height > 0) videoSize.width.toFloat()/videoSize.height else 16f/9f
     val zoomDescription = stringResource(R.string.digital_zoom_level, transform.scale)
@@ -71,7 +75,8 @@ import ru.kmvms.mobile.media.VideoStatus
             onRelease = { it.player = null })
         Canvas(Modifier.fillMaxSize().testTag("video-gesture-surface").semantics { stateDescription = zoomDescription }
             .videoGestures(transform, mode, zoomable, size, sourceAspect, { tap?.invoke() },
-            { x, y -> point(x, y) }, { left, top, right, bottom -> area(left, top, right, bottom) })) {
+            { x, y -> point(x, y) }, { left, top, right, bottom -> area(left, top, right, bottom) },
+                if (onCameraSwipe != null) { step -> swipe?.invoke(step) } else null)) {
             transform.rectangle?.let { selection ->
                 drawRect(Color(0x302563EB), selection.topLeft, selection.size)
                 drawRect(Color(0xFF60A5FA), selection.topLeft, selection.size, style = Stroke(2.dp.toPx()))

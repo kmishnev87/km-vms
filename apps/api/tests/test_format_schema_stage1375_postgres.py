@@ -21,6 +21,7 @@ from app.services.schema_migrations import (
     STAGE172_EVENT_RECEIVING_MIGRATION,
     ONLINE_MODE_MIGRATION,
     CAMERA_TALK_MIGRATION,
+    AI_RECORDING_MIGRATION,
     SchemaMigrationBlocked,
     execute_migration_plan,
 )
@@ -55,6 +56,8 @@ def format_database(monkeypatch):
             db.commit()
             # Reproduce the historical v9 source, not today's v11 Camera model.
             db.execute(text("ALTER TABLE cameras DROP COLUMN events_enabled, DROP COLUMN talk_password_encrypted"))
+            db.execute(text("ALTER TABLE cameras DROP COLUMN recording_policy, DROP COLUMN recording_signal_state"))
+            db.execute(text("ALTER TABLE system_settings DROP COLUMN event_recording_emergency_enabled"))
             db.commit()
             yield engine, db
     finally:
@@ -75,6 +78,9 @@ def business_snapshot(db):
             row.pop("recording_format_requested_at", None)
             row.pop("events_enabled", None)
             row.pop("online_mode", None)
+            row.pop("recording_policy", None)
+            row.pop("recording_signal_state", None)
+            row.pop("event_recording_emergency_enabled", None)
         result[table] = rows
     return hashlib.sha256(json.dumps(result, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -89,7 +95,7 @@ def test_registered_format_and_receiving_migrations_preserve_rows_and_are_idempo
     assert source in control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.8.22"]
     before = business_snapshot(db)
     first = execute_migration_plan(db)
-    assert first["executed_migrations"] == [STAGE1375_FORMAT_CHANGE_MIGRATION.migration_id, STAGE172_EVENT_RECEIVING_MIGRATION.migration_id, ONLINE_MODE_MIGRATION.migration_id, CAMERA_TALK_MIGRATION.migration_id]
+    assert first["executed_migrations"] == [STAGE1375_FORMAT_CHANGE_MIGRATION.migration_id, STAGE172_EVENT_RECEIVING_MIGRATION.migration_id, ONLINE_MODE_MIGRATION.migration_id, CAMERA_TALK_MIGRATION.migration_id, AI_RECORDING_MIGRATION.migration_id]
     assert control.target_shape_is_exact(db)[0] is True
     assert business_snapshot(db) == before
     assert db.execute(text("SELECT recording_format_apply_mode, recording_format_requested_at FROM system_settings WHERE id=1")).one() == (None, None)
@@ -112,7 +118,7 @@ def test_failed_verification_rolls_back_columns_state_and_preserves_rows(format_
     assert "recording_format_apply_mode" not in {col["name"] for col in inspect(db.connection()).get_columns("system_settings")}
 
 
-def test_prepared_schema12_runtime_can_read_write_signed_schema13_without_relabeling(format_database, monkeypatch, tmp_path):
+def test_prepared_schema12_runtime_can_read_write_signed_schema14_without_relabeling(format_database, monkeypatch, tmp_path):
     from app.services import schema_runtime_compatibility as compat
     from app.services import schema_versioning, schema_migrations
     engine, db = format_database
@@ -132,7 +138,7 @@ def test_prepared_schema12_runtime_can_read_write_signed_schema13_without_relabe
     assert control.resolve_schema_execution_mode(db) == "exact_target_noop"
     db.execute(text("UPDATE system_settings SET timezone='Europe/London' WHERE id=1"))
     db.commit()
-    assert schema_versioning.schema_version_status(db)["schema_version"] == 13
+    assert schema_versioning.schema_version_status(db)["schema_version"] == 14
     assert control.canonical_schema_history_fingerprint(db) == history_before
     assert control.database_shape_fingerprint(db) == shape_before
     db.execute(text("ALTER TABLE system_settings ADD COLUMN unregistered_change INTEGER NULL"))
@@ -150,7 +156,7 @@ def test_update_after_application_rollback_binds_real_schema_not_old_tag_number(
     before = control.canonical_schema_history_fingerprint(db)
     installed, commit, actual, shape = control.validate_source_lineage(db, request_id="update-" + "1" * 32, target_release="0.9.13", target_commit="b" * 40)
     assert installed == "0.9.29" and commit == "a" * 40
-    assert actual == 13 and shape in control.TARGET_SHAPE_FINGERPRINTS
+    assert actual == 14 and shape in control.TARGET_SHAPE_FINGERPRINTS
     assert control.canonical_schema_history_fingerprint(db) == before
     state = db.get(compat.SchemaVersionState, "current")
     state.drift_classification = {}

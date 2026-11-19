@@ -423,8 +423,11 @@ services:
       DEFAULT_RECORD_STREAM: main
       SEGMENT_DURATION_SEC: 300
       FFMPEG_LOGLEVEL: warning
+      LIVE_HWACCEL_MODE: ${LIVE_HWACCEL_MODE:-auto}
+      AI_EVENT_ROOT: /storage/ai-events
     volumes:
       - ${SURVEILLANCE_ROOT}:/storage/archive
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/previews/.ai-events:/storage/ai-events
     networks:
       - vms-net
 

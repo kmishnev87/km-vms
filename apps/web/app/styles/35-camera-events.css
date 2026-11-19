@@ -42,6 +42,30 @@
 .cameraEventsDescription span, .cameraEventsRow time { font-size: 12px; color: #526377; }
 .cameraEventsRow time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .cameraEventsDescription small { font-size: 11px; color: #64748b; }
+.cameraEventsKindLine { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cameraEventsTypeFilter { position: relative; min-width: 0; }
+.cameraEventsTypeFilter > .cameraEventsAiTag { position: absolute; top: -2px; right: 0; }
+.cameraEventsAiTag { flex: 0 0 auto; border: 1px solid #cfdeea; border-radius: 5px; padding: 1px 5px; background: #f3f8fc; color: #315c80; font-family: inherit; font-size: 10px; font-weight: 600; line-height: 1.4; cursor: pointer; }
+.cameraEventsAiTag:is(:hover, [aria-expanded="true"], [data-active="true"]) { background: #e1eef8; border-color: #9bb9d2; }
+.cameraEventsAiTag:focus-visible { outline: 2px solid #456f94; outline-offset: 2px; }
+.cameraEventsAiFilters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; padding: 8px 10px; border: 1px solid #dce5ee; border-radius: 7px; background: #f7fafd; }
+.cameraEventsAiFilters form { flex: 2 1 230px; display: flex; align-items: end; gap: 8px; }
+.cameraEventsAiFilters label { flex: 1 1 120px; display: grid; gap: 4px; min-width: 0; color: #526377; font-size: 12px; }
+.cameraEventsAiFilters :is(input, select) { width: 100%; min-width: 0; border: 1px solid #cbd7e4; background: #fff; color: #172238; height: 30px; padding: 3px 7px; border-radius: 6px; font: inherit; }
+.cameraEventsAiFilters form button { min-height: 30px; }
+.cameraAiEvidenceDialog { width: min(620px, calc(100vw - 28px)); max-height: 90dvh; }
+.cameraAiEvidence { display: grid; gap: 10px; color: #172238; }
+.cameraAiEvidenceFrame { display: grid; place-items: center; height: clamp(110px, 30vh, 285px); overflow: hidden; background: #eef4f9; border: 1px solid #dce5ee; border-radius: 8px; color: #526377; font-size: 13px; }
+.cameraAiEvidenceFrame img { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+.cameraAiEvidenceSummary { display: flex; justify-content: space-between; align-items: baseline; gap: 7px 14px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.cameraAiEvidenceSummary time { white-space: nowrap; font-variant-numeric: tabular-nums; color: #526377; font-size: 13px; }
+.cameraAiEvidence dl { display: grid; gap: 6px; margin: 0; font-size: 13px; }
+.cameraAiEvidence dl > div { display: grid; grid-template-columns: minmax(84px, 1fr) 3fr; gap: 8px; }
+.cameraAiEvidence dt, .cameraAiEvidenceState { color: #526377; }
+.cameraAiEvidence dd { margin: 0; overflow-wrap: anywhere; }
+.cameraAiEvidenceState { border-top: 1px solid #dce5ee; padding-top: 9px; margin: 0; font-size: 13px; }
+.cameraAiEvidenceButtons, .cameraAiEvidenceReview { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.cameraAiEvidenceReview { justify-content: space-between; border-top: 1px solid #dce5ee; padding-top: 8px; color: #526377; font-size: 12px; }
 .cameraEventsRowActions { display: grid; grid-template-columns: 36px 36px; gap: 8px; align-items: center; }
 .cameraEventsPager { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .cameraEventsPager > span { margin-right: auto; color: #64748b; font-size: 11px; }

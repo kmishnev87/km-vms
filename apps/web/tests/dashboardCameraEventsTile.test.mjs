@@ -5,12 +5,15 @@ import vm from "node:vm";
 
 const read = path => fs.readFileSync(new URL(path, import.meta.url), "utf8");
 
-test("Home keeps eight product sections, with Events and no APK tile, keeping permissions", () => {
+test("Home keeps eight product sections, with Events, Recording Center and no APK tile", () => {
   const source = read("../app/page.js");
   const definition = source.match(/const DASHBOARD_ITEMS = (\[[\s\S]*?\n\]);/)[1];
   const items = vm.runInNewContext(definition);
   assert.equal(items.length, 8);
-  assert.deepEqual(Array.from(items, item => item.href), ["/cameras", "/recordings", "/live", "/chronology", "/storage", "/system-status", "/?camera_events=1", "/settings"]);
+  assert.deepEqual(Array.from(items, item => item.href), ["/cameras", "/recordings", "/live", "/chronology", "/storage", "/ai-recording", "/?camera_events=1", "/settings"]);
+  assert.equal(items[5].permission, "manage_cameras");
+  assert.ok(fs.existsSync(new URL("../public" + items[5].iconSrc, import.meta.url)));
+  assert.ok(fs.existsSync(new URL("../public" + items[5].backgroundSrc, import.meta.url)));
   assert.equal(items[7].href, "/settings");
   assert.equal(items[6].href, "/?camera_events=1");
   assert.equal(items[6].permission, "view_live");

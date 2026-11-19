@@ -52,7 +52,7 @@ class CameraEditorControllerTest {
                 assertEquals("fixture-sub-proof",body.getString("sub_validation_token"))
                 assertEquals("s2",body.getString("onvif_sub_profile_token"))
                 assertEquals("lens-a",editor.state.value.source)
-            }finally{editor.close()}
+            }finally{editor.close(); withTimeout(5_000) { editor.awaitClosed() }}
         }}finally{Dispatchers.resetMain()}
     }
     @Test fun editingOnlyRetentionDoesNotProbeTheCameraOrResetEvents()=runBlocking {
@@ -70,7 +70,7 @@ class CameraEditorControllerTest {
                 val body=JSONObject(request.body.readUtf8())
                 assertEquals(setOf("retention_days"),body.keys().asSequence().toSet())
                 assertEquals(2,server.requestCount)
-            }finally{editor.close()}
+            }finally{editor.close(); withTimeout(5_000) { editor.awaitClosed() }}
         }}finally{Dispatchers.resetMain()}
     }
 }

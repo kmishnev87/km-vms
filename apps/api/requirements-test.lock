@@ -2385,3 +2385,6 @@ zeep==4.3.3 \
     #   -c requirements.lock
     #   -r requirements.txt
     #   onvif-zeep
+av==16.1.0 \
+    --hash=sha256:7ae547f6d5fa31763f73900d43901e8c5fa6367bb9a9840978d57b5a7ae14ed2 \
+    --hash=sha256:27ee558d9c02a142eebcbe55578a6d817fedfde42ff5676275504e16d07a7f86

@@ -21,6 +21,7 @@ from .contracts import (
 )
 from .segment_recovery import inspect_closed_segment, same_file_version
 from .segment_repair import ReplacementPublication
+from .event_buffer import PART_STAMP
 
 def bounded_file_fingerprint(file_path: Path, stat_result: os.stat_result) -> str:
     digest = hashlib.sha256()
@@ -79,6 +80,7 @@ class SegmentAccounting:
 
         started_at = self.parse_segment_start_time(file_path)
         media_metadata = self.path_format_metadata(file_path)
+        buffered = PART_STAMP.search(file_path.name)
         with self.engine.begin() as conn:
             existing = conn.execute(
                 text(
@@ -193,7 +195,7 @@ class SegmentAccounting:
                     "relative_path": rel_path,
                     "started_at": started_at,
                     "size_bytes": max(int(stat.st_size), 0),
-                    "stream_type": job.source_stream or self.default_record_stream,
+                    "stream_type": buffered.group(1) if buffered else job.source_stream or self.default_record_stream,
                     "status": SEGMENT_STATUS_WRITING,
                     "ownership": OWNERSHIP_KM_VMS,
                     "source": METADATA_SOURCE_RECORDER,

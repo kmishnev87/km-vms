@@ -59,4 +59,5 @@ class ArchiveBrowser(private val api: ArchiveApi) {
         }
     }
     fun close() { scope.cancel() }
+    internal suspend fun awaitClosed() { scope.coroutineContext[Job]?.join() }
 }

@@ -6,7 +6,8 @@ import { apiFetch, captureAuthSession } from "../lib/api";
 import { useAuthSession } from "../lib/useAuthSession";
 import { useI18n } from "../lib/i18n";
 import { formatProductDateTime } from "../lib/timezone";
-import { CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, CAMERA_EVENT_HUB_OPEN, eventErrorKey, eventHistoryQuery, eventLabelKey, eventObjectLabelKeys } from "../lib/cameraEvents";
+import { AI_EVENT_CONDITIONS, CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, CAMERA_EVENT_HUB_OPEN, eventErrorKey, eventHistoryQuery, eventLabelKey, eventObjectLabelKeys } from "../lib/cameraEvents";
+import AiEventDetails from "./AiEventDetails";
 import CameraEventPreferences from "./CameraEventPreferences";
 import CameraEventReceiving from "./CameraEventReceiving";
 import { mergeEventPreferenceDraft } from "../lib/cameraEventPreferences";
@@ -44,6 +45,9 @@ export default function CameraEventsHub({ currentUser }) {
   const [unread, setUnread] = useState(0);
   const [refresh, setRefresh] = useState(0);
   const [filters, setFilters] = useState({ camera: "", kind: "", days: 7, unread: false });
+  const [aiFiltersOpen, setAiFiltersOpen] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState("");
+  const [detail, setDetail] = useState(null);
   const [offset, setOffset] = useState(0);
   const [history, setHistory] = useState(null);
   const [cameras, setCameras] = useState([]);
@@ -82,7 +86,7 @@ export default function CameraEventsHub({ currentUser }) {
   }
 
   useEffect(() => {
-    setOpen(false); setEventToast(null); setHistory(null); setPreference(null); clearSelection(); setDeleteTarget(null); setBusy(false);
+    setOpen(false); setDetail(null); setEventToast(null); setHistory(null); setPreference(null); clearSelection(); setDeleteTarget(null); setBusy(false);
     preferenceServerRef.current = null;
     const owner = ++generation.current;
     if (!enabled || !session) { setUnread(0); return undefined; }
@@ -193,7 +197,7 @@ export default function CameraEventsHub({ currentUser }) {
       try { await apiFetch("/camera-events/read", { method: "POST", headers, body: JSON.stringify({ ids: [event.id] }) }); }
       catch (error) { if (current()) showError(error); }
       if (!current()) return;
-      setOpen(false); setEventToast(null);
+      setOpen(false); setDetail(null); setEventToast(null);
       router.push(target.url);
       if (pathname === (mode === "live" ? "/live" : "/chronology")) window.dispatchEvent(new CustomEvent(CAMERA_EVENT_OPEN, { detail: { id: event.id, mode } }));
     });
@@ -242,7 +246,14 @@ export default function CameraEventsHub({ currentUser }) {
     });
   }
 
-  function changeFilter(key, value) { setFilters(previous => ({ ...previous, [key]: value })); setOffset(0); clearSelection(); }
+  function changeFilter(key, value) { clearSelection();
+    setFilters(previous => ({
+      ...previous, [key]: value,
+      ...(key === "source" && value !== "ai" ? { rule: "", condition: "" } : {}),
+    }));
+    if (key === "source" && value !== "ai") setRuleDraft("");
+    setOffset(0);
+  }
   const rows = history?.items || [];
   const selectedCount = selectedEventCount(selection, selectionSnapshot);
   const selectedHere = id => eventIsSelected(id, selection, selectionSnapshot);
@@ -289,12 +300,24 @@ export default function CameraEventsHub({ currentUser }) {
   const historyContent = <div className="cameraEventsWorkbench" style={{ "--camera-events-scrollbar": `${scrollbarWidth}px` }}>
     <div className="cameraEventsFilters">
       <label>{t("cameraEvents.camera")}<select disabled={busy} value={filters.camera} onChange={e => changeFilter("camera", e.target.value)}><option value="">{t("cameraEvents.allCameras")}</option>{cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.name}</option>)}</select></label>
-      <label>{t("cameraEvents.type")}<select disabled={busy} value={filters.kind} onChange={e => changeFilter("kind", e.target.value)}><option value="">{t("cameraEvents.allTypes")}</option>{CAMERA_EVENT_KINDS.map(kind => <option key={kind} value={kind}>{t(`cameraEvents.kinds.${kind}`)}</option>)}</select></label>
+      <div className="cameraEventsTypeFilter"><label>{t("cameraEvents.type")}<select disabled={busy} value={filters.kind} onChange={e => changeFilter("kind", e.target.value)}><option value="">{t("cameraEvents.allTypes")}</option>{CAMERA_EVENT_KINDS.map(kind => <option key={kind} value={kind}>{t(`cameraEvents.kinds.${kind}`)}</option>)}</select></label><button className="cameraEventsAiTag" type="button" aria-controls="camera-ai-filters" aria-expanded={aiFiltersOpen} data-active={Boolean(filters.source)} onClick={() => setAiFiltersOpen(value => !value)} title={t("cameraEvents.ai.filters")} aria-label={t("cameraEvents.ai.filters")}>AI</button></div>
       <label>{t("cameraEvents.period")}<select disabled={busy} value={filters.days} onChange={e => changeFilter("days", Number(e.target.value))}>{[1, 7, 30].map(day => <option key={day} value={day}>{t(`cameraEvents.days${day}`)}</option>)}</select></label>
       <div className="cameraEventsFilterActions"><label className="cameraEventsCheck"><input type="checkbox" disabled={busy} checked={filters.unread} onChange={e => changeFilter("unread", e.target.checked)}/><span>{t("cameraEvents.unreadOnly")}</span></label>
       <button className="cameraEventsIconButton" title={t("cameraEvents.refresh")} aria-label={t("cameraEvents.refresh")} type="button" onClick={() => setRefresh(n => n + 1)} disabled={loading || busy}><EventActionIcon action="refresh"/></button>
       </div>
     </div>
+    {aiFiltersOpen ? <div className="cameraEventsAiFilters" id="camera-ai-filters">
+      <label>{t("cameraEvents.ai.source")}<select disabled={busy} value={filters.source || ""} onChange={event => changeFilter("source", event.target.value)}>
+        <option value="">{t("cameraEvents.ai.both")}</option><option value="ai">{t("cameraEvents.ai.fromAi")}</option><option value="camera">{t("cameraEvents.ai.fromCamera")}</option>
+      </select></label>
+      <label>{t("cameraEvents.ai.condition")}<select disabled={busy || filters.source !== "ai"} value={filters.condition || ""} onChange={event => changeFilter("condition", event.target.value)}>
+        <option value="">{t("cameraEvents.ai.anyCondition")}</option>{AI_EVENT_CONDITIONS.map(key => <option key={key} value={key}>{t(`cameraEvents.ai.conditions.${key}`)}</option>)}
+      </select></label>
+      <form onSubmit={event => { event.preventDefault(); changeFilter("rule", ruleDraft.trim()); }}>
+        <label>{t("cameraEvents.ai.rule")}<input type="search" value={ruleDraft} maxLength={48} placeholder={t("cameraEvents.ai.ruleSearch")} disabled={busy || filters.source !== "ai"} onChange={event => setRuleDraft(event.target.value)}/></label>
+        <button className="button secondary small" type="submit" disabled={busy || filters.source !== "ai" || ruleDraft.trim() === (filters.rule || "")}>{t("cameraEvents.ai.search")}</button>
+      </form>
+    </div> : null}
     <div className="cameraEventsHistory">
     <div className="cameraEventsSelection">
       <input ref={selectPageRef} aria-label={t("cameraEvents.selectPage")} type="checkbox" checked={allSelected} disabled={busy || loading || !rows.length} onChange={e => togglePage(e.target.checked)}/>
@@ -314,7 +337,7 @@ export default function CameraEventsHub({ currentUser }) {
       {loading && !history ? <div className="cameraEventsEmpty">{t("cameraEvents.loading")}</div> : !rows.length ? <div className="cameraEventsEmpty">{t("cameraEvents.empty")}</div> : rows.map(row => <article className={`cameraEventsRow ${row.read ? "isRead" : "isUnread"}`} key={row.id}>
         <input aria-label={t("cameraEvents.selectEvent", { camera: row.camera_name })} type="checkbox" checked={selectedHere(row.id)} disabled={busy || loading || Boolean(selectionSnapshot && !selectionSnapshot.visible_ids.includes(row.id))} title={selectionSnapshot && !selectionSnapshot.visible_ids.includes(row.id) ? t("cameraEvents.selectionFrozen") : undefined} onChange={e => toggleRow(row.id, e.target.checked)}/>
         <span className="cameraEventsReadIndicator" role="img" aria-label={t(row.read ? "cameraEvents.viewed" : "cameraEvents.newEvent")} title={t(row.read ? "cameraEvents.viewed" : "cameraEvents.newEvent")}/>
-        <div className="cameraEventsDescription"><strong>{row.camera_name}</strong><span>{t(eventLabelKey(row))}{eventObjectLabelKeys(row).map(key => ` · ${t(key)}`).join("")}</span>{row.state_unconfirmed ? <small>{t("cameraEvents.stateUnconfirmed")}</small> : null}{row.source_ambiguous ? <small>{t("cameraEvents.ambiguous")}</small> : null}{row.clock_uncertain ? <small>{t("cameraEvents.clockUncertain")}</small> : null}</div>
+        <div className="cameraEventsDescription"><strong>{row.camera_name}</strong><div className="cameraEventsKindLine"><span>{t(eventLabelKey(row))}{eventObjectLabelKeys(row).map(key => ` · ${t(key)}`).join("")}</span>{row.ai ? <button className="cameraEventsAiTag" type="button" disabled={busy} onClick={() => setDetail(row)} title={t("cameraEvents.ai.details")} aria-label={t("cameraEvents.ai.details")}>AI</button> : null}</div>{row.ai?.rule_name ? <small>{row.ai.rule_name}{row.ai.false_positive ? ` · ${t("cameraEvents.ai.falsePositive")}` : ""}</small> : row.ai?.false_positive ? <small>{t("cameraEvents.ai.falsePositive")}</small> : null}{row.state_unconfirmed ? <small>{t("cameraEvents.stateUnconfirmed")}</small> : null}{row.source_ambiguous ? <small>{t("cameraEvents.ambiguous")}</small> : null}{row.clock_uncertain ? <small>{t("cameraEvents.clockUncertain")}</small> : null}</div>
         <time dateTime={row.occurred_at}>{formatProductDateTime(row.occurred_at, history?.timezone, locale)}</time>
         {rowActions(row)}
       </article>)}
@@ -343,9 +366,12 @@ export default function CameraEventsHub({ currentUser }) {
     {typeof document !== "undefined" ? createPortal(<>
     <OperationToast toast={errorToast} onClose={() => setErrorToast(null)}/>
     {eventToast ? <aside className="cameraEventArrival" role="status"><button className="cameraEventArrivalClose" type="button" aria-label={t("cameraEvents.close")} onClick={() => setEventToast(null)}>×</button><strong>{eventToast.camera_name}</strong><span>{t(eventLabelKey(eventToast))}{eventObjectLabelKeys(eventToast).map(key => ` · ${t(key)}`).join("")}</span><time dateTime={eventToast.occurred_at}>{formatProductDateTime(eventToast.occurred_at, eventToast.timezone, locale)}</time>{rowActions(eventToast)}</aside> : null}
-    <OperationDialog dialog={open ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
+    <OperationDialog dialog={open && !detail ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
       content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications", ...(manage ? ["receiving"] : [])].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : tab === "notifications" ? preferenceContent : manage ? receivingContent : null}</div>
     } : null} onClose={() => setOpen(false)}/>
+    {open && detail ? <AiEventDetails event={detail} timezone={history?.timezone || "UTC"} canReview={manage}
+      onClose={() => setDetail(null)} onChanged={() => setRefresh(n => n + 1)} busy={busy}
+      onOpen={mode => openEvent(detail, mode)} /> : null}
     <OperationDialog dialog={deleteTarget ? {
       id: "camera-events-delete", title: t("cameraEvents.deleteConfirmTitle"), tone: "warning", presentation: "compact-confirmation",
       message: t(deleteTarget.ids || deleteTarget.snapshot ? "cameraEvents.deleteSelectedConfirm" : "cameraEvents.deleteAllConfirm", { count: deleteTarget.count }),

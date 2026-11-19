@@ -313,6 +313,15 @@
   justify-content: flex-end;
   gap: 8px;
 }
+.systemStatusIncident.has-source { grid-template-columns: 34px minmax(0, 1fr) auto; }
+.systemStatusIncident.has-source .systemStatusActions { align-items: flex-start; flex-wrap: wrap; }
+.systemStatusSourceFacts { min-width: 0; }
+.systemStatusSourceFacts ul { display: grid; gap: 4px; padding: 0; margin: 6px 0; list-style: none; }
+.systemStatusSourceFacts li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 9px; font-size: 12px; overflow-wrap: anywhere; }
+.systemStatusSourceFacts li span { margin: 0; font-weight: 500; }
+.systemStatusSourceRetry { display: grid; gap: 4px; justify-items: start; max-width: 150px; }
+.systemStatusSourceRetry .button { width: auto; min-height: 32px; padding-inline: 10px; white-space: nowrap; }
+.systemStatusSourceRetry small { font-size: 11px; color: #475569; line-height: 1.3; }
 
 .systemStatusIconAction {
   width: 42px;
@@ -457,7 +466,8 @@
     border-bottom: 1px solid #d8e2ee;
   }
 
-  .systemStatusIncident {
+  .systemStatusIncident,
+  .systemStatusIncident.has-source {
     grid-template-columns: 34px minmax(0, 1fr);
   }
 

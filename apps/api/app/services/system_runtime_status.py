@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
+from app.services.camera_source_health import build_source_issues
 from app.services.live_engine import manager as live_manager
 from app.services.retention_automation import auto_free_runtime_status, retention_runtime_status
 from app.services.recorder_runtime_status import (
@@ -338,7 +339,8 @@ def _build_camera_domain(
         reasons: list[str] = []
         configured_state = _camera_configured_state(camera)
         recording_mode = camera.recording_mode or "unknown"
-        recording_enabled = bool(camera.enabled and recording_mode == "always")
+        recording_enabled = recorder_state.get("recording_expected", bool(camera.enabled and recording_mode == "always"))
+        event_source = (recorder_state.get("event_control") or {}).get("source_status")
         job_state = recorder_state.get("job_state")
         current_failure = bool(recorder_state.get("current_failure"))
         confirmed_recording = bool(recorder_state.get("confirmed_recording"))
@@ -374,6 +376,11 @@ def _build_camera_domain(
             severity = "error"
             _append_reason(reasons, "recording_failed")
             _append_reason(reasons, _safe_reason_from_error(recorder_state.get("last_error") or recorder_state.get("camera_last_error")))
+        elif recorder_state.get("linked_policy_configured") and event_source in {
+            "source_unavailable", "link_cycle", "link_invalid",
+        }:
+            severity = "warning"
+            _append_reason(reasons, "recording_link_source_unavailable")
         elif normal_starting:
             severity = "ok"
             _append_reason(reasons, "recording_starting")
@@ -412,6 +419,7 @@ def _build_camera_domain(
                 "configured_state": configured_state,
                 "recording_mode": recording_mode,
                 "recording_enabled": recording_enabled,
+                "event_source_status": event_source,
                 "recording_state": job_state or "unknown",
                 "confirmed_recording": confirmed_recording,
                 "recording_health": recorder_state.get("recording_health") or ("degraded" if stale_current_segment else "unknown"),
@@ -765,6 +773,11 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     live_domain, live_by_camera = _build_live_domain(cameras)
     cameras_domain = _build_camera_domain(db, now, ctx, cameras, recorder_states, live_by_camera)
     storage_summary = build_lightweight_storage_monitoring_summary(db)
+    source_issues = build_source_issues(cameras, recorder_states, now, storage_suspended=bool(
+        _as_dict(storage_summary.get("auto_free_space_policy")).get("recording_suspended_by_low_disk")))
+    cameras_domain["source_issues"] = source_issues
+    if source_issues:
+        cameras_domain["severity"] = _rollup([cameras_domain["severity"], "warning"])
     storage_domain = _build_storage_domain(storage_summary, ctx)
     retention_domain = _build_retention_domain(db, now, ctx, storage_summary)
     reconciliation_domain = _build_reconciliation_domain(storage_summary, ctx)
@@ -784,7 +797,7 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     warning_count = sum(
         domain["summary"].get("warning_count", 0)
         for domain in (cameras_domain, live_domain)
-    ) + sum(1 for domain in (recorder_domain, storage_domain, retention_domain, reconciliation_domain) if domain["severity"] == "warning")
+    ) + len(source_issues) + sum(1 for domain in (recorder_domain, storage_domain, retention_domain, reconciliation_domain) if domain["severity"] == "warning")
     unknown_count = sum(
         domain["summary"].get("unknown_count", 0)
         for domain in (cameras_domain, live_domain)
@@ -815,6 +828,7 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
             | set(storage_domain.get("reason_codes") or [])
             | set(retention_domain.get("reason_codes") or [])
             | set(reconciliation_domain.get("reason_codes") or [])
+            | {"ai_analysis_failed" if issue["kind"] == "ai" else "camera_event_channel_failed" for issue in source_issues}
         ),
         "domains": {
             "cameras": cameras_domain,

@@ -35,7 +35,7 @@ class ArchiveBrowserCatalogTest {
                 assertEquals("9", request.queryParameter("camera_id"))
                 assertNull(request.queryParameter("camera"))
                 assertTrue(browser.state.value.cameras.single().deleted)
-            } finally { browser.close() }
+            } finally { browser.close(); withTimeout(5_000) { browser.awaitClosed() } }
         } } finally { Dispatchers.resetMain() }
     }
 
@@ -52,7 +52,7 @@ class ArchiveBrowserCatalogTest {
                 withTimeout(5000) { browser.state.first { !it.loading && !it.failed && it.total == 1 } }
                 assertEquals("/api/recordings/cameras", server.takeRequest(2, TimeUnit.SECONDS)!!.path)
                 assertEquals("9", server.takeRequest(2, TimeUnit.SECONDS)!!.requestUrl!!.queryParameter("camera_id"))
-            } finally { browser.close() }
+            } finally { browser.close(); withTimeout(5_000) { browser.awaitClosed() } }
         } } finally { Dispatchers.resetMain() }
     }
 }

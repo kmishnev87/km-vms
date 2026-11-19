@@ -11,6 +11,7 @@ import ru.kmvms.mobile.R
 import android.widget.TextView
 import android.content.res.Configuration
 import android.view.LayoutInflater
+import android.widget.ImageView
 import java.util.Locale
 
 @RunWith(AndroidJUnit4::class)
@@ -19,12 +20,14 @@ class AlertWidgetLayoutTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
             val base = instrumentation.targetContext
-            for (language in listOf("ru", "en", "zh-CN")) for (scale in listOf(1f, 1.3f, 1.6f)) {
+            for (language in listOf("ru", "en", "zh-CN")) for (scale in listOf(1f, 1.3f, 1.6f, 2f)) {
                 val context = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
                     setLocale(Locale.forLanguageTag(language)); fontScale = scale
                 })
                 val density = context.resources.displayMetrics.density
-                for ((layout, width) in listOf(R.layout.alert_widget to 110, R.layout.alert_widget_count to 180)) {
+                val widths = listOf(150, 180, 203).map { R.layout.alert_widget_count to it }
+                val cases = if (scale <= 1.6f) widths + (R.layout.alert_widget to 110) else widths
+                for ((layout, width) in cases) {
                     val root = LayoutInflater.from(context).inflate(layout, null)
                     root.measure(View.MeasureSpec.makeMeasureSpec((width * density).toInt(), View.MeasureSpec.EXACTLY),
                         View.MeasureSpec.makeMeasureSpec((100 * density).toInt(), View.MeasureSpec.EXACTLY))
@@ -34,6 +37,19 @@ class AlertWidgetLayoutTest {
                     assertEquals(detail, context.getString(R.string.widget_alerts), title.text.toString())
                     assertTrue(detail, title.paint.measureText(title.text.toString()) <= title.width - title.paddingLeft - title.paddingRight + .5f)
                     assertEquals(detail, 0, title.layout.getEllipsisCount(0))
+                    assertEquals(detail, title.text.length, title.layout.getLineEnd(0))
+                    if (layout == R.layout.alert_widget_count) {
+                        val settings = root.findViewById<View>(R.id.alert_widget_settings)
+                        val bell = root.findViewById<ImageView>(R.id.alert_widget_bell)
+                        val live = root.findViewById<ImageView>(R.id.alert_widget_live)
+                        val count = root.findViewById<View>(R.id.alert_widget_count)
+                        assertEquals(detail, settings.right, live.left)
+                        assertEquals(detail, live.right, count.left)
+                        assertEquals(detail, settings.height, live.height)
+                        assertEquals(detail, live.height, count.height)
+                        assertTrue(detail, kotlin.math.abs(bell.width - (live.width - live.paddingLeft - live.paddingRight)) <= 1)
+                        assertTrue(detail, kotlin.math.abs(bell.height - (live.height - live.paddingTop - live.paddingBottom)) <= 1)
+                    }
                 }
             }
         }
@@ -63,6 +79,7 @@ class AlertWidgetLayoutTest {
             val density = context.resources.displayMetrics.density
             val compact = RemoteViews(context.packageName, R.layout.alert_widget).apply(context, null)
             assertNull(compact.findViewById<View>(R.id.alert_widget_count))
+            assertNull(compact.findViewById<View>(R.id.alert_widget_live))
             for (number in listOf("0", "17", "100000")) {
                 val root = RemoteViews(context.packageName, R.layout.alert_widget_count).apply {
                     setTextViewText(R.id.alert_widget_count, number)

@@ -44,6 +44,13 @@ exclusive HTTP transitive dependencies were removed. The hash-lock was
 regenerated without upgrading any remaining package; API keeps Requests for
 its actual Zeep/ONVIF consumer. Lock generation remains an external build step.
 
+The Recorder image includes YOLOX-Tiny weights for local analytics. The build
+fetches the pinned ONNX artifact, checks its SHA-256, and includes the original
+Apache-2.0 license. OpenVINO provides compatible Intel GPU inference, with
+ONNX Runtime for bounded CPU inference. Dependencies and hardware differ between
+the two paths; a GPU is optional. The running analyzer does not download models
+or send frames to a cloud service. See the [model provenance and notices](../apps/recorder/ai-model/NOTICE.md).
+
 Dockerfiles and external Compose images use multi-platform manifest digests.
 Except for the agreed Node LTS upgrade, these pin the previously tested base
 images rather than silently replacing operating systems or database majors.

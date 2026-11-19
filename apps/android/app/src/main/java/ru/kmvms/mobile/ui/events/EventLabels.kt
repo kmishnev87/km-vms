@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.events.CameraEventKind
+import ru.kmvms.mobile.events.AiEventCondition
 import ru.kmvms.mobile.ui.Accent
 import androidx.compose.material3.Icon
 import androidx.compose.ui.res.painterResource
@@ -29,6 +30,19 @@ internal fun CameraEventKind.label(): Int = when (this) {
     CameraEventKind.FIRE -> R.string.event_fire
     CameraEventKind.OTHER -> R.string.event_other
 }
+
+internal fun AiEventCondition.label(): Int = when (this) {
+    AiEventCondition.PRESENCE -> R.string.ai_event_presence
+    AiEventCondition.ENTER -> R.string.ai_event_enter
+    AiEventCondition.EXIT -> R.string.ai_event_exit
+    AiEventCondition.CROSSING -> R.string.event_line_crossing
+    AiEventCondition.DWELL -> R.string.event_loitering
+    AiEventCondition.SCENE -> R.string.ai_event_scene
+}
+
+internal fun eventLabels(kind: CameraEventKind, objects: Set<CameraEventKind>, condition: AiEventCondition?): List<Int> =
+    (listOf(condition?.takeUnless { it == AiEventCondition.PRESENCE }?.label() ?: kind.label())
+        + objects.map { it.label() }).distinct()
 
 /** Same camera/clock vocabulary as the existing web event actions. */
 @Composable internal fun EventActionIcon(live: Boolean, color: Color = Accent) {

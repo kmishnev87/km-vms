@@ -41,7 +41,7 @@ class BackupsControllerTest {
             first.start("create")
             withTimeout(15000){first.state.first{it.operationState=="unknown"&&!it.polling}}
             val original=store.attempt!!.submission
-            first.close()
+            first.close(); withTimeout(5_000) { first.awaitClosed() }
             val reopened=BackupsController(client(server),store)
             try{
                 withTimeout(15000){reopened.state.first{!it.loading}}
@@ -51,7 +51,7 @@ class BackupsControllerTest {
                 withTimeout(15000){reopened.state.first{it.pending==null&&it.operationState=="completed"}}
                 assertEquals(listOf(original,original),submissions.take(2));assertEquals(3,submissions.size)
                 assertNotEquals(original,submissions.last());assertNull(store.attempt)
-            }finally{reopened.close()}
+            }finally{reopened.close(); withTimeout(5_000) { reopened.awaitClosed() }}
         }}finally{Dispatchers.resetMain()}
     }
     @Test fun invalidStoredAttemptCannotBecomeAnAutomaticDestructiveRequest(){
@@ -82,7 +82,7 @@ class BackupsControllerTest {
                 withTimeout(15000){controller.state.first{it.operationState=="completed"&&it.pending==null}}
                 assertEquals(listOf("/api/system/backup/create","/api/system/restore/apply"),paths.toList())
                 assertNull(store.attempt)
-            }finally{controller.close()}
+            }finally{controller.close(); withTimeout(5_000) { controller.awaitClosed() }}
         }}finally{Dispatchers.resetMain()}
     }
 }

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../components/Layout";
-import { useSystemHealthStatus } from "../components/SystemHealthIndicator";
 import { canAccessPath, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
@@ -47,13 +46,12 @@ const DASHBOARD_ITEMS = [
     descriptionKey: "dashboard.storageText",
   },
   {
-    href: "/system-status",
-    iconSrc: "/assets/icons/dashboard/system-status-base.png",
-    alertIconSrc: "/assets/icons/dashboard/system-status-alert.png",
-    backgroundSrc: "/assets/backgrounds/dashboard-cards/system-status.svg",
-    titleKey: "dashboard.systemHealthTitle",
-    descriptionKey: "dashboard.systemHealthText",
-    kind: "systemHealth",
+    href: "/ai-recording",
+    iconSrc: "/assets/icons/dashboard/ai-recording-v2.png",
+    backgroundSrc: "/assets/backgrounds/dashboard-cards/ai-recording.svg",
+    titleKey: "aiRecording.title",
+    descriptionKey: "aiRecording.tile",
+    permission: "manage_cameras",
   },
   {
     href: "/?camera_events=1",
@@ -78,7 +76,6 @@ export default function HomePage() {
   const [ready, setReady] = useState(false);
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { t } = useI18n();
-  const systemHealth = useSystemHealthStatus(currentUser);
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -143,13 +140,10 @@ export default function HomePage() {
         </section>
 
         <section className="dashboardGrid" aria-label={t("dashboard.sections")}>
-          {visibleItems.map((item) => {
-            const isSystemHealth = item.kind === "systemHealth";
-            const iconSrc = isSystemHealth && systemHealth.hasProblems ? item.alertIconSrc : item.iconSrc;
-            return (
+          {visibleItems.map((item) => (
             <Link
               href={item.href}
-              className={`dashboardCard ${item.kind === "placeholder" ? "dashboardCard-placeholder" : ""} ${isSystemHealth && systemHealth.hasProblems ? "dashboardCard-alert" : ""}`}
+              className="dashboardCard"
               key={item.href}
               style={{ "--dashboard-card-bg": `url(${item.backgroundSrc})` }}
               onClick={item.kind === "cameraEvents" ? (event) => {
@@ -159,7 +153,7 @@ export default function HomePage() {
               } : undefined}
             >
               <div className="dashboardCardIcon">
-                <img src={iconSrc} alt="" />
+                <img src={item.iconSrc} alt="" />
               </div>
               <div className="dashboardCardBody">
                 <div className="dashboardCardTitle">{t(item.titleKey)}</div>
@@ -167,7 +161,7 @@ export default function HomePage() {
               </div>
               <div className="dashboardCardArrow">{"\u2192"}</div>
             </Link>
-          )})}
+          ))}
         </section>
       </div>
     </Layout>

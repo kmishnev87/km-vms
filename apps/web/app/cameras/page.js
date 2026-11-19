@@ -16,6 +16,7 @@ import { loadCamerasViewMode, saveCamerasViewMode } from "../../lib/cameraStage1
 import { cameraRuntimeWarningKey, notifyCameraRuntimeChanged } from "../../lib/operatorWarnings";
 import { useI18n, useLocaleText } from "../../lib/i18n";
 import { cameraPreviewLiveUrl } from "../../lib/cameraPreviewLive";
+import { useCameraAnchor } from "../../lib/useCameraAnchor";
 
 function normalizeCameraError(message, copy) {
   const text = String(message || "").trim();
@@ -87,7 +88,9 @@ function cameraEndpointLabel(camera) {
   return `${camera?.host || "-"}:${camera?.port || "-"} · ${protocol || "-"}`;
 }
 
-function cameraRecordingLabel(camera, copy) {
+function cameraRecordingLabel(camera, copy, runtime, t) {
+  if (runtime?.linked_policy_configured) return t("aiRecording.m_linked");
+  if (runtime?.event_policy_configured) return t("aiRecording.m_events");
   if (camera?.recording_mode === "always") return copy.always;
   return camera?.recording_mode || "-";
 }
@@ -152,6 +155,7 @@ export default function CamerasPage() {
   const ptzCamera = cameras.find(camera => camera.id === ptzCameraId) || null;
   const [camerasLoadState, setCamerasLoadState] = useState("idle");
   const [viewMode, setViewMode] = useState("list");
+  useCameraAnchor(Boolean(cameras.length), viewMode);
   const [storage, setStorage] = useState(null);
   const [recorderStatus, setRecorderStatus] = useState(null);
   const [secondaryStatusState, setSecondaryStatusState] = useState("idle");
@@ -388,7 +392,7 @@ export default function CamerasPage() {
             const badge = getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable, copy);
             if (viewMode === "cards") {
               return (
-                <article className="cameraTileCard" key={camera.id}>
+                <article id={`camera-${camera.id}`} className="cameraTileCard" key={camera.id}>
                   <div className="cameraTilePreview cameraPreviewLiveTarget" onDoubleClick={() => previewLive(camera)}
                     title={t("cameraEvents.previewLiveHelp")}>
                     {camera.preview_url ? (
@@ -414,7 +418,7 @@ export default function CamerasPage() {
                         <button className="cameraTileIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
                           <EditIcon />
                         </button>
-                        <button className="cameraTileIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? copy.disable : copy.enable} aria-label={camera.enabled ? copy.disable : copy.enable}>
+                        <button className="cameraTileIconButton" onClick={() => toggleCamera(camera)} title={t(camera.enabled ? "aiRecording.pause" : "aiRecording.resume")} aria-label={t(camera.enabled ? "aiRecording.pause" : "aiRecording.resume")}>
                           {camera.enabled ? <PowerIcon /> : <CheckIcon />}
                         </button>
                         <button className="cameraTileIconButton danger" onClick={() => openDeleteModal(camera)} title={copy.delete} aria-label={copy.delete}>
@@ -423,7 +427,7 @@ export default function CamerasPage() {
                       </div>
                     </div>
                     <div className="cameraTileSystem">
-                      <div><span>{copy.recording}</span><strong>{cameraRecordingLabel(camera, copy)}</strong></div>
+                      <div><span>{copy.recording}</span><strong>{cameraRecordingLabel(camera, copy, runtime, t)}</strong></div>
                       <div><span>{copy.segment}</span><strong>{camera.segment_minutes} {copy.minutesShort}</strong></div>
                       <div><span>{copy.retention}</span><strong>{camera.retention_days} {copy.daysShort}</strong></div>
                       <div><span>{copy.limit}</span><strong>{camera.storage_quota_gb} {copy.gbShort}</strong></div>
@@ -437,7 +441,7 @@ export default function CamerasPage() {
               );
             }
             return (
-              <div className="cameraCard card" key={camera.id}>
+              <div id={`camera-${camera.id}`} className="cameraCard card" key={camera.id}>
                 <div className="cameraCardGrid">
                   <div className="cameraField cameraNameField">
                     <div className="cameraFieldLabel">{copy.camera}</div>
@@ -453,7 +457,7 @@ export default function CamerasPage() {
                       <button className="cameraIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
                         <EditIcon />
                       </button>
-                      <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? copy.disable : copy.enable} aria-label={camera.enabled ? copy.disable : copy.enable}>
+                      <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={t(camera.enabled ? "aiRecording.pause" : "aiRecording.resume")} aria-label={t(camera.enabled ? "aiRecording.pause" : "aiRecording.resume")}>
                         {camera.enabled ? <PowerIcon /> : <CheckIcon />}
                       </button>
                       <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title={copy.delete} aria-label={copy.delete}>

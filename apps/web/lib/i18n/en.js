@@ -3,6 +3,7 @@ export const enDictionary = {
   androidDownload: { checking: "Loading APK information…", available: "Android APK", failed: "APK information is unavailable. Reload the page.", unpublished: "The official APK has not been published yet.", subtitle: "KM VMS for Android", instructions: "Download the APK to your phone, open it and confirm installation in Android. Then add your NAS address and sign in with your KM VMS account. HTTP and HTTPS connections are supported.", version: "Version", download: "Download APK", check: "Check release", languages: "Android 8 or newer. English, Chinese and Russian. Updates are offered inside the Android app." },
   chronologyArchive: { retainedCameras: "Deleted cameras with recordings", deleted: "deleted", archiveOnly: "Retained recordings only" },
   cameraEvents: {
+    ai: {"unnamedZone":"Unnamed zone","unnamedLine":"Unnamed line","details":"AI event","filters":"AI filters","source":"Source","both":"All sources","fromAi":"NAS analytics","fromCamera":"Camera","condition":"Condition","anyCondition":"All conditions","rule":"Rule / zone","ruleSearch":"Rule name","search":"Find","conditions":{"presence":"Object in frame or zone","enter":"Zone entry","exit":"Zone exit","crossing":"Line crossing","dwell":"Loitering in zone","scene":"Scene change"},"frame":"Detection frame","noFrame":"Snapshot unavailable","wholeFrame":"Whole frame","pending":"The segment is still being recorded. Check again after it finishes.","unavailable":"The event was not recorded, or the recording is no longer available.","forbidden":"This account cannot access Timeline.","ready":"Recording available","check":"Check recording","checkFailed":"Could not check the recording. Try again.","falsePositive":"False positive","markFalse":"Mark as false positive","unmarkFalse":"Clear label","reviewHelp":"This label appears in history and does not train the AI.","saveClip":"Save a separate clip","clipHelp":"The finished clip is a separate copy. The original recording keeps its normal retention.","invalidRange":"Choose a valid time range for the clip."},
     "title": "Camera events",
     "dashboardText": "Motion, people and vehicles. Event history and direct access to video.",
     "history": "History",
@@ -108,6 +109,7 @@ export const enDictionary = {
       "capacity_limit": "Connection limit reached"
     },
     "errors": {
+      "event_archive_pending": "The segment is still being recorded. Check again after it finishes.",
       "event_selection_expired": "This selection is no longer available. Select the events again.",
       "event_selection_too_large": "Too many events for one selection. Narrow the camera or time period.",
       "request_failed": "The action could not be completed. Check the connection and try again.",
@@ -206,6 +208,7 @@ export const enDictionary = {
     }
   },
   archiveClips: {
+    "fromEvent": "AI event",
     "cameraDeletedMark": "deleted",
     "title": "Create clip",
     "fromRecordings": "From Recordings",
@@ -455,6 +458,26 @@ export const enDictionary = {
     settingsText: "System configuration and settings management.",
   },
   systemStatus: {
+    source: {
+      aiTitle: "NAS AI unavailable",
+      aiCause: "Video analysis on the NAS has stopped.",
+      eventsTitle: "Camera event reception interrupted",
+      eventsCause: "The system cannot receive events from the camera subscription.",
+      recording: {
+        recording: "Recording continues",
+        emergency: "Emergency recording is active",
+        paused: "Recording manually paused",
+        storage_suspended: "Storage has suspended recording",
+        stopped: "Not recording right now",
+        unconfirmed: "Recording not yet confirmed",
+      },
+      nextAttempt: "Next attempt: {time}",
+      openAi: "Open this camera's recording settings",
+      openCamera: "Open camera",
+      retry: "Retry",
+      queued: "Retry requested.",
+      failed: "Could not start a retry. Refreshing status.",
+    },
     stale: "Status is out of date",
     staleHint: "Showing the last received status. The check will retry automatically.",
     title: "System Health",

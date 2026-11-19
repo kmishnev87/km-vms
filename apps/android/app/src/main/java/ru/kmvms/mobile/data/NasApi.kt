@@ -102,23 +102,30 @@ class NasApi(val address: ServerAddress) {
         finally { mediaAuthority = null; access = null; cookies.clear() }
     }
     suspend fun json(path: String, method: String = "GET", body: JSONObject? = null): Any? = request(path, method, body)
-    suspend fun cameraPreview(cameraId: Long, mayRenew: Boolean = true): ByteArray = withContext(Dispatchers.IO) {
+    suspend fun cameraPreview(cameraId: Long, mayRenew: Boolean = true): ByteArray {
         require(cameraId > 0)
+        return getImage("api/previews/camera-previews/$cameraId.jpg", 4L * 1024 * 1024, true, mayRenew)
+    }
+    internal suspend fun eventSnapshot(id: String): ByteArray {
+        require(id.matches(Regex("[a-fA-F0-9-]{36}")))
+        return getImage("api/camera-events/$id/snapshot", 128L * 1024, false)
+    }
+    private suspend fun getImage(path: String, maxBytes: Long, allowPng: Boolean, mayRenew: Boolean = true): ByteArray = withContext(Dispatchers.IO) {
         val ownAccess = access ?: throw NasException(ApiProblem.AUTHENTICATION)
-        val request = Request.Builder().url(address.endpoint("api/previews/camera-previews/$cameraId.jpg").toASCIIString())
+        val request = Request.Builder().url(address.endpoint(path).toASCIIString())
             .header("Accept", "image/jpeg").header("Authorization", "Bearer $ownAccess").build()
         try {
             execute(request).use { response ->
                 if (response.code == 401 && mayRenew && renewal != null) {
                     response.close(); renewSession(ownAccess)
-                    return@withContext cameraPreview(cameraId, false)
+                    return@withContext getImage(path, maxBytes, allowPng, false)
                 }
                 if (!response.isSuccessful) throw NasException(when (response.code) {
                     401 -> ApiProblem.AUTHENTICATION; 403 -> ApiProblem.FORBIDDEN; else -> ApiProblem.SERVER
                 }, response.code)
-                require(response.body?.contentType()?.let { it.type == "image" && it.subtype in setOf("jpeg", "png") } == true)
+                require(response.body?.contentType()?.let { it.type == "image" && (it.subtype == "jpeg" || allowPng && it.subtype == "png") } == true)
                 val source = response.body?.source() ?: throw NasException(ApiProblem.SERVER)
-                require(!source.request(4L * 1024 * 1024 + 1))
+                require(!source.request(maxBytes + 1))
                 source.readByteArray()
             }
         } catch (error: IOException) { throw NasException(ApiProblem.CONNECTION) }
@@ -149,12 +156,18 @@ class NasApi(val address: ServerAddress) {
                     return@withContext request(path, method, body, authenticated, mayRenew = false, longOperation = longOperation, longPolling = longPolling)
                 }
                 if (!response.isSuccessful) {
-                    // Only known non-sensitive talk reason codes cross this
-                    // boundary. Never expose arbitrary server error bodies.
-                    val publicReason = if (path.startsWith("api/talk/")) runCatching {
+                    // Expose allowlisted reason codes, never arbitrary server error bodies.
+                    val talk = path.startsWith("api/talk/")
+                    val recording = path.startsWith("api/ai-recording/")
+                    val publicReason = if (talk || recording) runCatching {
                         val source = response.body?.source() ?: return@runCatching null
                         if (source.request(8193)) return@runCatching null
-                        JSONObject(source.readUtf8()).optString("detail").takeIf { it in setOf(
+                        val error = JSONObject(source.readUtf8())
+                        if (recording) error.optJSONObject("detail")?.optString("code")?.takeIf { it in setOf(
+                            "recording_policy_changed", "emergency_setting_changed", "recording_link_source_unavailable",
+                            "recording_link_cycle", "camera_event_reception_required", "ai_frame_busy",
+                            "ai_frame_reference_required", "ai_frame_reference_changed", "ai_record_rule_required",
+                        ) } else error.optString("detail").takeIf { it in setOf(
                             "talk_authentication_failed", "talk_access_denied", "talk_credentials_required",
                             "camera_unavailable", "camera_configuration_changed", "camera_busy", "server_busy",
                             "discovery_busy", "camera_timeout", "camera_rejected_call", "authentication_unsupported",

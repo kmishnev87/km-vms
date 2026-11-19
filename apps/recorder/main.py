@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -47,6 +47,14 @@ from recorder_core.contracts import (
     EXIT_CODE_CLEARING_STATES,
 )
 from recorder_core.job_store import RecordingJobStore
+from recorder_core.event_recording import Decision, Episode, ai_policy, event_policy, timestamp
+from recorder_core.ai_supervisor import AI_KINDS, AiSupervisor
+from recorder_core.ai_event_outbox import AiEventOutbox
+from recorder_core.linked_recording import (
+    Intent, cutoff as recording_cutoff, link_configured, link_status, linked_policy,
+    origin_intent, present as camera_present, resolve_links,
+)
+from recorder_core.event_buffer import PART_STAMP, BufferedCamera, BufferedWriter, PacketBudget
 from recorder_core.storage_activation import recording_start_allowed
 from recorder_core.segment_accounting import SegmentAccounting, bounded_file_fingerprint, receipt_object_identity
 from recorder_core.segment_recovery import probe_interrupted_segment
@@ -97,6 +105,11 @@ ERROR_MEDIA_STALLED = "recording_media_stalled"
 running = True
 jobs: dict[int, "RecordingJob"] = {}
 segment_repairs = SegmentRepairQueue()
+event_buffer_budget = PacketBudget()
+ai_events = AiEventOutbox(os.getenv("AI_EVENT_ROOT"))
+local_ai = AiSupervisor(event_sink=ai_events)
+AI_GPU_ALLOWED = (os.getenv("LIVE_HWACCEL_MODE", "auto").lower() not in {"off", "disabled", "false", "0"}
+                  and any(Path("/dev/dri").glob("renderD*")))
 last_runtime_mapping_log_key: tuple[str, str, str] | None = None
 
 
@@ -108,7 +121,7 @@ class RecordingJob:
     recording_mode: str
     enabled: bool
     state: str = RecorderState.IDLE
-    process: subprocess.Popen | None = None
+    process: subprocess.Popen | BufferedWriter | None = None
     pid: int | None = None
     started_at: float | None = None
     stopped_at: float | None = None
@@ -148,6 +161,13 @@ class RecordingJob:
     stalled_samples: int = 0
     stable_progress_since: float | None = None
     waiting_for_storage_activation: bool = False
+    event_episode: Episode = field(default_factory=Episode)
+    event_decision: Decision | None = None
+    link_intent: Intent | None = None
+    event_buffer: BufferedCamera | None = None
+    event_buffer_signature: tuple | None = None
+    ai_generation: str | None = None
+    ai_status: dict | None = None
 
     def set_state(self, state: str, error: str | None = None, error_type: str | None = None) -> None:
         if self.state != state:
@@ -284,6 +304,8 @@ def write_audit_event(
     event_type: str,
     severity: str = "info",
     message: str,
+    message_en: str | None = None,
+    target_type: str = "camera",
     camera_id: int | None = None,
     camera_name: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -323,7 +345,7 @@ def write_audit_event(
                         :severity,
                         :message_ru,
                         :message_en,
-                        'camera',
+                        :target_type,
                         :target_id,
                         :target_name,
                         CAST(:metadata AS JSON),
@@ -337,7 +359,8 @@ def write_audit_event(
                     "event_type": f"recorder.{event_type}",
                     "severity": severity if severity in {"info", "warning", "error", "security"} else "info",
                     "message_ru": redact_text(message),
-                    "message_en": redact_text(message),
+                    "message_en": redact_text(message_en or message),
+                    "target_type": target_type,
                     "target_id": str(camera_id) if camera_id is not None else None,
                     "target_name": redact_text(camera_name) if camera_name else None,
                     "metadata": json.dumps(sanitized_metadata, ensure_ascii=False),
@@ -799,6 +822,9 @@ def capture_segment_baseline(output_pattern: str | None, camera_id: int, camera_
 
 
 def parse_segment_start_time(file_path: Path) -> datetime:
+    buffered = PART_STAMP.search(file_path.name)
+    if buffered:
+        return datetime.strptime(buffered.group(2), "%Y-%m-%dT%H-%M-%S-%fZ")
     match = re.search(r"(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})(?=\.[a-z0-9]+$)", file_path.name, flags=re.IGNORECASE)
     if match:
         try:
@@ -809,6 +835,12 @@ def parse_segment_start_time(file_path: Path) -> datetime:
         return datetime.fromtimestamp(file_path.stat().st_mtime)
     except Exception:
         return datetime.utcnow()
+
+
+def segment_start_epoch(file_path: Path) -> float:
+    start = parse_segment_start_time(file_path)
+    # Legacy strftime names are local; buffered parts explicitly encode UTC.
+    return (start.replace(tzinfo=UTC) if PART_STAMP.search(file_path.name) else start).timestamp()
 
 
 def discover_job_segments(job: RecordingJob) -> list[Path]:
@@ -914,7 +946,7 @@ def format_change_ready(job: RecordingJob, target: str, mode: str, requested_epo
     # FFmpeg and this process share TZ. Convert its filename-local timestamp to
     # an epoch, not to the operator's display timezone. A boundary that happened
     # between saving settings and this loop must not incur another full segment.
-    if requested_epoch is not None and parse_segment_start_time(current).timestamp() >= requested_epoch:
+    if requested_epoch is not None and segment_start_epoch(current) >= requested_epoch:
         return True
     current_name = str(current)
     if job.format_change_anchor is None:
@@ -924,8 +956,7 @@ def format_change_ready(job: RecordingJob, target: str, mode: str, requested_epo
 
 
 def current_segment_age_seconds(file_path: Path) -> int:
-    started_at = parse_segment_start_time(file_path)
-    return max(0, int((datetime.now() - started_at).total_seconds()))
+    return max(0, int(time.time() - segment_start_epoch(file_path)))
 
 
 def handle_stale_current_segment(row, job: RecordingJob) -> bool:
@@ -1171,12 +1202,17 @@ def reconcile_previous_recorder_instances() -> None:
 
 def choose_input_url(row) -> str | None:
     preferred = (getattr(row, "default_record_stream", None) or DEFAULT_RECORD_STREAM).lower()
+    protocol = (row.protocol or "").lower()
+    if event_policy(row) or link_configured(row):
+        # An event writer uses the user's logical recording stream, which may
+        # be a camera's Sub profile. Never substitute another stream silently.
+        allowed = ("rtsp", "onvif") if link_configured(row) or ai_policy(row) else ("onvif",)
+        return (row.rtsp_sub_url if preferred == "sub" else row.rtsp_main_url) if protocol in allowed else None
     if preferred == "sub":
         primary = row.rtsp_sub_url or row.rtsp_main_url
     else:
         primary = row.rtsp_main_url or row.rtsp_sub_url
 
-    protocol = (row.protocol or "").lower()
     if protocol in {"rtsp", "onvif"}:
         return primary
     return None
@@ -1447,6 +1483,61 @@ def handle_retention_failure(job: RecordingJob, exc: Exception) -> None:
     schedule_retry(job, error, error_type)
 
 
+def event_start_allowed(row, job: RecordingJob, policy: dict) -> bool:
+    # The outer poll can spend time finalizing other cameras. Recheck explicit
+    # pause, source selection and disk authority before opening a new event writer.
+    request = job.event_decision.request if job.event_decision else None
+    if request is None or (request == "event" and time.monotonic() >= job.event_episode.deadline):
+        return False
+    with engine.connect() as conn:
+        return conn.execute(text("""
+            SELECT c.id
+              FROM cameras c
+              CROSS JOIN (
+                  SELECT recording_suspended_by_low_disk, event_recording_emergency_enabled
+                    FROM system_settings ORDER BY id LIMIT 1
+              ) flags
+             WHERE c.id = :camera_id AND c.enabled AND c.deleted_at IS NULL
+               AND c.status <> 'deleting'
+               AND (:source = 'ai' OR (c.protocol = 'onvif' AND c.events_enabled))
+               AND c.recording_policy ->> 'source' = :source
+               AND c.recording_policy ->> 'revision' = :revision
+               AND (c.recording_signal_state ->> 'recording_cutoff_at') IS NOT DISTINCT FROM :cutoff
+               AND c.default_record_stream IS NOT DISTINCT FROM :record_stream
+               AND c.default_live_stream IS NOT DISTINCT FROM :live_stream
+               AND c.rtsp_transport IS NOT DISTINCT FROM :transport
+               AND c.rtsp_main_url IS NOT DISTINCT FROM :main_url
+               AND c.rtsp_sub_url IS NOT DISTINCT FROM :sub_url
+               AND NOT flags.recording_suspended_by_low_disk
+               AND (:normal_event OR flags.event_recording_emergency_enabled)
+            """), {
+                "camera_id": row.id, "revision": str(policy["revision"]), "cutoff": job.event_episode.cutoff,
+                "record_stream": row.default_record_stream, "main_url": row.rtsp_main_url, "sub_url": row.rtsp_sub_url,
+                "live_stream": row.default_live_stream, "transport": row.rtsp_transport,
+                "normal_event": request != "emergency", "source": policy["source"],
+            }).first() is not None
+
+
+def linked_start_allowed(row, job: RecordingJob) -> bool:
+    # The poll can spend time closing a different camera. Re-read the graph
+    # and disk/receiver authority before opening any new dependent writer.
+    intent = job.link_intent
+    if intent is None or not intent.allows_start(time.monotonic()):
+        return False
+    with engine.connect() as conn:
+        current_rows = camera_control_rows(conn)
+    current = next((value for value in current_rows if value.id == row.id), None)
+    if (not camera_present(current) or not current.enabled or current.event_low_disk is not False
+            or current.default_live_stream != row.default_live_stream
+            or camera_signature(current, job.recording_format) != camera_signature(row, job.recording_format)):
+        return False
+    _, links = camera_control_intents(current_rows, low_disk=False, fresh=True)
+    existing = links.get(row.id)
+    return bool(existing and existing.generation == intent.generation
+                and existing.decision.request == intent.decision.request
+                and existing.allows_start(time.monotonic()))
+
+
 def start_camera(row) -> None:
     job = get_or_create_job(row)
     proc = job.process
@@ -1474,6 +1565,12 @@ def start_camera(row) -> None:
 
     try:
         admitted = recording_start_allowed(engine)
+        policy = event_policy(row)
+        if admitted and policy is not None:
+            admitted = event_start_allowed(row, job, policy)
+        if admitted and link_configured(row) and not linked_start_allowed(row, job):
+            job.waiting_for_storage_activation = False
+            return
     except Exception as exc:
         # Unknown binding/admission is not permission to start a new writer.
         admitted = False
@@ -1548,13 +1645,18 @@ def start_camera(row) -> None:
     )
 
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
+        if job.event_buffer is not None:
+            started_at = job.link_intent.started_at if job.link_intent else job.event_episode.episode_started_at
+            proc = BufferedWriter(job.event_buffer, output_pattern, segment_duration_seconds_for_row(row),
+                                  started_at or time.time())
+        else:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
     except FileNotFoundError as exc:
         error = redact_text(str(exc))
         handle_start_failure(
@@ -1613,6 +1715,8 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     previous_state = job.state
     job.set_state(RecorderState.STOPPING)
     update_camera_status_from_job(job)
+    if job.event_decision is not None and job.db_job_id:
+        update_recording_job(job, state=RecorderState.STOPPING, stop_reason=reason)
     forced_stop = False
 
     if proc and proc.poll() is None:
@@ -1665,7 +1769,8 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     job.next_retry_at = None
     if reason == RecorderState.DISABLED:
         job.set_state(RecorderState.DISABLED)
-    elif reason == RecorderState.IDLE:
+    elif reason in {RecorderState.IDLE, "event_recording_waiting", "linked_recording_waiting",
+                   "critical_low_disk_recording_suspended"}:
         job.set_state(RecorderState.IDLE)
     else:
         job.set_state(RecorderState.STOPPED)
@@ -1681,6 +1786,8 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     job.format_change_anchor = None
     job.format_change_requested_epoch = None
     job.format_change_retry_at = 0
+    if job.event_buffer is not None:
+        job.event_buffer.idle()
     log_event("info", "recording_stopped", camera_id=job.camera_id, camera_name=job.camera_name, reason=reason, exit_code=job.last_exit_code)
     write_audit_event(
         event_type="camera_stopped" if audit_event == "recording_stopped" else audit_event,
@@ -1716,134 +1823,325 @@ def retention_ready(row, job: RecordingJob) -> bool:
     return True
 
 
+def idle_camera(row, job: RecordingJob, state: str, reason: str, *, audit_event: str = "recording_stopped") -> None:
+    job.retry_count = 0
+    job.stale_recovery_count = 0
+    job.next_retry_at = None
+    job.waiting_for_storage_activation = False
+    if job.process is not None:
+        stop_camera(job.camera_id, reason, audit_event=audit_event)
+    else:
+        changed = job.state != state
+        job.set_state(state)
+        if changed or getattr(row, "status", None) != external_camera_status(state):
+            update_camera_status_from_job(job)
+        if job.db_job_id or job.pending_db_job_id:
+            close_recording_job(job, state=state, reason=reason)
+
+
+def reconcile_event_buffer(row, job, policy, *, allowed, suspended=False, enabled=True):
+    signature = None
+    link = job.link_intent
+    if allowed and policy:
+        preview_role = "main" if row.default_live_stream == "main" else "sub"
+        preview_url = row.rtsp_main_url if preview_role == "main" else row.rtsp_sub_url
+        # A continuously recording source has no pre-event interval. Use a
+        # single on-demand writer for the assigned stream, with no second feed.
+        continuous = link is not None and link.mode == "continuous"
+        ai_continuous = job.ai_generation is not None and policy["mode"] == "continuous"
+        signature = (choose_input_url(row), selected_source_stream(row), preview_url, preview_role,
+                     row.rtsp_transport or "tcp", "economical" if continuous else "full_quality" if ai_continuous else policy["profile"],
+                     0 if continuous or ai_continuous else policy.get("prebuffer_seconds", 0),
+                     policy["revision"], link.generation if link is not None else job.ai_generation or job.event_episode.cutoff)
+    if signature != job.event_buffer_signature:
+        if job.process is not None:
+            if link is None:
+                reason = "event_recording_configuration_changed" if allowed else "event_recording_suspended"
+            elif not enabled:
+                reason = RecorderState.DISABLED
+            elif suspended:
+                reason = "critical_low_disk_recording_suspended"
+            elif allowed:
+                reason = "linked_recording_configuration_changed"
+            else:
+                reason = "linked_recording_waiting"
+            stop_camera(row.id, reason)
+        if job.event_buffer is not None:
+            job.event_buffer.close()
+            job.event_buffer = None
+        job.event_buffer_signature = signature
+        if signature is not None:
+            hooks = {}
+            if job.ai_generation:
+                camera, generation = row.id, job.ai_generation
+                hooks = {"analysis": lambda stream, packet: local_ai.offer(camera, generation, stream, packet),
+                         "analysis_switch": lambda stream: local_ai.select_stream(camera, generation, stream)}
+            job.event_buffer = BufferedCamera(event_buffer_budget, row.id, *signature[:7], **hooks)
+    if job.event_buffer is not None:
+        if job.ai_generation:
+            job.event_buffer.prime(job.process if isinstance(job.process, BufferedWriter) else None)
+        else:
+            job.event_buffer.prime()
+        if job.process is None:
+            job.event_buffer.idle()
+
+
+def sync_camera_writer(row, job, format_choice, low_disk, *, enabled):
+    if not enabled:
+        idle_camera(row, job, RecorderState.DISABLED, RecorderState.DISABLED, audit_event="camera_disabled_recording_stopped")
+        return
+    if low_disk and (row.recording_mode == "always" or job.event_decision is not None):
+        reason = "critical_low_disk_recording_suspended"
+        idle_camera(row, job, RecorderState.IDLE, reason, audit_event=reason)
+        return
+    if job.event_decision is not None:
+        if job.event_decision.request is None:
+            reason = "linked_recording_waiting" if job.link_intent is not None else "event_recording_waiting"
+            idle_camera(row, job, RecorderState.IDLE, reason)
+            return
+    elif row.recording_mode != "always":
+        idle_camera(row, job, RecorderState.IDLE, RecorderState.IDLE)
+        return
+
+    if job.state == RecorderState.RESTARTING and not can_retry(job):
+        return
+    if not retention_ready(row, job):
+        return
+
+    effective_recording_format, format_apply_mode, format_requested_epoch = format_choice
+    desired_signature = camera_signature(row, effective_recording_format)
+    if job.process and job.process.poll() is None:
+        sync_segment_metadata_for_job(job)
+        if handle_stale_current_segment(row, job):
+            return
+
+    if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
+        format_changed = job.recording_format != effective_recording_format
+        format_only = format_changed and job.config_signature[:-1] == desired_signature[:-1]
+        if format_only:
+            if time.monotonic() < job.format_change_retry_at:
+                return
+            if not format_change_ready(job, effective_recording_format, format_apply_mode, format_requested_epoch):
+                return
+        log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name, recording_format=effective_recording_format)
+        write_audit_event(
+            event_type="camera_restarted",
+            message=f"Recorder restarted camera {job.camera_name}: config_changed",
+            camera_id=job.camera_id,
+            camera_name=job.camera_name,
+            metadata={"reason": "config_changed", "recording_format": effective_recording_format},
+        )
+        finished = stop_camera(
+            row.id,
+            "recording_format_change" if format_changed else "config_changed",
+            graceful_format_change=format_changed,
+        )
+        if not finished and job.process and job.process.poll() is None:
+            return
+        job.config_signature = desired_signature
+
+    if job.state == RecorderState.RESTARTING or not job.process:
+        job.recording_format = effective_recording_format
+        start_camera(row)
+
+
+def publish_event_control(row, job, policy, *, low_disk, enabled):
+    decision = job.event_decision
+    link = job.link_intent
+    if not enabled:
+        status = "paused"
+    elif low_disk:
+        status = "storage_suspended"
+    elif job.waiting_for_storage_activation:
+        status = "storage_waiting"
+    elif decision.request is None:
+        status = link_status(link) if link is not None else "waiting"
+    else:
+        status = job.state
+    snapshot = {
+        "instance": RECORDER_INSTANCE_ID, "policy_revision": policy["revision"],
+        "status": status, "request": decision.request, "source_status": decision.source_status,
+        "episode_until": iso_ts(decision.episode_until), "extended": decision.extended,
+        "job_id": job.db_job_id,
+    }
+    if job.event_buffer is not None:
+        writer = job.process if isinstance(job.process, BufferedWriter) else None
+        snapshot.update(job.event_buffer.status(writer))
+    if link is not None:
+        source_id = policy["linked_camera_id"]
+        source = jobs.get(source_id)
+        source_active = bool(enabled and not low_disk and link.allows_start(time.monotonic()))
+        source_confirmed = bool(source_active and source and source.process and source.process.poll() is None
+                                and source.status_payload()["confirmed_recording"])
+        snapshot["link"] = {
+            "source_camera_id": source_id, "origin_camera_id": link.origin_id, "source_mode": link.mode,
+            "source_intent": decision.request,
+            "source_event_status": link.event_health,
+            "source_writer_state": source.state if source_active and source else None,
+            "source_recording_confirmed": source_confirmed,
+        }
+        if link.mode == "continuous":
+            snapshot["prebuffer_status"] = "not_applicable"
+    state = row.recording_signal_state if isinstance(row.recording_signal_state, dict) else {}
+    if job.ai_status is not None:
+        snapshot["ai"] = job.ai_status
+        previous = state.get("recorder") or {}
+        # Progress and repeated positive results are held in memory. Publish
+        # ordinary deadline movement in coarse steps, not at the analysis rate.
+        old_until = timestamp(previous.get("episode_until"))
+        if (previous.get("policy_revision") == policy["revision"] and old_until is not None
+                and decision.episode_until is not None and old_until <= decision.episode_until < old_until + 15):
+            snapshot["episode_until"] = previous["episode_until"]
+    if state.get("recorder") == snapshot:
+        return
+    with engine.begin() as conn:
+        # Merge only the Recorder-owned member. A signal or subscription
+        # update accepted during this poll must survive the status update.
+        conn.execute(text("""
+            UPDATE cameras SET recording_signal_state = CAST(
+                (CASE WHEN jsonb_typeof(CAST(recording_signal_state AS jsonb)) = 'object'
+                      THEN CAST(recording_signal_state AS jsonb) ELSE '{}'::jsonb END)
+                || jsonb_build_object('recorder', CAST(:snapshot AS jsonb)) AS json)
+            WHERE id = :camera_id AND deleted_at IS NULL AND status <> 'deleting'
+              AND enabled = :enabled
+              AND recording_policy ->> 'revision' = :revision
+              AND (recording_signal_state ->> 'recording_cutoff_at') IS NOT DISTINCT FROM :cutoff
+            """), {"snapshot": json.dumps(snapshot), "camera_id": row.id, "enabled": enabled,
+                   "revision": str(policy["revision"]),
+                   "cutoff": recording_cutoff(row) if link is not None else job.event_episode.cutoff})
+
+
+def camera_control_rows(executor):
+    return executor.execute(text("""
+            SELECT c.id, c.name, c.storage_folder_name, c.enabled, c.protocol, c.host, c.port,
+                   c.rtsp_main_url, c.rtsp_sub_url, c.rtsp_transport, c.recording_mode,
+                   c.default_record_stream, c.default_live_stream, c.segment_minutes, c.retention_days, c.storage_quota_gb,
+                   c.deleted_at, c.status, c.events_enabled, c.recording_policy, c.recording_signal_state,
+                   flags.event_recording_emergency_enabled, flags.recording_suspended_by_low_disk AS event_low_disk,
+                   flags.timezone AS analysis_timezone,
+                   l.worker_key IS NOT NULL AS event_receiver_current
+              FROM cameras c
+              LEFT JOIN (
+                  SELECT event_recording_emergency_enabled, recording_suspended_by_low_disk, timezone
+                    FROM system_settings ORDER BY id LIMIT 1
+              ) flags ON true
+              LEFT JOIN storage_worker_leases l
+                ON l.worker_key = c.recording_signal_state -> 'channel' ->> 'lease_key'
+               AND l.owner_instance_id = c.recording_signal_state -> 'channel' ->> 'lease_owner'
+               AND CAST(l.fencing_token AS text) = c.recording_signal_state -> 'channel' ->> 'lease_fence'
+               -- The lease service stores a naive database local timestamp.
+               AND l.lease_expires_at > LOCALTIMESTAMP
+             ORDER BY c.id ASC
+            """)).fetchall()
+
+
+def ai_generation(row, policy):
+    # This digest is internal only, including stream configuration so that
+    # in-flight activity from a prior URL can never open an episode now.
+    value = (row.id, policy, row.rtsp_main_url, row.rtsp_sub_url, row.rtsp_transport,
+             row.default_live_stream, row.default_record_stream,
+             getattr(row, "analysis_timezone", None) if policy.get("ai_rules") else None)
+    return hashlib.sha256(json.dumps(value, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
+
+
+def camera_control_intents(rows, *, low_disk, fresh=False):
+    now, clock = time.time(), time.monotonic()
+    decisions, origins = {}, {}
+    has_links = any(link_configured(row) for row in rows)
+    for row in rows:
+        if link_configured(row):
+            continue
+        policy = event_policy(row)
+        suspended = low_disk or getattr(row, "event_low_disk", None) is not False
+        if policy is None:
+            if has_links:
+                origins[row.id] = origin_intent(row, suspended=suspended)
+            continue
+        job = jobs.get(row.id)
+        episode = job.event_episode if job else Episode()
+        if fresh:
+            episode = replace(episode)
+        observation = (local_ai.observe(row.id, ai_generation(row, policy))
+                       if policy["source"] == "ai" and camera_present(row) else None)
+        if job is not None and not fresh:
+            job.ai_status = observation.info if observation else None
+        decision = episode.reconcile(row, policy, now=now, clock=clock, started=RECORDER_STARTED_AT,
+                                     blocked=suspended or not camera_present(row) or not row.enabled, ai=observation)
+        decisions[row.id] = decision
+        if has_links:
+            origins[row.id] = origin_intent(row, suspended=suspended, decision=decision, episode=episode)
+    return decisions, resolve_links(rows, origins) if has_links else {}
+
+
 def sync_cameras() -> None:
     db = SessionLocal()
     try:
         format_choice = read_recording_format_choice()
         if format_choice is None:
             return
-        effective_recording_format, format_apply_mode, format_requested_epoch = format_choice
-        low_disk_recording_suspended = read_recording_suspended_by_low_disk()
-        rows = db.execute(
-            text(
-                """
-                SELECT
-                    id,
-                    name,
-                    storage_folder_name,
-                    enabled,
-                    protocol,
-                    host,
-                    port,
-                    rtsp_main_url,
-                    rtsp_sub_url,
-                    rtsp_transport,
-                    recording_mode,
-                    default_record_stream,
-                    segment_minutes,
-                    retention_days,
-                    storage_quota_gb
-                FROM cameras
-                ORDER BY id ASC
-                """
-            )
-        ).fetchall()
-
-        seen_ids = set()
-
+        low_disk = read_recording_suspended_by_low_disk()
+        rows = camera_control_rows(db)
+        seen_ids = {row.id for row in rows}
+        ai_configs = {}
+        ai_revisions = {}
         for row in rows:
-            seen_ids.add(row.id)
             job = get_or_create_job(row)
-            desired_signature = camera_signature(row, effective_recording_format)
+            job.ai_generation = job.ai_status = None
+            policy = ai_policy(row)
+            if policy and camera_present(row):
+                if row.enabled:
+                    ai_revisions[row.id] = policy["revision"]
+                job.ai_generation = ai_generation(row, policy)
+                kinds = policy.get("event_kinds")
+                ai_configs[row.id] = (job.ai_generation, frozenset(
+                    kind for kind in kinds if isinstance(kind, str) and kind in AI_KINDS) if isinstance(kinds, list) else frozenset())
+                if policy.get("ai_rules") is not None:
+                    ai_configs[row.id] += ((policy["ai_rules"], getattr(row, "analysis_timezone", None)),)
+            if not event_policy(row) and job.event_episode.revision is not None:
+                job.event_episode = Episode()
+        local_ai.configure(ai_configs, gpu_allowed=AI_GPU_ALLOWED, policy_revisions=ai_revisions)
+        for row in rows:
+            if row.id in ai_configs and isinstance(row.recording_signal_state, dict):
+                retry = row.recording_signal_state.get("ai_retry") or {}
+                if retry.get("instance") == RECORDER_INSTANCE_ID and retry.get("revision") == ai_policy(row)["revision"]:
+                    local_ai.retry(retry.get("token"))
 
-            if not row.enabled:
-                job.retry_count = 0
-                job.stale_recovery_count = 0
-                job.next_retry_at = None
-                if job.process and job.process.poll() is None:
-                    stop_camera(row.id, RecorderState.DISABLED, audit_event="camera_disabled_recording_stopped")
-                else:
-                    job.set_state(RecorderState.DISABLED)
-                    update_camera_status_from_job(job)
-                    close_recording_job(job, state=RecorderState.DISABLED, reason="camera_disabled")
-                continue
+        # Pass 1: resolve all requests from the same snapshot, before touching
+        # any media process. Camera id or writer startup order cannot gate a link.
+        decisions, links = camera_control_intents(rows, low_disk=low_disk)
+        publish = []
+        for row in rows:
+            job = jobs[row.id]
+            enabled = bool(row.enabled and camera_present(row))
+            job.link_intent = link = links.get(row.id)
+            policy = linked_policy(row) if link is not None else event_policy(row)
+            job.event_decision = link.decision if link is not None else decisions.get(row.id)
+            suspended = low_disk or (job.event_decision is not None and row.event_low_disk is not False)
+            if link is not None:
+                wants_buffer = link.warm or link.allows_start(time.monotonic())
+            else:
+                wants_buffer = bool(policy and row.protocol == "onvif" and row.events_enabled)
+            try:
+                # Manual pause and low disk gate only the writer, not this
+                # explicitly selected local analysis input or existing Live.
+                reconcile_event_buffer(row, job, policy, allowed=bool(job.ai_generation) or enabled and not suspended and wants_buffer,
+                                       suspended=suspended, enabled=enabled)
+                sync_camera_writer(row, job, format_choice, suspended, enabled=enabled)
+                if policy is not None:
+                    publish.append((row, job, policy, suspended, enabled))
+            except Exception as exc:
+                log_event("error", "camera_recording_reconcile_failed", camera_id=row.id, error=redact_text(str(exc)))
 
-            if low_disk_recording_suspended and row.recording_mode == "always":
-                job.retry_count = 0
-                job.next_retry_at = None
-                if job.process and job.process.poll() is None:
-                    stop_camera(row.id, "critical_low_disk_recording_suspended", audit_event="critical_low_disk_recording_suspended")
-                else:
-                    job.set_state(RecorderState.IDLE)
-                    update_camera_status_from_job(job)
-                    close_recording_job(job, state=RecorderState.IDLE, reason="critical_low_disk_recording_suspended")
-                continue
+        # Pass 3: actual media evidence only after servicing each selected
+        # camera. It informs status, but is never authority for another writer.
+        for row, job, policy, suspended, enabled in publish:
+            publish_event_control(row, job, policy, low_disk=suspended, enabled=enabled)
 
-            if row.recording_mode != "always":
-                job.retry_count = 0
-                job.stale_recovery_count = 0
-                job.next_retry_at = None
-                if job.process and job.process.poll() is None:
-                    stop_camera(row.id, RecorderState.IDLE)
-                else:
-                    job.set_state(RecorderState.IDLE)
-                    update_camera_status_from_job(job)
-                    close_recording_job(job, state=RecorderState.IDLE, reason="recording_mode_idle")
-                continue
-
-            if job.state == RecorderState.RESTARTING and not can_retry(job):
-                continue
-
-            if not retention_ready(row, job):
-                continue
-
-            if job.process and job.process.poll() is None:
-                sync_segment_metadata_for_job(job)
-                if handle_stale_current_segment(row, job):
-                    continue
-
-            if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
-                format_changed = job.recording_format != effective_recording_format
-                format_only = format_changed and job.config_signature[:-1] == desired_signature[:-1]
-                if format_only:
-                    if time.monotonic() < job.format_change_retry_at:
-                        continue
-                    if not format_change_ready(job, effective_recording_format, format_apply_mode, format_requested_epoch):
-                        continue
-                log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name, recording_format=effective_recording_format)
-                write_audit_event(
-                    event_type="camera_restarted",
-                    message=f"Recorder restarted camera {job.camera_name}: config_changed",
-                    camera_id=job.camera_id,
-                    camera_name=job.camera_name,
-                    metadata={"reason": "config_changed", "recording_format": effective_recording_format},
-                )
-                finished = stop_camera(
-                    row.id,
-                    "recording_format_change" if format_changed else "config_changed",
-                    graceful_format_change=format_changed,
-                )
-                if not finished and job.process and job.process.poll() is None:
-                    continue
-                job.config_signature = desired_signature
-
-            if job.state == RecorderState.RESTARTING and can_retry(job):
-                job.recording_format = effective_recording_format
-                start_camera(row)
-                continue
-
-            if job.process and job.process.poll() is not None:
-                continue
-
-            if not job.process or job.process.poll() is not None:
-                job.recording_format = effective_recording_format
-                start_camera(row)
-
-        for camera_id in list(jobs.keys()):
-            if camera_id not in seen_ids:
-                stop_camera(camera_id, "removed_or_disabled")
-                jobs.pop(camera_id, None)
-
+        for camera_id in jobs.keys() - seen_ids:
+            stop_camera(camera_id, "removed_or_disabled")
+            if jobs[camera_id].event_buffer:
+                jobs[camera_id].event_buffer.close()
+            jobs.pop(camera_id, None)
     finally:
         db.close()
 
@@ -1860,7 +2158,7 @@ def check_children() -> None:
         if job.stderr_thread and job.stderr_thread.is_alive():
             job.stderr_thread.join(timeout=1)
 
-        error_text = stderr_tail_text(job) or "ffmpeg stopped unexpectedly"
+        error_text = (proc.failure if isinstance(proc, BufferedWriter) else stderr_tail_text(job)) or "recording writer stopped unexpectedly"
         error_type = classify_error(error_text, exit_code)
         try:
             recover_interrupted_segments(job)
@@ -2041,12 +2339,22 @@ write_audit_event(
     metadata={"recorder_instance_id": RECORDER_INSTANCE_ID},
 )
 
+AI_TRANSITION_MESSAGES = {
+    "failed": ("warning", "Локальная аналитика AI прервана", "Local AI analysis interrupted"),
+    "exhausted": ("error", "Попытки восстановления AI исчерпаны", "AI recovery attempts exhausted"),
+    "recovered": ("info", "Локальная аналитика AI восстановлена", "Local AI analysis restored"),
+}
+
 while running:
     try:
         check_children()
         confirm_recording_startups()
         sync_cameras()
         write_recorder_heartbeat("loop")
+        for transition, details in local_ai.drain_transitions():
+            severity, localized, english = AI_TRANSITION_MESSAGES[transition]
+            write_audit_event(event_type="ai_" + transition, severity=severity, message=localized, message_en=english,
+                              target_type="recorder", metadata=details)
     except Exception as exc:
         log_event("error", "loop_error", error=str(exc))
         write_recorder_heartbeat("loop_error")
@@ -2054,10 +2362,14 @@ while running:
 
 log_event("info", "shutdown_started", active_jobs=active_jobs_status())
 startup_recovery.stop()
+local_ai.stop()
+ai_events.stop()
 write_recorder_heartbeat("shutdown")
 
 for camera_id in list(jobs.keys()):
     stop_camera(camera_id, "shutdown")
+    if jobs[camera_id].event_buffer:
+        jobs[camera_id].event_buffer.close()
 
 log_event("info", "stopped")
 write_audit_event(

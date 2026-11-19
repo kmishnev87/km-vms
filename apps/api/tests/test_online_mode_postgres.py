@@ -9,7 +9,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.services import bootstrap, schema_update_control as control
-from app.services.schema_migrations import ONLINE_MODE_MIGRATION, CAMERA_TALK_MIGRATION, MigrationRegistry, SchemaMigrationBlocked, execute_migration_plan
+from app.services.schema_migrations import ONLINE_MODE_MIGRATION, CAMERA_TALK_MIGRATION, AI_RECORDING_MIGRATION, MigrationRegistry, SchemaMigrationBlocked, execute_migration_plan
 from test_schema_migration_runner_stage3 import seed_state
 
 TEST_URL = os.getenv("KMVMS_STAGE2_POSTGRES_URL")
@@ -30,6 +30,8 @@ def old_database(monkeypatch):
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE system_settings DROP COLUMN online_mode"))
             connection.execute(text("ALTER TABLE cameras DROP COLUMN talk_password_encrypted"))
+            connection.execute(text("ALTER TABLE cameras DROP COLUMN recording_policy, DROP COLUMN recording_signal_state"))
+            connection.execute(text("ALTER TABLE system_settings DROP COLUMN event_recording_emergency_enabled"))
             connection.execute(text("TRUNCATE schema_version_state, schema_migration_history"))
         with Session(engine) as db:
             seed_state(db, version=11)
@@ -50,7 +52,7 @@ def test_schema11_to12_keeps_settings_and_is_idempotent(old_database, retired_na
         db.execute(text("ALTER TABLE system_settings ADD COLUMN system_name VARCHAR(100) NULL"))
         db.commit()
     before = tuple(db.execute(text("SELECT timezone,language,storage_path,recording_format FROM system_settings")).one())
-    assert execute_migration_plan(db)["executed_migrations"] == [ONLINE_MODE_MIGRATION.migration_id, CAMERA_TALK_MIGRATION.migration_id]
+    assert execute_migration_plan(db)["executed_migrations"] == [ONLINE_MODE_MIGRATION.migration_id, CAMERA_TALK_MIGRATION.migration_id, AI_RECORDING_MIGRATION.migration_id]
     assert db.execute(text("SELECT online_mode FROM system_settings")).scalar_one() == "stable"
     assert tuple(db.execute(text("SELECT timezone,language,storage_path,recording_format FROM system_settings")).one()) == before
     matched, shape = control.target_shape_is_exact(db)

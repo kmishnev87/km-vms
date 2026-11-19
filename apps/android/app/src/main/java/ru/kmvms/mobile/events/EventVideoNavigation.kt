@@ -25,6 +25,12 @@ class EventVideoNavigation(private val api: NasApi) {
         if (eventDestination(action, event.occurred, now, ArchiveAvailability.UNKNOWN) == EventDestination.Live) {
             return live(event, id)
         }
+        if (event.ai != null) {
+            val evidence = EventsApi(api).evidence(event, zone)
+            evidence.start?.let { return EventVideoResult(MobileVideoRequest(id, event.camera, it.toEpochMilli())) }
+            return if (evidence.state == EventArchiveState.PENDING && !event.occurred.isBefore(now.minus(Duration.ofMinutes(2))))
+                live(event, id).copy(liveFallback = true) else EventVideoResult(null)
+        }
         val chronology = ChronologyApi(api, zone)
         val before = event.occurred.minusSeconds(5).toEpochMilli()
         val preRoll = chronology.resolve(id, before)

@@ -7,9 +7,11 @@ import ru.kmvms.mobile.R
 class DashboardNavigationTest {
     @Test fun homeTilesUseTheLatestApprovedOrderIndependentlyOfTheBottomBar() {
         assertEquals(listOf(Section.CAMERAS, Section.RECORDINGS, Section.CHRONOLOGY, Section.LIVE,
-            Section.SYSTEM, Section.EVENTS, Section.STORAGE, Section.SETTINGS), dashboardSections)
+            Section.RECORDING_CENTER, Section.EVENTS, Section.STORAGE, Section.SETTINGS), dashboardSections)
         assertEquals(8, dashboardSections.distinct().size)
         assertEquals(Section.LIVE, primaryNavigation[2])
+        assertEquals("manage_cameras", Section.RECORDING_CENTER.permission)
+        assertEquals("run_diagnostics", Section.SYSTEM.permission)
     }
     @Test fun liveIsTheMiddleOfTheApprovedFiveTabs() {
         assertEquals(listOf(Section.HOME, Section.RECORDINGS, Section.LIVE, Section.CAMERAS, Section.EVENTS), primaryNavigation)

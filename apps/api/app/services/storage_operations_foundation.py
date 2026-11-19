@@ -1263,6 +1263,7 @@ def renew_worker_lease(
     handle: WorkerLeaseHandle,
     *,
     lease_seconds: int = WORKER_LEASE_SECONDS,
+    commit: bool = True,
 ) -> None:
     now = _db_now(db)
     updated = (
@@ -1286,7 +1287,8 @@ def renew_worker_lease(
     if updated != 1:
         db.rollback()
         raise StorageOperationLeaseLost("storage_worker_lease_lost")
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def release_worker_lease(db: Session, handle: WorkerLeaseHandle) -> bool:

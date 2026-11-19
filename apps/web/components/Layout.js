@@ -135,6 +135,7 @@ export default function Layout({ children, className = "" }) {
   const visibleItems = currentUser ? items.filter((item) => canAccessPath(currentUser, item.href)) : [];
   const canOpenStorage = currentUser ? canAccessPath(currentUser, "/storage") : false;
   const canOpenSettings = currentUser ? canAccessPath(currentUser, "/settings") : false;
+  const canOpenRecording = currentUser ? canAccessPath(currentUser, "/ai-recording") : false;
 
   useEffect(() => {
     if (pathname === "/login" || pathname === "/setup") return;
@@ -191,6 +192,13 @@ export default function Layout({ children, className = "" }) {
                 problem: t("nav.systemHealthProblem"),
               }}
             />
+            {canOpenRecording ? (
+              <Link href="/ai-recording"
+                className={`topNavItem ${pathname === "/ai-recording" ? "active" : ""}`}
+                aria-label={t("aiRecording.title")} title={t("aiRecording.title")}>
+                <img className="topNavIconImage" src="/assets/icons/dashboard/ai-recording-v2.png" alt="" />
+              </Link>
+            ) : null}
             {canOpenStorage ? (
               <Link
                 href="/storage"

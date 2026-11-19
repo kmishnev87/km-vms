@@ -27,6 +27,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -47,6 +49,8 @@ import androidx.media3.common.util.UnstableApi
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.chronology.*
 import ru.kmvms.mobile.core.TimelinePhase
+import ru.kmvms.mobile.core.CameraStep
+import ru.kmvms.mobile.core.adjacentCamera
 import ru.kmvms.mobile.data.Camera
 import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.events.MobileVideoRequest
@@ -62,6 +66,9 @@ import ru.kmvms.mobile.ui.live.SpeakerIcon
 import ru.kmvms.mobile.ui.live.VideoSurface
 import ru.kmvms.mobile.ui.live.CameraSelectionButton
 import ru.kmvms.mobile.ui.live.OrderedCameraPicker
+import ru.kmvms.mobile.ui.live.VideoTransform
+import ru.kmvms.mobile.ui.live.VideoGestureMode
+import ru.kmvms.mobile.ui.live.videoGestures
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -114,7 +121,10 @@ import java.time.format.DateTimeFormatter
 
     val expanded = fullscreen
     if (expanded != null && expanded in state.selected) {
-        TimelineFullscreen(controller, state, expanded) { fullscreen = null }
+        key(expanded) { TimelineFullscreen(controller, state, expanded,
+            onCameraSwipe = if (state.selected.size > 1) { step ->
+                adjacentCamera(state.selected, expanded, step)?.let { fullscreen = it }
+            } else null) { fullscreen = null } }
     } else Column(Modifier.fillMaxSize()) {
         Surface(color = Color.White) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -195,15 +205,23 @@ import java.time.format.DateTimeFormatter
 }
 
 @UnstableApi
-@Composable internal fun TimelineVideo(controller: ChronologyController, state: ChronologyState, id: Long, modifier: Modifier, expand: () -> Unit) {
+@Composable internal fun TimelineVideo(controller: ChronologyController, state: ChronologyState, id: Long, modifier: Modifier,
+    onCameraSwipe: ((CameraStep) -> Unit)? = null, expand: () -> Unit) {
     val track = controller.track(id)
     val phase = state.phases[id] ?: TimelinePhase.RESOLVING
-    if (phase == TimelinePhase.EMPTY) Box(modifier.background(Color.Black).testTag("timeline-empty-$id"), contentAlignment = Alignment.Center) {
+    val emptyTransform = remember(id) { VideoTransform() }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    val swipe by rememberUpdatedState(onCameraSwipe)
+    val tap by rememberUpdatedState(expand)
+    if (phase == TimelinePhase.EMPTY) Box(modifier.background(Color.Black).testTag("timeline-empty-$id")
+        .onSizeChanged { size = it }.videoGestures(emptyTransform, VideoGestureMode.DIGITAL, false, size, 16f/9f,
+            { tap() }, { _, _ -> }, { _, _, _, _ -> }, if (onCameraSwipe != null) { step -> swipe?.invoke(step) } else null),
+        contentAlignment = Alignment.Center) {
         Text(stringResource(R.string.timeline_no_recording), color = Color.White, style = MaterialTheme.typography.bodySmall)
     } else VideoSurface(track?.player,
         VideoState(when { phase==TimelinePhase.FAILED -> VideoStatus.FAILED
             state.wantsPlay && !state.running && id in state.waiting -> VideoStatus.BUFFERING
             phase==TimelinePhase.READY -> VideoStatus.PLAYING
             else -> VideoStatus.BUFFERING }, unsupportedCodec = track?.unsupportedCodec() == true),
-        controller::retry, modifier.testTag("timeline-video-$id"), zoomable = true, onTap = expand)
+        controller::retry, modifier.testTag("timeline-video-$id"), zoomable = true, onTap = expand, onCameraSwipe = onCameraSwipe)
 }

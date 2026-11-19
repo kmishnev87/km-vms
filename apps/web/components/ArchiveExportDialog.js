@@ -49,7 +49,7 @@ export default function ArchiveExportDialog({ draft, onDraftChange, onClose, onC
   return <div className="modalBackdrop">
     <div className="modal archiveExportModal archiveClipDialog" role="dialog" aria-modal="true" aria-labelledby="archive-clip-title" data-source={source} ref={modalRef}>
       <header className="modalHeader">
-        <div><h2 className="archiveExportTitle" id="archive-clip-title">{copy.title}</h2><span className="archiveClipSource">{source === "chronology" ? copy.fromChronology : copy.fromRecordings}</span></div>
+        <div><h2 className="archiveExportTitle" id="archive-clip-title">{copy.title}</h2><span className="archiveClipSource">{source === "event" ? copy.fromEvent : source === "chronology" ? copy.fromChronology : copy.fromRecordings}</span></div>
         <details className="archiveClipHelp"><summary aria-label={copy.help}>?</summary><div><strong>{copy.help}</strong><p>{copy.helpBody}</p><p>{copy.retention}</p></div></details>
         <button className="iconCloseButton" type="button" onClick={onClose} disabled={deleteBusy} aria-label={copy.close}>×</button>
       </header>

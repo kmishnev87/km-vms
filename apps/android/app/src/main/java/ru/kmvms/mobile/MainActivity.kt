@@ -18,7 +18,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         NotificationNavigation.accept(intent)
-        ru.kmvms.mobile.widget.AlertWidgetProvider.openEvents(this, intent)
+        ru.kmvms.mobile.widget.AlertWidgetProvider.openDestination(this, intent)
         setContent { MobileApp(updates = updates) }
     }
     override fun onResume() {
@@ -30,6 +30,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         NotificationNavigation.accept(intent)
-        ru.kmvms.mobile.widget.AlertWidgetProvider.openEvents(this, intent)
+        ru.kmvms.mobile.widget.AlertWidgetProvider.openDestination(this, intent)
     }
 }

@@ -53,6 +53,26 @@ def test_normal_finalization_rejects_an_unfinished_container(worker, monkeypatch
         assert conn.execute(text("SELECT status FROM recording_segments")).scalar_one() == "writing"
 
 
+def test_buffered_mp4_missing_index_is_repaired_before_publication(worker, monkeypatch, tmp_path, history_database):
+    job = configured_job(worker, monkeypatch, tmp_path, history_database)
+    path = tmp_path / "Camera-ev4-sub-2026-11-12T10-00-00-123000Z.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10",
+        "-t", "3", "-c:v", "libx264", "-threads", "1", "-g", "10", "-an",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof", str(path),
+    ], check=True, timeout=15, capture_output=True)
+    # FFprobe reads this file, but a Media3 clipping seek cannot use it yet.
+    assert recovery.inspect_closed_segment(path)[1] == "segment_recovery_missing_seek_index"
+    worker.recover_interrupted_segments(job)
+    worker.segment_repairs._queue.join()
+    media, reason = recovery.inspect_closed_segment(path)
+    assert media is not None and reason == "probe_ok"
+    with history_database.connect() as conn:
+        row = conn.execute(text("SELECT status, stream_type, started_at FROM recording_segments")).one()
+        assert row.status == "finalized" and row.stream_type == "sub"
+        assert row.started_at.microsecond == 123000
+
+
 @pytest.mark.parametrize("fault", ["streaming_tail", "sigkill"])
 def test_real_broken_tail_becomes_indexed_without_stopping_other_camera(worker, monkeypatch, tmp_path, history_database, fault):
     job = configured_job(worker, monkeypatch, tmp_path, history_database)

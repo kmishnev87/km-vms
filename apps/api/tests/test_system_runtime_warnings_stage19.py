@@ -254,6 +254,25 @@ def test_soft_deleted_camera_is_excluded_from_runtime_warnings(db, monkeypatch):
     assert "".join(["rt", "sp://"]) not in rendered(payload)
 
 
+def test_known_subscription_failure_appears_in_system_health_even_on_recording_pause(db, monkeypatch):
+    from app.services import camera_source_health
+
+    camera = add_camera(db, enabled=False)
+    camera.protocol = "onvif"
+    camera.events_enabled = True
+    db.commit()
+    add_heartbeat(db, service_status="healthy", active_jobs=0, recording_cameras=0)
+    monkeypatch.setattr(camera_source_health, "receiver_fault_snapshots", lambda cameras: {
+        camera.id: {"phase": "failed", "group": "receiver"},
+    })
+    status = build_operator_runtime_status(db)
+    cameras = status["domains"]["cameras"]
+    assert cameras["items"][0]["severity"] == "ok"
+    assert cameras["severity"] == "warning" and status["summary"]["warning_count"] >= 1
+    assert len(cameras["source_issues"]) == 1 and "camera_event_channel_failed" in status["reason_codes"]
+    assert cameras["source_issues"][0]["cameras"][0]["recording_state"] == "paused"
+
+
 def test_stale_finalized_segment_does_not_warn_when_current_segment_is_valid(db):
     camera = add_camera(db)
     add_job(db, camera)

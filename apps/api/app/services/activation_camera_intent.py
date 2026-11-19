@@ -30,7 +30,8 @@ class CameraPauseCoordinator:
             for item in self.list_camera_recording_states(db)
             if bool(item.get("confirmed_recording"))
             and bool(item.get("enabled"))
-            and str(item.get("recording_mode") or "").lower() == "always"
+            and (str(item.get("recording_mode") or "").lower() == "always"
+                 or item.get("event_policy_configured") or item.get("linked_policy_configured"))
         }
 
     def _activation_camera_snapshot(self, db: Session, operation_id: str) -> tuple[list[dict[str, Any]], int]:
@@ -43,7 +44,8 @@ class CameraPauseCoordinator:
             if not (
                 bool(item.get("confirmed_recording"))
                 and bool(item.get("enabled"))
-                and str(item.get("recording_mode") or "").lower() == "always"
+                and (str(item.get("recording_mode") or "").lower() == "always"
+                     or item.get("event_policy_configured") or item.get("linked_policy_configured"))
             ):
                 continue
             snapshots.append(

@@ -16,7 +16,7 @@ import ru.kmvms.mobile.AppLocales
 import ru.kmvms.mobile.MainActivity
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.data.ServerProfile
-import ru.kmvms.mobile.ui.events.label
+import ru.kmvms.mobile.ui.events.eventLabels
 import ru.kmvms.mobile.events.CameraEventKind
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -41,7 +41,7 @@ object MobileNotifications {
         val previous = JSONArray(history.getString("delivered_v1", "[]"))
         val delivered = (0 until previous.length()).map { previous.getString(it) }
         if (key in delivered) { log(DiagnosticCode.PUSH_DUPLICATE); return@synchronized }
-        val text = if (event.test) context.getString(R.string.push_test_received) else (listOf(event.kind) + event.objects).distinct().joinToString(" · ") { context.getString(it.label()) } + " · " +
+        val text = if (event.test) context.getString(R.string.push_test_received) else eventLabels(event.kind, event.objects, event.aiCondition).joinToString(" · ") { context.getString(it) } + " · " +
             DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault()).format(event.occurred)
         val builder = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (event.test) profile.name else profile.name + " · " + event.cameraName)

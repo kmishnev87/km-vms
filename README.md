@@ -4,7 +4,7 @@
 
 **Watch live. Investigate in sync. Keep the footage that matters.**
 
-KM VMS is a self-hosted **Video Management System (VMS)** with **Network Video Recorder (NVR)** capabilities for **RTSP and ONVIF IP cameras**. It brings camera configuration, multi-camera live monitoring, recording, synchronized playback, camera events, archive management, and server maintenance into one connected product.
+KM VMS is a self-hosted **Video Management System (VMS)** and **Network Video Recorder (NVR)** for **RTSP and ONVIF IP cameras**. Watch multiple cameras live, record continuously or when something happens, and investigate from a synchronized archive in your browser or the native Android app.
 
 Run it on your own NAS or Docker-capable Linux server. Keep video on storage you control. Watch from a browser or the native Android app, control supported PTZ cameras, follow events across recordings, and export important moments. Local recording and viewing do not require a camera manufacturer's cloud account.
 
@@ -16,9 +16,13 @@ Run it on your own NAS or Docker-capable Linux server. Keep video on storage you
 
 [Quick start](#quick-start) · [Features](#what-km-vms-can-do) · [Android](#native-android-app) · [Releases](https://github.com/kmishnev87/km-vms/releases) · [Report a problem](https://github.com/kmishnev87/km-vms/issues)
 
-![Real KM VMS dashboard in English: cameras, recordings, live viewing, chronology, storage, system health, and settings](docs/images/dashboard-en.png)
+![KM VMS 1.0.2 dashboard in English, including AI & Recording and Camera Events](docs/images/dashboard-en.png)
 
 ## Why choose KM VMS?
+
+### Record the moments you need, not necessarily the whole day
+
+Choose a recording policy for each camera. Keep critical views recording continuously, use compatible camera events or local NAS AI to capture activity elsewhere, or record a second viewpoint whenever a selected camera is recording. Add pre-event footage where it matters so you can see what led up to an alert, not just what happened afterward. Local analysis does not send footage to a cloud AI service.
 
 ### One system from live viewing to saved footage
 
@@ -56,11 +60,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of published KM VMS **[1.0.1](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.1)**, run in the server terminal:
+For a **new installation** of KM VMS **[1.0.2](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.2)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.1/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.1
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.2/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.2
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -87,7 +91,7 @@ The wizard guides storage selection and owner-account creation. There is no ship
 - Discover **ONVIF Media1 and Media2** services and the device's available video profiles.
 - Read and change exposed encoder settings: codec, resolution, frame rate, bitrate, and related camera-provided options.
 - Handle multiple lenses on one device while respecting differences between panoramic and movable channels.
-- Configure recording and control its enabled state from KM VMS.
+- Pause and resume recording from the camera card; configure each camera's recording policy in **AI & Recording**.
 
 Camera controls are grounded in what the device reports. Supported settings can be managed from the VMS without opening the camera's own web interface for each adjustment.
 
@@ -141,6 +145,18 @@ Two-way audio is device- and firmware-dependent: a camera microphone, speaker or
 - Search and filter recordings, play them, download source files, and confirm deletion explicitly.
 - Keep retained footage from removed cameras accessible under their original names, clearly marked as removed.
 
+### AI & Recording
+
+The **AI & Recording** workspace in the browser and Android manages policies on the same NAS. You choose which cameras to analyze and which to leave on continuous recording.
+
+- Keep continuous recording with optional analytics, record when compatible camera events or local AI rules trigger, or record a second view during the actual recording of an explicitly linked camera. This can pair two lenses of one device or two separate cameras.
+- Choose **Economical** for camera-triggered recording without a prebuffer, **Balanced** for a lower-bandwidth prebuffer that switches to recording quality, or **Full quality** to retain the configured recording stream before the trigger. Local AI uses Balanced or Full quality; it does not open a separate video stream just to analyze it.
+- Detect people, vehicles and supported animals on the NAS. Draw zones and directional lines on a camera frame; set dwell, exclusions and schedules. Choose which rules trigger recording and which notify you.
+- Browse AI snapshots and rule details in the same event history as camera events. Open the matching archive when it exists, save a separate clip, or label a false positive without changing the model.
+- Choose whether event-based cameras temporarily record continuously if their detection source fails. This protection is off by default. A manual pause, unavailable video or unavailable storage still takes priority.
+
+Local analysis works without cloud inference. It uses a compatible Intel GPU when available and a bounded CPU fallback otherwise. Capacity and detection depend on the NAS, streams and scene. Face recognition and plate reading are not included. See [AI & Recording: setup and limits](docs/AI-RECORDING.md).
+
 ### Synchronized chronology
 
 - Navigate a shared time point across cameras.
@@ -174,11 +190,11 @@ Receive ONVIF events from compatible cameras, keep a searchable history, and mov
 - Retain muted arrivals in history as viewed, without new alert badges or push notifications. Existing unviewed events keep their status.
 - Open live video or available recordings around an event; keep event markers visible even when that moment was not recorded.
 - Keep service chatter, such as clock synchronization, out of detection history.
-- Discard identical triggers arriving less than **45 seconds** after the preceding matching signal, before storage and push delivery. Each repeat advances that sliding interval; cameras, rules, types, and reported object classes have independent intervals.
+- Suppress matching repeats less than **45 seconds** apart in event history and alerts. Each repeat advances the sliding interval; cameras, rules, types and reported object classes have independent intervals. Suppression does not prevent an active recording from being extended.
 - Quiet ordinary alerts on the client already visibly playing that camera, without globally muting other devices or distinct critical alarms.
 - Mark events viewed, select matching events across pages, and confirm history deletion without deleting footage.
 
-Detection is performed by the camera. Receiving its events is not a claim that KM VMS already runs its own server-side AI analytics. Opening an event uses existing footage; it cannot recreate a recording that was never made.
+History can contain both camera detections and events created by NAS AI. Filter by source, object or rule. Opening an event uses available footage; it cannot recreate a recording that was never made.
 
 ### Storage and System Health
 
@@ -214,17 +230,18 @@ KM VMS for Android is a **native client, not a desktop page wrapped in a WebView
 - English, Simplified Chinese, and Russian.
 - Multiple saved NAS connections with independent sessions.
 - A live camera feed list, fullscreen viewing, main/sub selection, audio, and pinch/pan image gestures.
+- Swipe between cameras on the individual Live or fullscreen Chronology view, wrapping from the last back to the first. A zoomed image pans instead; switching viewpoints in Chronology keeps the shared playback running.
 - Capability-based camera calls for owners and administrators, with explicit microphone permission and automatic cleanup when leaving or backgrounding the live view.
 - Tap a camera-card preview to watch only that camera. Rotation and fullscreen keep the single-camera session until you leave Live.
 - Choose a subset of live cameras in a compact, dismissible panel. Selection numbers and drag-to-reorder control the viewing order; each saved NAS/account connection keeps its normal set independently of temporary single-camera viewing.
 - Fast/Stable live mode shared with the browser, editable in **NAS settings** under the same server-enforced permissions; supported PTZ still uses low-latency viewing during control.
-- Recordings, clips, synchronized chronology, camera management, events, storage, server health, and NAS maintenance.
+- Recordings, clips, synchronized chronology, camera management, events, AI & Recording, storage, server health, and NAS maintenance.
 - Select timeline cameras in the order you need, then drag to reorder them; retained archives of deleted cameras remain available for manual selection.
 - Access camera presets in fullscreen PTZ control. Swipe recordings to reveal deletion; confirm removal individually or for the selected group.
 - Add, edit, enable, disable and delete NAS user accounts and assign supported roles from the phone, under the same server-enforced permissions and owner protections as the browser.
 - A notification setup offer after the first NAS login, with a separately remembered choice for each server.
 - Notifications that open the corresponding server, camera, and event.
-- Two optional home-screen notification widgets: compact 2×1 quick controls, or 3×1 with the NAS unread-event count. Add either from Settings and bind it to a NAS/account. Tap the quiet counter to open its event history, or the rest of the widget to switch personal camera alerts in a translucent panel. Existing schedules still apply; recording and event reception are unchanged. Count changes use silent push, not background NAS polling.
+- Two optional home-screen notification widgets: compact 2×1 quick controls, or 3×1 with separate taps for alert settings, Live and the unread count that opens event history. Both are bound to your chosen NAS/account. Schedules remain in force; recording and event reception are unchanged. Count changes use silent push, not background NAS polling.
 - Built-in app diagnostics: add a comment and send a client report directly to KM VMS support from Settings. No ZIP needs to be created, saved, or shared on the phone; the support server confirms acceptance with a report number.
 - APK checks on the first foreground opening in a new day, plus manual checks. Before installation, the client checks size, hash, package, version, and signing certificate. Android asks for installation confirmation.
 - NAS update checks start when you enter the Android maintenance screen. Follow server-reported stages and the current operation; APK downloads show transferred bytes and a measured percentage, followed by a separate verification step.
@@ -247,9 +264,9 @@ For remote access, configure a secured HTTPS reverse proxy or VPN. Initial HTTP 
 
 ## Project development
 
-KM VMS already includes server recording, multi-camera viewing, PTZ, synchronized archives, clips, camera events, storage management, maintenance, and the Android client. [Release history](https://github.com/kmishnev87/km-vms/releases) documents the product's development and the changes shipped in each version.
+The [release history](https://github.com/kmishnev87/km-vms/releases) documents what shipped in each version. Start with the [AI & Recording guide](docs/AI-RECORDING.md) for the recording policies, local rules and troubleshooting added in 1.0.2.
 
-Further directions include assigning different cameras' recordings to selected storage devices, server-side AI video analytics, and recording triggered only by events. These are future work, not features presented as already available.
+Assigning recordings from individual cameras to specific storage devices is not currently supported.
 
 ## Feedback and diagnostics
 

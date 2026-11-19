@@ -24,13 +24,15 @@ import kotlinx.coroutines.delay
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.chronology.ChronologyController
 import ru.kmvms.mobile.chronology.ChronologyState
+import ru.kmvms.mobile.core.CameraStep
 import ru.kmvms.mobile.ui.live.SpeakerIcon
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
 /** One unobtrusive archive surface for both event navigation and a timeline tile. */
 @UnstableApi
-@Composable internal fun TimelineFullscreen(controller: ChronologyController, state: ChronologyState, id: Long, close: () -> Unit) {
+@Composable internal fun TimelineFullscreen(controller: ChronologyController, state: ChronologyState, id: Long,
+    onCameraSwipe: ((CameraStep) -> Unit)? = null, close: () -> Unit) {
     val context=LocalContext.current
     var sound by remember(id){mutableStateOf(false)}
     var controls by remember(id){mutableStateOf(true)}
@@ -45,8 +47,8 @@ import java.time.format.DateTimeFormatter
     }
     LaunchedEffect(controls,state.running,speeds){if(controls && state.running && !speeds){delay(4000);controls=false}}
     val overlay=Color(0xAA233044)
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        TimelineVideo(controller,state,id,Modifier.fillMaxSize()){controls=!controls}
+    Box(Modifier.fillMaxSize().background(Color.Black).testTag("timeline-fullscreen-$id")) {
+        TimelineVideo(controller,state,id,Modifier.fillMaxSize(),onCameraSwipe){controls=!controls}
         if(controls || !state.wantsPlay) {
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(10.dp),horizontalArrangement=Arrangement.SpaceBetween){
                 IconButton(onClick=close,modifier=Modifier.background(overlay,RoundedCornerShape(12.dp))){Icon(Icons.AutoMirrored.Filled.ArrowBack,stringResource(R.string.back),tint=Color.White)}

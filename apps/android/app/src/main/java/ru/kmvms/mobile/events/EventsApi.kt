@@ -6,6 +6,7 @@ import ru.kmvms.mobile.archive.encode
 import ru.kmvms.mobile.archive.parseTime
 import ru.kmvms.mobile.data.NasApi
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
@@ -20,10 +21,27 @@ enum class CameraEventKind(val code: String) {
     }
 }
 
+enum class AiEventCondition(val code: String) {
+    PRESENCE("presence"), ENTER("enter"), EXIT("exit"), CROSSING("crossing"), DWELL("dwell"), SCENE("scene");
+    companion object { fun parse(value: String) = entries.firstOrNull { it.code == value } }
+}
+
+data class AiEvent(val condition: AiEventCondition?, val ruleName: String, val snapshot: Boolean, val falsePositive: Boolean, val scope: String = "frame") {
+    companion object {
+        fun from(value: JSONObject) = AiEvent(AiEventCondition.parse(value.optString("condition")),
+            value.optString("rule_name").take(48), value.optBoolean("snapshot_available"), value.optBoolean("false_positive"),
+            value.optString("scope", "frame"))
+    }
+}
+
+data class EventClip(val cameraId: Long, val start: OffsetDateTime, val end: OffsetDateTime)
+enum class EventArchiveState { READY, PENDING, UNAVAILABLE, FORBIDDEN }
+data class EventEvidence(val event: CameraEvent, val state: EventArchiveState, val start: Instant?, val clip: EventClip?)
+
 data class CameraEvent(
     val id: String, val cameraId: Long?, val camera: String, val kind: CameraEventKind,
     val objects: Set<CameraEventKind>, val occurred: Instant, val read: Boolean,
-    val ambiguous: Boolean, val uncertainClock: Boolean,
+    val ambiguous: Boolean, val uncertainClock: Boolean, val ai: AiEvent? = null,
 ) {
     companion object {
         fun from(value: JSONObject, zone: ZoneId): CameraEvent {
@@ -35,12 +53,14 @@ data class CameraEvent(
                     else listOf(CameraEventKind.parse(value.optString("object_kind"))))
                     .filter { it in setOf(CameraEventKind.PERSON, CameraEventKind.VEHICLE, CameraEventKind.ANIMAL) }.toSet(),
                 parseTime(value.getString("occurred_at"), zone) ?: throw IllegalArgumentException("event_time_invalid"),
-                value.optBoolean("read"), value.optBoolean("source_ambiguous"), value.optBoolean("clock_uncertain"))
+                value.optBoolean("read"), value.optBoolean("source_ambiguous"), value.optBoolean("clock_uncertain"),
+                value.optJSONObject("ai")?.let(AiEvent::from))
         }
     }
 }
 
-data class EventFilter(val cameraId: Long? = null, val kind: CameraEventKind? = null, val days: Int = 7, val unread: Boolean = false)
+data class EventFilter(val cameraId: Long? = null, val kind: CameraEventKind? = null, val days: Int = 7, val unread: Boolean = false,
+    val source: String = "", val rule: String = "", val condition: AiEventCondition? = null)
 data class EventPage(val items: List<CameraEvent>, val total: Int, val offset: Int, val more: Boolean,
                      val unread: Int, val cursor: String?, val historyCount: Int, val zone: ZoneId,
                      val since: String = Instant.EPOCH.toString(), val selectionId: String? = null, val visibleIds: Set<String> = emptySet())
@@ -94,6 +114,31 @@ class EventsApi(val api: NasApi) {
         val zone = ZoneId.of(body.getString("timezone"))
         return CameraEvent.from(body.getJSONObject("event"), zone) to zone
     }
+    suspend fun evidence(event: CameraEvent, zone: ZoneId): EventEvidence {
+        val body = api.json("api/camera-events/${validEventId(event.id)}/evidence") as JSONObject
+        val updated = CameraEvent.from(body.getJSONObject("event"), zone)
+        require(updated.id == event.id && updated.cameraId == event.cameraId && updated.ai != null)
+        val archive = body.getJSONObject("archive")
+        val state = EventArchiveState.entries.find { it.name.equals(archive.optString("state"), ignoreCase = true) } ?: EventArchiveState.UNAVAILABLE
+        if (state != EventArchiveState.READY) return EventEvidence(updated, state, null, null)
+        require(archive.getLong("camera_id") == event.cameraId)
+        val start = OffsetDateTime.parse(archive.getString("timestamp_utc")).toInstant()
+        require(start <= event.occurred && start >= event.occurred.minusSeconds(5))
+        val clip = archive.optJSONObject("clip")?.let { value ->
+            val id = value.getLong("camera_id")
+            val from = OffsetDateTime.parse(value.getString("start_ts"))
+            val to = OffsetDateTime.parse(value.getString("end_ts"))
+            require(id == event.cameraId && from.toInstant() == start && to.toInstant() > event.occurred)
+            EventClip(id, from, to)
+        }
+        return EventEvidence(updated, state, start, clip)
+    }
+    suspend fun snapshot(id: String) = api.eventSnapshot(validEventId(id))
+    suspend fun review(event: CameraEvent, zone: ZoneId, falsePositive: Boolean): CameraEvent {
+        val value = api.json("api/camera-events/${validEventId(event.id)}/review", "POST",
+            JSONObject().put("false_positive", falsePositive)) as JSONObject
+        return CameraEvent.from(value, zone).also { require(it.id == event.id && it.ai != null) }
+    }
     suspend fun page(filter: EventFilter, offset: Int = 0, selection: EventSelection? = null): EventPage {
         require(filter.days in setOf(1, 7, 30))
         val since = selection?.since ?: Instant.now().minusSeconds(filter.days * 86400L).toString()
@@ -101,6 +146,9 @@ class EventsApi(val api: NasApi) {
             "&since=${encode(since)}" +
             (filter.cameraId?.let { "&camera_id=$it" } ?: "") +
             (filter.kind?.let { "&kind=${it.code}" } ?: "") + (if (filter.unread) "&unread=true" else "") +
+            (if (filter.source in setOf("ai", "camera")) "&source=${filter.source}" else "") +
+            (filter.rule.trim().take(48).takeIf(String::isNotEmpty)?.let { "&rule=${encode(it)}" } ?: "") +
+            (filter.condition?.let { "&condition=${it.code}" } ?: "") +
             (selection?.let { "&selection_id=${validEventId(it.id)}" } ?: "")
         val body = api.json(path) as JSONObject
         val zone = runCatching { ZoneId.of(body.getString("timezone")) }.getOrDefault(ZoneOffset.UTC)
@@ -117,6 +165,9 @@ class EventsApi(val api: NasApi) {
             .put("unread",filter.unread).put("visible_ids",JSONArray(page.items.map { it.id }))
         filter.cameraId?.let { request.put("camera_id",it) }
         filter.kind?.let { request.put("kind",it.code) }
+        if (filter.source in setOf("ai", "camera")) request.put("source", filter.source)
+        filter.rule.trim().take(48).takeIf(String::isNotEmpty)?.let { request.put("rule", it) }
+        filter.condition?.let { request.put("condition", it.code) }
         val result = api.json("api/camera-events/selections","POST",request) as JSONObject
         return EventSelection(validEventId(result.getString("id")),result.getInt("count").also{require(it in 1..100_000)},
             page.since,result.optJSONArray("visible_ids")?.strings().orEmpty())

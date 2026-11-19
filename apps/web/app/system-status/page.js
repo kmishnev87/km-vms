@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
 import { useSystemHealthStatus } from "../../components/SystemHealthIndicator";
-import { canAccessPath, getAuthToken } from "../../lib/api";
+import { apiFetch, canAccessPath, captureAuthSession, getAuthToken } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n } from "../../lib/i18n";
 import { formatProductDateTime } from "../../lib/timezone";
+import { notifyCameraRuntimeChanged } from "../../lib/operatorWarnings";
 
 const DOMAIN_ORDER = ["cameras", "recorder", "live", "storage", "retention", "reconciliation"];
 
@@ -34,6 +35,7 @@ function problemCountLabel(count, t) {
 
 const ACTION_ICON_BY_HREF = {
   "/cameras": "/assets/icons/ui/camera.png",
+  "/ai-recording": "/assets/icons/dashboard/ai-recording-v2.png",
   "/diagnostics": "/assets/icons/ui/diagnostics.svg",
   "/live": "/assets/icons/ui/live.png",
   "/storage": "/assets/icons/ui/storage.png",
@@ -44,15 +46,58 @@ function canUseAction(user, action) {
   return canAccessPath(user, action.href);
 }
 
-function SystemStatusProblemAction({ action, currentUser, text }) {
+function SystemStatusProblemAction({ action, currentUser, text, labelOverride }) {
   if (!canUseAction(currentUser, action)) return null;
-  const icon = ACTION_ICON_BY_HREF[action.href] || "/assets/icons/ui/system-status-base.png";
-  const label = text(action.label);
+  const icon = ACTION_ICON_BY_HREF[action.href.split("#", 1)[0]] || "/assets/icons/ui/system-status-base.png";
+  const label = labelOverride || text(action.label);
   return (
     <Link className="systemStatusIconAction" href={action.href} title={label} aria-label={label}>
       <img src={icon} alt="" />
     </Link>
   );
+}
+
+function SourceIssueFacts({ issue, t, nextAttempt }) {
+  const ai = issue.kind === "ai";
+  const key = ai ? "ai" : "events";
+  return <div className="systemStatusSourceFacts">
+    <h3>{t(`systemStatus.source.${key}Title`)}</h3>
+    <p>{t(`systemStatus.source.${key}Cause`)}</p>
+    <ul>
+      {issue.cameras.map(camera => <li key={camera.camera_id}>
+        <strong>{camera.name}</strong><span>{t(`systemStatus.source.recording.${camera.recording_state}`)}</span>
+      </li>)}
+    </ul>
+    {nextAttempt ? <p>{t("systemStatus.source.nextAttempt", { time: nextAttempt })}</p> : null}
+  </div>;
+}
+
+function SourceIssueRetry({ issue, t }) {
+  const [state, setState] = useState("");
+  const pending = useRef(false);
+
+  async function retry() {
+    if (pending.current || state === "queued") return;
+    pending.current = true;
+    setState("busy");
+    const owns = captureAuthSession();
+    try {
+      await apiFetch(`/ai-recording/cameras/${issue.camera_id}/retry?source=${issue.kind}`, { method: "POST" });
+      if (owns()) setState("queued");
+    } catch (_) {
+      if (owns()) setState("failed");
+    } finally {
+      pending.current = false;
+      if (owns()) notifyCameraRuntimeChanged();
+    }
+  }
+
+  return <div className="systemStatusSourceRetry">
+    <button className="button secondary small" type="button" disabled={state === "busy" || state === "queued"} onClick={retry}>
+      {t("systemStatus.source.retry")}
+    </button>
+    {state === "queued" || state === "failed" ? <small role="status">{t(`systemStatus.source.${state}`)}</small> : null}
+  </div>;
 }
 
 export default function SystemStatusPage() {
@@ -168,16 +213,22 @@ export default function SystemStatusPage() {
                   ) : problems.length ? problems.map((item) => {
                     const itemSeverity = safeSeverity(item.severity);
                     const domain = t(`systemStatus.domains.${item.domain}`);
+                    const source = item.source_issue;
+                    const nextAttempt = source?.next_attempt_at ? formatProductDateTime(source.next_attempt_at,
+                      systemHealth.runtimeStatus?.system_timezone, locale) : "";
                     return (
-                      <article className={`systemStatusIncident ${itemSeverity}`} key={item.id}>
+                      <article className={`systemStatusIncident ${itemSeverity}${source ? " has-source" : ""}`} key={item.id}>
                         <div className="systemStatusIncidentIcon">{itemSeverity === "error" ? "!" : "i"}</div>
-                        <div>
+                        {source ? <SourceIssueFacts issue={source} t={t} nextAttempt={nextAttempt} /> : <div>
                           <h3>{text(item.title)}</h3>
                           <p>{text(item.message)}</p>
                           <span>{t("systemStatus.incidentDomain", { domain })}</span>
-                        </div>
+                        </div>}
                         <div className="systemStatusActions" aria-label={t("systemStatus.activeProblems")}>
-                          <SystemStatusProblemAction action={item.action} currentUser={currentUser} text={text} />
+                          <SystemStatusProblemAction action={item.action} currentUser={currentUser} text={text}
+                            labelOverride={source ? t(`systemStatus.source.open${source.kind === "ai" ? "Ai" : "Camera"}`) : undefined} />
+                          {source?.retry_available && !systemHealth.stale && canUseAction(currentUser, item.action)
+                            ? <SourceIssueRetry issue={source} t={t} /> : null}
                         </div>
                       </article>
                     );

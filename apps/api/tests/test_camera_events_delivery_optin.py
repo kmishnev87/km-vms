@@ -3,6 +3,7 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+import time
 from unittest.mock import Mock
 
 from lxml import etree
@@ -74,7 +75,7 @@ def test_real_zeep_wsdl_loses_mixed_text_but_request_plugin_keeps_it(monkeypatch
 def test_device_client_consumes_preserved_envelope_not_lossy_typed_topic():
     client = object.__new__(ov.DeviceClient)
     client.subscription = "http://192.0.2.1/onvif/pull"
-    client.references = []; client.renew_at = float("inf")
+    client.references = []; client.renew_at = float("inf"); client.expires_at = time.monotonic() + 300
     client.transport = SimpleNamespace(settings=lambda **kwargs: nullcontext())
     class Proxy:
         _client = SimpleNamespace(plugins=[])

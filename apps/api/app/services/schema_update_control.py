@@ -84,7 +84,7 @@ JWT_SECRET = str(os.getenv("JWT_SECRET") or "")
 MAX_CONTROL_BYTES = 64 * 1024
 MAX_DETAILS_BYTES = 8 * 1024
 MAX_TIMESTAMP_LENGTH = 80
-TARGET_SCHEMA_VERSION = 13
+TARGET_SCHEMA_VERSION = 14
 REQUEST_RE = re.compile(r"^(?:update|stage609)-[0-9a-f]{32}$")
 ATTEMPT_RE = re.compile(r"^migration-attempt-[0-9a-f]{32}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -354,17 +354,17 @@ SOURCE_SHAPE_FINGERPRINT_ALTERNATES: dict[str, frozenset[str]] = {
     for version, values in _UPDATE_LINEAGE["shape_alternates"].items()
 }
 TARGET_SHAPE_FINGERPRINT = (
-    "596f09b6e540f721268aa954a1cdba724"
-    "b4b9145b81e492f1c8a010103c0bf86"
+    "079d090decc2e572c597ac9a4d340ce3"
+    "3124b4933db6ce51479aaa44665e5ea1"
 )
-# Exact schema-v13 shapes reproduced by the registered migration on PostgreSQL.
+# Exact schema-v14 shapes reproduced by the registered migration on PostgreSQL.
 # Upgraded installations may retain the harmless retired system_name column;
 # current fresh installations omit it. Published source hashes stay in lineage.
 # Unknown target fingerprints remain fail-closed.
 TARGET_SHAPE_FINGERPRINT_ALTERNATES = frozenset(
     {
-        "39fccceb35d42142d843a68206385d731"
-        "259cf952995db13cd28172e079c8e17",
+        "b2e7a1557d4af04bcf3257550d9b30302"
+        "f2881614f97aa14cdc91ade3f349779",
     }
 )
 TARGET_SHAPE_FINGERPRINTS = frozenset(

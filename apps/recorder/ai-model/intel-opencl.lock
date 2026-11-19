@@ -1,0 +1,4 @@
+89f252553c937b2456ee9919858ff2ab65dc6b0dcbd219c73953548465adf325 intel-opencl-icd_25.35.35096.9-0_amd64.deb https://github.com/intel/compute-runtime/releases/download/25.35.35096.9/intel-opencl-icd_25.35.35096.9-0_amd64.deb
+810114ef05f4d44c5c86fbc2f0b34688102f41596a40772a1ff7a48f5df69ecd libigdgmm12_22.8.1_amd64.deb https://github.com/intel/compute-runtime/releases/download/25.35.35096.9/libigdgmm12_22.8.1_amd64.deb
+7c340f45c4f294eca3a9780a1b3ece6d4b699fdc51e7dc9ff8c5d6323c5d8d64 intel-igc-core-2_2.18.5+19820_amd64.deb https://github.com/intel/intel-graphics-compiler/releases/download/v2.18.5/intel-igc-core-2_2.18.5%2B19820_amd64.deb
+bcb1435486175673f14b180efb8fc39ff31b76c625e09b1253a07a705efcf9c3 intel-igc-opencl-2_2.18.5+19820_amd64.deb https://github.com/intel/intel-graphics-compiler/releases/download/v2.18.5/intel-igc-opencl-2_2.18.5%2B19820_amd64.deb

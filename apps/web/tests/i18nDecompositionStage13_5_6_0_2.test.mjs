@@ -12,7 +12,9 @@ const aggregateSource = readI18nSource();
 
 assert.deepEqual(Object.keys(DICTIONARIES), ["ru", "en", "zh-CN"]);
 assert.deepEqual(Object.keys(TEXT_TRANSLATIONS), ["en", "zh-CN"]);
-assert.equal(I18N_SOURCE_FILES.length, 6);
+assert.equal(I18N_SOURCE_FILES.length, 8);
+assert.deepEqual(Object.keys(DICTIONARIES.en.aiRecording), Object.keys(DICTIONARIES.ru.aiRecording));
+assert.deepEqual(Object.keys(DICTIONARIES["zh-CN"].aiRecording), Object.keys(DICTIONARIES.ru.aiRecording));
 assert.match(entrypoint, /import \{ DICTIONARIES, TEXT_TRANSLATIONS \} from "\.\/i18n\/dictionaries\.js";/);
 assert.match(entrypoint, /export \{ DICTIONARIES \};/);
 assert.doesNotMatch(entrypoint, /export const DICTIONARIES\s*=\s*\{/);

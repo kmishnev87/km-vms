@@ -56,13 +56,13 @@ class ArchiveMaintenanceTest {
             val store=MemoryReceipts();val first=ArchiveMaintenanceController(api(server),store)
             withTimeout(15000){first.state.first{!it.loading}}
             first.startScan();withTimeout(15000){first.state.first{!it.busy&&it.result=="unknown"}}
-            val key=store.value!!.key;first.close()
+            val key=store.value!!.key;first.close(); withTimeout(5_000) { first.awaitClosed() }
             val reopened=ArchiveMaintenanceController(api(server),store)
             try{withTimeout(15000){reopened.state.first{!it.loading}}
                 assertEquals(1,posted.size);assertEquals(key,reopened.state.value.pending!!.key)
                 reopened.retry();withTimeout(15000){reopened.state.first{!it.busy&&it.pending==null}}
                 assertEquals(listOf(key,key),posted.toList());assertNull(store.value)
-            }finally{reopened.close()}
+            }finally{reopened.close(); withTimeout(5_000) { reopened.awaitClosed() }}
         }}finally{Dispatchers.resetMain()}
     }
     @Test fun aDefinitivelyRejectedScanDoesNotPermanentlyLockMaintenance()=runBlocking {
@@ -74,7 +74,7 @@ class ArchiveMaintenanceTest {
             try{withTimeout(15000){controller.state.first{!it.loading}}
                 controller.startScan();withTimeout(15000){controller.state.first{!it.busy&&it.result=="failed"}}
                 assertNull(store.value);assertNull(controller.state.value.pending)
-            }finally{controller.close()}
+            }finally{controller.close(); withTimeout(5_000) { controller.awaitClosed() }}
         }}finally{Dispatchers.resetMain()}
     }
 }

@@ -13,7 +13,8 @@ object NotificationNavigation {
     private val mutable = MutableStateFlow<NotificationOpen?>(null)
     val pending = mutable.asStateFlow()
     fun accept(intent: Intent?) { parse(intent?.dataString)?.let { mutable.value = it } }
-    internal fun events(profileId: String) { mutable.value = NotificationOpen(profileId, null, EventAction.LIVE) }
+    internal fun events(profileId: String) { mutable.value = NotificationOpen(profileId, null, EventAction.OPEN) }
+    internal fun live(profileId: String) { mutable.value = NotificationOpen(profileId, null, EventAction.LIVE) }
     fun consume(key: String) { if (mutable.value?.key == key) mutable.value = null }
     fun parse(value: String?): NotificationOpen? = runCatching {
         val uri = URI(value ?: return null)

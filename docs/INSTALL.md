@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[1.0.1](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.1)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[1.0.2](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.2)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.1/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.1
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.2/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.2
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.1 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v1.0.2 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.1 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v1.0.2 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -119,13 +119,17 @@ Use the bell in the top navigation to open camera events. In camera setup or edi
 
 **Notifications** changes only your account's camera/type/time preferences. Select common hours or individual camera schedules; hours use the NAS time zone, and an interval can cross midnight. Equal start and end times mean all day. Events arriving while excluded by your preferences remain in history as viewed, without increasing your unread count or sending a push. Previously unread events keep their status when you change preferences, and muted arrivals do not become unread later. The Android **Alerts on this phone** switch controls delivery to that phone only; it does not mark NAS events viewed or change reception.
 
-An event can open its camera's live view or available archive footage around five seconds before the event. Chronology also has event markers and previous/next navigation. Missing recordings are not created by clicking an event; brown event markers remain visible without a recording. Browser notifications require the web application to be open. Native mobile push uses a compatible provider as described below; recording triggered only by events is not included.
+An event can open its camera's live view or available archive footage around five seconds before the event. Chronology also has event markers and previous/next navigation. Missing recordings are not created by clicking an event; brown event markers remain visible without a recording. Browser notifications require the web application to be open. Native mobile push uses a compatible provider as described below.
 
-Identical active triggers less than 45 seconds apart are discarded before history and push delivery. Each repeat advances the sliding interval; separate cameras, rules, types and reported object classes have independent intervals. ONVIF endings are still processed. The system does not create an expandable list of suppressed repeats.
+Identical active triggers less than 45 seconds apart are suppressed in history and push delivery. Each repeat advances the sliding interval; separate cameras, rules, types and reported object classes have independent intervals. ONVIF endings are still processed, and matching activity can still extend recording.
 
 Use the eye/check icon above history to mark selected events, or all retained events when none are selected. This is a personal acknowledgement, not deletion. Events arriving after the loaded list snapshot remain unviewed. The normal published updater applies the registered schema migration for the camera reception choice; no manual database editing is required.
 
 With camera-management permission, the adjacent trash icon deletes selected events or the full retained snapshot after confirmation. After selecting the current page, **Select all matching** freezes the filtered selection across pages and permits individual exclusions. Newer arrivals are not silently added. Deletion affects shared event history and its read markers, not video files, camera configuration, personal notification settings or administrative audit history.
+
+## AI & Recording
+
+Open **AI & Recording** to configure continuous, event-based or linked recording. A camera can use its own detections or local NAS AI; enable NAS AI only on inputs you need to analyze. Existing continuous recording and pause choices carry across the update. NAS 1.0.2 installs schema 14 through the managed updater; do not edit the database manually. See the [AI & Recording guide](AI-RECORDING.md) for prebuffer options, drawing rules, emergency recording and hardware limits.
 
 ## Live mode: Fast or Stable
 
@@ -152,7 +156,7 @@ Calls temporarily use the low-latency video path and preserve the saved sound/PT
 
 KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up. The standard adapter continues to use hold-to-speak.
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.14.apk** from the [1.0.1 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.1). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.15.apk** from the [1.0.2 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.2). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.
@@ -164,7 +168,7 @@ To add an optional home-screen notification widget, open **Settings → Notifica
 
 Tap the widget to open a compact translucent panel with your account's master alert switch and camera choices. These are the same personal preferences used by the web interface; common and per-camera schedules still apply in the NAS time zone. The widget does not disable event reception or recording, clear unread history, or enable visible phone alerts by itself. Each widget stays bound to its chosen NAS/account when you switch servers in the app.
 
-The 3×1 variant shows the NAS account's actual unread-event count, including **0**. Tap the number to open that NAS's event history. Read/delete actions in the web or mobile app update the count using a separate silent channel over the existing UnifiedPush delivery service; it does not post an Android notification. No recurring NAS polling or permanent widget service is used. This variant requires an updated NAS and an available push distributor; one authenticated snapshot is also fetched when binding or opening the app. An unavailable initial count or signed-out account shows a dash, not a false zero. Android delivery/network restrictions can delay updates while the phone is offline or force-stopped. A reachable NAS is needed to load and save choices; the app explains missing NAS/push support during setup.
+The 3×1 variant has three areas: alert settings, a monitor icon for Live, and the NAS account's actual unread-event count (including **0**) for event history. Read/delete actions in the web or mobile app update the count using a silent channel over UnifiedPush; it does not post an Android notification. No recurring NAS polling or permanent widget service is used. The count requires a compatible NAS and an available push distributor; one authenticated snapshot is also fetched when binding or opening the app. An unavailable count or signed-out account shows a dash, not a false zero. Android delivery restrictions can delay updates while the phone is offline or force-stopped.
 
 Live view, low-latency PTZ where supported, recordings, clips, synchronized chronology, camera management, storage, status, backups and NAS updates use the server's existing permissions and protected operations. Missing footage, an offline camera or unsupported PTZ capability is not silently replaced with another camera's video.
 

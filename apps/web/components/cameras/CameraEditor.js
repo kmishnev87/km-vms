@@ -4,7 +4,7 @@ import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useSt
 import AuthenticatedPreviewImage from "../AuthenticatedPreviewImage";
 import { OperationDialog, useModalBodyScrollLock } from "../OperationFeedback";
 import { CAMERA_MANAGEMENT_FIELDS, MAX_RETENTION_DAYS, cameraAssignedProfile, cameraCheckIsCurrent, cameraManagementKey, cameraProfileGroups, cameraProfileHasMetadata, cameraProfilePath, cameraSelectedSource, cameraSourceConflict, cameraStreamKey, cameraStreamRoles } from "../../lib/cameraEditor";
-import { useLocaleText } from "../../lib/i18n";
+import { useI18n, useLocaleText } from "../../lib/i18n";
 import CameraDeviceSettings from "./CameraDeviceSettings";
 import useCameraEditor from "./useCameraEditor";
 import CameraDiscoveryDialog, { CameraSearchIcon } from "./CameraDiscoveryDialog";
@@ -44,6 +44,7 @@ function streamDescription(profile, result, copy) {
 
 export default function CameraEditor({ camera = null, onClose, onSaved }) {
   const copy = useLocaleText("cameras");
+  const { t } = useI18n();
   const editor = useCameraEditor(camera, copy, onSaved);
   const { form, patch, section, setSection, device, preview, operation, error, notice } = editor;
   const childReturnFocusRef = useRef(null);
@@ -172,18 +173,8 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
 
   function renderRecording() {
     return <><section className="cameraFlowRecordSection">
-      <h3>{copy.editorRecordingRules}</h3><p className="cameraFlowHint">{copy.editorRecordingHelp}</p>
+      <h3>{copy.editorRecordingRules}</h3><p className="cameraFlowHint">{t("aiRecording.camera_storage_note")}</p>
       <div className="cameraFlowFields">
-        <Field label={copy.editorRecordingEnabled}>
-          <select className="select" value={form.enabled ? "on" : "off"} onChange={(event) => patch("enabled", event.target.value === "on")} disabled={busy}>
-            <option value="on">{copy.editorRecordOn}</option><option value="off">{copy.editorRecordOff}</option>
-          </select>
-        </Field>
-        <Field label={copy.recordingMode}>
-          <select className="select" value={form.recording_mode} onChange={(event) => patch("recording_mode", event.target.value)} disabled={busy}>
-            <option value={form.recording_mode}>{form.recording_mode === "always" ? copy.always : form.recording_mode}</option>
-          </select>
-        </Field>
         {input("segment_minutes", copy.segmentDuration, { type: "number", min: 1, hint: copy.minutesShort })}
         {input("retention_days", copy.retentionDays, { type: "number", min: 1, max: MAX_RETENTION_DAYS, hint: copy.daysShort })}
         {input("storage_quota_gb", copy.archiveLimitGb, { type: "number", min: 1 })}
@@ -206,6 +197,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
         {capability?.status === "unknown" ? <button type="button" className="cameraFlowTextButton" disabled={busy} onClick={editor.refreshEventCapability}>{copy.editorEventsRetry}</button> : null}
       </div>
       <p className="cameraFlowHint">{copy.editorReceiveEventsHelp}</p>
+      {camera?.events_enabled && !form.events_enabled ? <p className="cameraFlowHint" role="status">{t("aiRecording.camera_event_warning")}</p> : null}
     </section>;
   }
 
@@ -302,7 +294,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
       <div className="cameraFlowReviewGroup"><div className="cameraFlowSectionHead"><h4>{copy.editorVideoRecording}</h4><button type="button" className="cameraFlowTextButton" onClick={() => navigate("video")}>{copy.edit}</button></div>
         <dl>{sourceGroups.length > 1 ? row(copy.editorSource, `${copy.editorSource} ${selectedSource?.channel ?? sourceGroups.indexOf(selectedSource) + 1}`) : null}
           {row(copy.recordStream, `${roleLabel(form.default_record_stream)} — ${streamDescription(assigned(form.default_record_stream), currentResult(form.default_record_stream), copy)}`)}
-          {row(copy.liveStream, `${roleLabel(form.default_live_stream)} — ${streamDescription(assigned(form.default_live_stream), currentResult(form.default_live_stream), copy)}`)}{row(copy.recording, form.enabled ? copy.editorRecordOn : copy.editorRecordOff)}
+          {row(copy.liveStream, `${roleLabel(form.default_live_stream)} — ${streamDescription(assigned(form.default_live_stream), currentResult(form.default_live_stream), copy)}`)}
           {row(copy.segmentDuration, `${form.segment_minutes} ${copy.minutesShort}`)}{row(copy.retentionDays, `${form.retention_days} ${copy.daysShort}`)}{row(copy.limit, `${form.storage_quota_gb} ${copy.gbShort}`)}</dl>
         {form.protocol === "onvif" ? <dl>{row(copy.editorReceiveEvents, form.events_enabled ? copy.editorEventsOn : copy.editorEventsOff)}</dl> : null}
       </div>

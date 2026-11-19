@@ -80,12 +80,13 @@ def test_real_bootstrap_9_to_10_then_current_schema_preserves_signed_history(for
         actor_user_id=1, actor_subject="preserved-test-user", actor_role="owner") == 2
     complete_transition(db, new, generation, 11, terminal=False)
     complete_transition(db, new, generation, 12, terminal=False)
-    complete_transition(db, new, generation, 13)
+    complete_transition(db, new, generation, 13, terminal=False)
+    complete_transition(db, new, generation, 14)
     control.validate_exact_target_noop(db)
     control._validate_persistent_bootstrap_evidence(db, proof, current_generation=2)
     assert business_snapshot(db) == before
     row = db.get(SchemaMigrationControl, "current")
-    assert row.target_schema_version == 13 and row.target_release == new.target_release
+    assert row.target_schema_version == 14 and row.target_release == new.target_release
     assert db.execute(text("SELECT events_enabled FROM cameras WHERE id=1")).scalar_one() is False
 
 

@@ -10,6 +10,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import ru.kmvms.mobile.core.EventAction
 import ru.kmvms.mobile.data.*
 import ru.kmvms.mobile.push.NotificationNavigation
 import java.util.UUID
@@ -20,7 +21,7 @@ import ru.kmvms.mobile.push.PushStore
 /** Isolated host IDs; runner grants BIND_APPWIDGET only to the debug package. */
 @RunWith(AndroidJUnit4::class)
 class AlertCountWidgetHostTest {
-    @Test fun twoProvidersHaveDistinctSizesAndOnlyTheCountOpensTheBoundNasHistory() {
+    @Test fun threeByOneOpensLiveAndHistoryForItsBoundNas() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val manager = AppWidgetManager.getInstance(context)
         val host = AppWidgetHost(context, 117202611)
@@ -41,15 +42,21 @@ class AlertCountWidgetHostTest {
                 val info = manager.getAppWidgetInfo(id)
                 assertEquals(if (variant == WidgetVariant.COUNT) 3 else 2, info.targetCellWidth)
                 assertEquals(1, info.targetCellHeight)
-                val intent = Intent().setAction(AlertWidgetProvider.OPEN_EVENTS).setData(Uri.parse("kmvmswidget://events/$id"))
-                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                val accepted = AlertWidgetProvider.openEvents(context, intent)
-                assertEquals(variant == WidgetVariant.COUNT, accepted)
-                if (accepted) {
-                    assertEquals(one.id, NotificationNavigation.pending.value?.profileId)
-                    assertNull(NotificationNavigation.pending.value?.eventId)
-                    assertEquals(two.id, vault.selectedId())
-                    NotificationNavigation.pending.value?.let { NotificationNavigation.consume(it.key) }
+                for ((action, address, expected) in listOf(
+                    Triple(AlertWidgetProvider.OPEN_LIVE, "live", EventAction.LIVE),
+                    Triple(AlertWidgetProvider.OPEN_EVENTS, "events", EventAction.OPEN),
+                )) {
+                    val intent = Intent(action, Uri.parse("kmvmswidget://$address/$id"))
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                    val accepted = AlertWidgetProvider.openDestination(context, intent)
+                    assertEquals(variant == WidgetVariant.COUNT, accepted)
+                    if (accepted) {
+                        assertEquals(one.id, NotificationNavigation.pending.value?.profileId)
+                        assertEquals(expected, NotificationNavigation.pending.value?.action)
+                        assertNull(NotificationNavigation.pending.value?.eventId)
+                        assertEquals(two.id, vault.selectedId())
+                        NotificationNavigation.pending.value?.let { NotificationNavigation.consume(it.key) }
+                    }
                 }
                 AlertWidgetProvider.render(context, id)
             }
@@ -75,7 +82,7 @@ class AlertCountWidgetHostTest {
             PushStore(context).disable(one.id, all = true)
             service.onMessage(PushMessage(value.copy(revision = 5, count = 99).json().toString().toByteArray(), true), route.instance)
             assertEquals(7, WidgetUnreadStore(context).get(one)?.count)
-            assertFalse(AlertWidgetProvider.openEvents(context, Intent().setAction(AlertWidgetProvider.OPEN_EVENTS)
+            assertFalse(AlertWidgetProvider.openDestination(context, Intent().setAction(AlertWidgetProvider.OPEN_EVENTS)
                 .setData(Uri.parse("kmvmswidget://events/999999"))
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, 999999)))
         } finally {

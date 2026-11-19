@@ -357,6 +357,23 @@ function cameraWarnings(domain, items) {
   }
 }
 
+function cameraSourceWarnings(domain, items) {
+  for (const issue of asArray(domain.source_issues)) {
+    if (!["ai", "camera"].includes(issue?.kind) || !Number.isSafeInteger(issue.camera_id) || issue.camera_id <= 0) continue;
+    const cameras = asArray(issue.cameras);
+    if (!cameras.length) continue;
+    const ai = issue.kind === "ai";
+    pushBanner(items, {
+      id: `camera-source-${issue.kind}-${issue.camera_id}`,
+      domain: "cameras", severity: "warning", affected_count: cameras.length,
+      source_issue: issue,
+      title: ai ? "AI не анализирует видео" : "Приём событий камеры прерван",
+      action: { href: `${ai ? "/ai-recording" : "/cameras"}#camera-${issue.camera_id}`,
+        label: ai ? "Открыть AI и запись" : "Открыть камеру" },
+    });
+  }
+}
+
 function liveWarnings(domain, items) {
   const liveItems = asArray(domain.items).filter((item) => {
     const reasons = asArray(item.reason_codes);
@@ -463,7 +480,10 @@ export function buildOperatorWarnings(runtimeStatus, options = {}) {
 
   if (include.has("storage")) storageWarnings(asObject(domains.storage), items);
   if (include.has("recorder")) recorderWarnings(asObject(domains.recorder), items);
-  if (include.has("cameras")) cameraWarnings(asObject(domains.cameras), items);
+  if (include.has("cameras")) {
+    cameraWarnings(asObject(domains.cameras), items);
+    if (options.includeSourceIssues) cameraSourceWarnings(asObject(domains.cameras), items);
+  }
   if (include.has("live")) liveWarnings(asObject(domains.live), items);
   if (include.has("retention")) retentionWarnings(asObject(domains.retention), items);
   if (include.has("reconciliation")) reconciliationWarnings(asObject(domains.reconciliation), items);
@@ -472,6 +492,8 @@ export function buildOperatorWarnings(runtimeStatus, options = {}) {
   // with an empty explanation list, even if its reason is not mapped yet.
   for (const domainName of include) {
     const domain = asObject(domains[domainName]);
+    if (domainName === "cameras" && !options.includeSourceIssues && asArray(domain.source_issues).length
+        && !asArray(domain.items).some(item => ["warning", "error"].includes(item.severity))) continue;
     if (["warning", "error"].includes(domain.severity) && !items.some((item) => item.domain === domainName)) {
       pushBanner(items, { id: `${domainName}-status-unexplained`, domain: domainName, severity: domain.severity,
         title: "Раздел требует внимания", message: "Раздел сообщает о проблеме, но подробная причина не получена. Обновите состояние или откройте диагностику.",
@@ -517,7 +539,7 @@ function isPendingIntegrityEvidence(domain) {
 
 export function buildDashboardStatusSummary(runtimeStatus, options = {}) {
   const domains = asObject(runtimeStatus?.domains);
-  const warnings = buildOperatorWarnings(runtimeStatus, { limit: options.limit || MAX_BANNERS });
+  const warnings = buildOperatorWarnings(runtimeStatus, { includeSourceIssues: true, limit: options.limit || MAX_BANNERS });
   const rows = Object.keys(DOMAIN_PRIORITY).map((domainName) => {
     const domain = asObject(domains[domainName]);
     const severity = effectiveDomainSeverity(domainName, domain);

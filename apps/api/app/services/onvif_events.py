@@ -28,6 +28,7 @@ ANALYTICS_NS = "http://www.onvif.org/ver20/analytics/wsdl"
 MAX_XML_BYTES = 512 * 1024
 MAX_MESSAGES = 64
 PULL_SECONDS = 60
+SUBSCRIPTION_MARGIN_SECONDS = 2
 EVENT_KINDS = ("motion", "person", "vehicle", "animal", "intrusion", "line_crossing",
                "loitering", "tamper", "audio", "wrong_direction", "fire")
 # 'other' is only a legacy/diagnostic value, not a new history subscription kind.
@@ -289,12 +290,16 @@ def safe_endpoint(address, host, port, *, fallback="/onvif/event_service"):
 
 class BoundedTransport(Transport):
     def post(self, address, message, headers):
+        budget = self.operation_timeout
+        deadline = time.monotonic() + (sum(budget) if isinstance(budget, tuple) else budget)
         response = self.session.post(address, data=message, headers=headers, timeout=self.operation_timeout, stream=True, allow_redirects=False)
         try:
-            chunks, total, deadline = [], 0, time.monotonic() + 75
+            chunks, total = [], 0
             for chunk in response.iter_content(8192):
                 total += len(chunk)
-                if total > MAX_XML_BYTES or time.monotonic() > deadline:
+                if time.monotonic() > deadline:
+                    raise EventDeviceError("event_response_timeout")
+                if total > MAX_XML_BYTES:
                     raise EventDeviceError("event_response_too_large")
                 chunks.append(chunk)
             response._content = b"".join(chunks)
@@ -313,6 +318,7 @@ class DeviceClient:
         self.subscription = None
         self.references = []
         self.renew_at = 0
+        self.expires_at = 0
         self._closed = False
         self._topics = None
         self._close_lock = threading.Lock()
@@ -379,6 +385,7 @@ class DeviceClient:
 
     def subscribe(self):
         self.topics()
+        started = time.monotonic()
         value = self.service("events").CreatePullPointSubscription(InitialTerminationTime="PT5M")
         reference = attr(value, "SubscriptionReference")
         address = attr(reference, "Address")
@@ -386,27 +393,57 @@ class DeviceClient:
         self.references = [copy.deepcopy(e) for e in xml_elements(attr(reference, "ReferenceParameters"))]
         for element in self.references:
             element.set("{http://www.w3.org/2005/08/addressing}IsReferenceParameter", "true")
-        self.renew_at = time.monotonic() + self._lifetime(value) * .65
+        self._set_lifetime(value, started)
 
     @staticmethod
     def _lifetime(value):
         try:
-            return max(30, min(3600, (attr(value, "TerminationTime") - attr(value, "CurrentTime")).total_seconds()))
+            return min(3600, (attr(value, "TerminationTime") - attr(value, "CurrentTime")).total_seconds())
         except (TypeError, AttributeError):
             return 120
+
+    def _set_lifetime(self, value, started):
+        lifetime = self._lifetime(value)
+        self.expires_at = started + lifetime
+        if self.expires_at - time.monotonic() < SUBSCRIPTION_MARGIN_SECONDS + 1:
+            raise EventDeviceError("event_subscription_too_short")
+        self.renew_at = started + lifetime * .65
+
+    def renew_if_due(self):
+        started = time.monotonic()
+        remaining = self.expires_at - started
+        if remaining <= 0:
+            raise EventDeviceError("event_subscription_expired")
+        if started < self.renew_at and remaining >= SUBSCRIPTION_MARGIN_SECONDS + 1:
+            return
+        proxy = self.service("events", f"{{{EVENT_NS}}}SubscriptionManagerBinding", self.subscription)
+        with self.transport.settings(timeout=min(8, remaining)):
+            value = proxy.Renew(TerminationTime="PT5M", _soapheaders=self.references)
+        self._set_lifetime(value, started)
 
     def pull(self):
         if not self.subscription:
             self.subscribe()
-        if time.monotonic() >= self.renew_at:
-            value = self.service("events", f"{{{EVENT_NS}}}SubscriptionManagerBinding", self.subscription).Renew(
-                TerminationTime="PT5M", _soapheaders=self.references)
-            self.renew_at = time.monotonic() + self._lifetime(value) * .65
         proxy = self.service("pullpoint", address=self.subscription)
+        self.renew_if_due()
+        remaining = self.expires_at - time.monotonic()
+        margin = max(SUBSCRIPTION_MARGIN_SECONDS, min(10, remaining * .3))
+        seconds = min(PULL_SECONDS, int(remaining - margin))
+        if seconds < 1:
+            raise EventDeviceError("event_subscription_too_short")
+        # Fit the connect + read budgets inside the issued lifetime, including
+        # when a device grants fewer seconds than the requested long poll.
+        transport_window = remaining - margin + SUBSCRIPTION_MARGIN_SECONDS
+        connect = min(4, (transport_window - seconds) / 2)
+        read = min(seconds + 6, transport_window - connect - .25)
         envelope = PullMessagesEnvelope()
-        proxy._client.plugins.append(envelope)
-        with self.transport.settings(timeout=PULL_SECONDS + 10):
-            value = proxy.PullMessages(Timeout=timedelta(seconds=PULL_SECONDS), MessageLimit=MAX_MESSAGES, _soapheaders=self.references)
+        plugins = proxy._client.plugins
+        plugins.append(envelope)
+        try:
+            with self.transport.settings(timeout=(connect, read)):
+                value = proxy.PullMessages(Timeout=timedelta(seconds=seconds), MessageLimit=MAX_MESSAGES, _soapheaders=self.references)
+        finally:
+            plugins.remove(envelope)
         return envelope.notifications if envelope.notifications is not None else list(attr(value, "NotificationMessage", []) or [])[:MAX_MESSAGES]
 
     def close(self):
@@ -416,13 +453,14 @@ class DeviceClient:
             self._closed = True
         if self.subscription:
             try:
-                # A separate short-timeout transport can release a blocked PullMessages.
+                # The owning receiver calls this after its last request returns.
                 proxy = self.service("events", f"{{{EVENT_NS}}}SubscriptionManagerBinding", self.subscription)
                 proxy._binding_options["address"] = self.subscription
                 with self.transport.settings(timeout=5):
                     proxy.Unsubscribe(_soapheaders=self.references)
             except Exception:
                 pass
+        self.transport.session.close()
 
 
 def _profile_identity(profile):

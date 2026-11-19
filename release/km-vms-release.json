@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "1.0.1",
-  "tag": "v1.0.1",
-  "title": "KM VMS 1.0.1 — Recoverable camera sign-in and call audio",
-  "summary": "Android 0.8.14 lets you retry rejected camera-call credentials, verifies a new Tapo password before saving it, and restores listening when calls start while respecting speaker mute and the previous sound preference. Standard hold-to-speak is unchanged. NAS and Android live-buffer settings are unchanged.",
+  "version": "1.0.2",
+  "tag": "v1.0.2",
+  "title": "KM VMS 1.0.2 — Local AI and event-based recording",
+  "summary": "Choose how each camera records: continuously, on camera events or local NAS detections, or in sync with a linked camera. AI rules, event snapshots and archive actions connect detections to footage. Android 0.8.15 adds the same recording workspace, camera swipes and a Live shortcut in the 3×1 widget.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v1.0.1",
+  "source_ref": "v1.0.2",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -17,47 +17,54 @@
   "requires_migration": false,
   "schema_update": {
     "mode": "managed",
-    "target_version": 13
+    "target_version": 14
   },
   "changelog": [
-    "Allow repeated camera-call credential entry with inline error feedback, including after a stored password is rejected or the app is reopened.",
-    "Verify a new Tapo call password before encrypted NAS storage. Clear only the confirmed rejected stored value; network failures and access denials do not erase it.",
-    "Enable listening during calls, respect manual mute through stream/PTZ changes, and restore the prior listening preference on hang-up.",
-    "Match the speaker icon to actual output; disable it temporarily during hold-to-speak. Existing talk modes and live-buffer thresholds are unchanged.",
-    "Publish signed Android 0.8.14 and update English installation/Tapo guidance. NAS numbering advances to 1.0.1; v0.10.0 is immutable. Database schema remains 13."
+    "Set a per-camera policy in AI & Recording: continuous, camera-triggered, local-AI-triggered, or linked to another camera's actual recording.",
+    "Choose Economical, Balanced or Full quality as applicable. Set pre-event and post-event capture; suppress repeat alerts independently of recording.",
+    "Draw and edit zones and directional lines; use object classes, dwell, exclusions and schedules. Local analysis uses a compatible Intel GPU or a bounded CPU fallback.",
+    "Review AI snapshots alongside camera events, filter by source or rule, jump to available footage, and save a clip or mark a false positive.",
+    "See detection outages in System Health. Optional emergency recording temporarily protects event-based cameras; it is off by default.",
+    "Android 0.8.15 adds AI & Recording, cyclic camera swipes in Live and Chronology, an unread-only event filter and a Live shortcut in the 3×1 widget.",
+    "The managed updater moves the database to schema 14. Existing cameras are not switched to analytics or event-based recording."
   ],
   "title_i18n": {
-    "en": "KM VMS 1.0.1 — Recoverable camera sign-in and call audio",
-    "ru": "KM VMS 1.0.1 — Повторный вход в камеру и звук звонка",
-    "zh-CN": "KM VMS 1.0.1 — 摄像机登录重试与通话声音修复"
+    "en": "KM VMS 1.0.2 — Local AI and event-based recording",
+    "ru": "KM VMS 1.0.2 — Локальный AI и запись по событиям",
+    "zh-CN": "KM VMS 1.0.2 — 本地 AI 与事件录像"
   },
   "summary_i18n": {
-    "en": "Android 0.8.14 lets you retry rejected camera-call credentials, verifies a new Tapo password before saving it, and restores listening when calls start while respecting speaker mute and the previous sound preference. Standard hold-to-speak is unchanged. NAS and Android live-buffer settings are unchanged.",
-    "ru": "В Android 0.8.14 можно повторно ввести отклонённый пароль звонка. Новый пароль Tapo проверяется до сохранения. Прослушивание включается на время звонка, ручное отключение звука работает, после завершения возвращается прежняя настройка. Удержание микрофона и буферизация онлайна не менялись.",
-    "zh-CN": "Android 0.8.14 允许重试被拒绝的摄像机对讲凭据，并在保存前验证新的 Tapo 密码。通话开始时临时开启监听，尊重扬声器静音，并在挂断后恢复原有声音偏好。标准按住说话模式和实时缓冲设置保持不变。"
+    "en": "Choose how each camera records: continuously, on camera events or local NAS detections, or in sync with a linked camera. AI rules, event snapshots and archive actions connect detections to footage. Android 0.8.15 adds the same recording workspace, camera swipes and a Live shortcut in the 3×1 widget.",
+    "ru": "Для каждой камеры можно выбрать непрерывную запись, запись по событиям камеры или локального AI, а также запись вслед за другой камерой. Снимки и правила AI связывают события с архивом. Android 0.8.15 получил тот же раздел, переключение камер свайпом и кнопку онлайна в виджете 3×1.",
+    "zh-CN": "为每台摄像机选择持续录像、由摄像机事件或 NAS 本地 AI 触发的录像，或跟随关联摄像机录像。AI 规则、事件截图与录像操作相互关联。Android 0.8.15 加入相同的录像管理界面、滑动切换摄像机及 3×1 小组件的实时查看入口。"
   },
   "changelog_i18n": {
     "en": [
-      "Allow repeated camera-call credential entry with inline error feedback, including after a stored password is rejected or the app is reopened.",
-      "Verify a new Tapo call password before encrypted NAS storage. Clear only the confirmed rejected stored value; network failures and access denials do not erase it.",
-      "Enable listening during calls, respect manual mute through stream/PTZ changes, and restore the prior listening preference on hang-up.",
-      "Match the speaker icon to actual output; disable it temporarily during hold-to-speak. Existing talk modes and live-buffer thresholds are unchanged.",
-      "Publish signed Android 0.8.14 and update English installation/Tapo guidance. NAS numbering advances to 1.0.1; v0.10.0 is immutable. Database schema remains 13."
+      "Set a per-camera policy in AI & Recording: continuous, camera-triggered, local-AI-triggered, or linked to another camera's actual recording.",
+      "Choose Economical, Balanced or Full quality as applicable. Set pre-event and post-event capture; suppress repeat alerts independently of recording.",
+      "Draw and edit zones and directional lines; use object classes, dwell, exclusions and schedules. Local analysis uses a compatible Intel GPU or a bounded CPU fallback.",
+      "Review AI snapshots alongside camera events, filter by source or rule, jump to available footage, and save a clip or mark a false positive.",
+      "See detection outages in System Health. Optional emergency recording temporarily protects event-based cameras; it is off by default.",
+      "Android 0.8.15 adds AI & Recording, cyclic camera swipes in Live and Chronology, an unread-only event filter and a Live shortcut in the 3×1 widget.",
+      "The managed updater moves the database to schema 14. Existing cameras are not switched to analytics or event-based recording."
     ],
     "ru": [
-      "Повторный ввод пароля звонка с ошибкой прямо в окне: после отказа сохранённого пароля и после повторного открытия приложения.",
-      "Пароль звонка Tapo проверяется до шифрованного сохранения на NAS. Стирается только подтверждённо отклонённый старый пароль, без потери параллельно сохранённого нового.",
-      "Сетевой сбой и запрет доступа не стирают пароль. Уточнено различие TP-Link ID и RTSP-пароля, добавлена подсказка о разрешении стороннего доступа.",
-      "Автоматическое прослушивание на время звонка, рабочее ручное отключение динамика при смене потока и PTZ, возврат прежнего состояния звука после завершения.",
-      "Значок динамика соответствует звуку и временно неактивен при удержании микрофона. Режим разговора и пороги буферизации онлайна сохранены.",
-      "Подписанный APK 0.8.14, актуальные английские README и INSTALL. Версия NAS — 1.0.1, опубликованный v0.10.0 не изменён. Схема БД остаётся 13."
+      "В разделе «AI и запись» для каждой камеры выбирается непрерывная, событийная или связанная запись. Связанная камера пишет вместе с выбранной камерой-источником.",
+      "Профили «Экономичный», «Сбалансированный» и «Полное качество» управляют записью до и после события. Фильтрация повторов в уведомлениях не мешает продлевать запись.",
+      "Локальная аналитика: зоны, направленные линии, классы объектов, пребывание в зоне, исключения и расписание. Поддерживаются совместимый Intel GPU и ограниченный режим на CPU.",
+      "Снимки AI доступны вместе с событиями камер. Есть фильтрация по источнику или правилу, переход к доступной записи, сохранение клипа и отметка ложного срабатывания.",
+      "Сбои источников событий видны в «Состоянии системы». Опциональная аварийная запись защищает событийные камеры; по умолчанию она выключена.",
+      "Android 0.8.15: раздел «AI и запись», циклическое переключение камер свайпом в онлайне и хронологии, фильтр непрочитанных и быстрый переход в онлайн из виджета 3×1.",
+      "Штатное обновление переводит базу на схему 14. Камеры не переключаются на AI или событийную запись без выбора пользователя."
     ],
     "zh-CN": [
-      "摄像机对讲凭据被拒绝后可重新输入，并在窗口内显示错误；已保存密码失效或重新打开应用后也能再次输入。",
-      "新的 Tapo 本地对讲密码先验证再加密保存至 NAS。仅清除确认被拒绝的同一份旧凭据，保留并发更新的新密码；网络失败和访问策略拒绝不会删除密码。",
-      "通话期间自动开启监听，切换码流或 PTZ 时保留手动扬声器静音，挂断后恢复通话前的声音偏好。",
-      "扬声器图标反映实际音频输出，标准按住说话抑制回声时暂时禁用。现有对讲模式及实时缓冲阈值不变。",
-      "发布签名 Android 0.8.14，更新英文 README 及 Tapo 第三方访问说明；NAS 版本推进至 1.0.1，不改写已发布的 v0.10.0，数据库架构仍为 13。"
+      "在「AI 与录像」中逐台选择持续录像、摄像机事件触发、本地 AI 触发或关联录像。关联摄像机跟随所选设备的实际录像状态。",
+      "按需选择经济、均衡或全画质方案，设置事件前后的录像时长。过滤重复提醒不会中断录像延续。",
+      "绘制并编辑区域和带方向的警戒线，设置对象类别、停留时间、排除区域和计划。本地分析使用兼容的 Intel GPU 或受限的 CPU 回退模式。",
+      "在摄像机事件历史中查看 AI 截图，按来源或规则筛选，跳转到可用录像、保存片段或标记误报。",
+      "在系统健康页面查看检测故障。可选的应急录像可以临时保护事件录像，默认关闭。",
+      "Android 0.8.15 新增 AI 与录像管理、实时与时间轴中的循环滑动切换、未读事件筛选及 3×1 小组件的实时查看入口。",
+      "受管理的更新将数据库升级至架构 14，不会自行将已有摄像机改为 AI 或事件触发录像。"
     ]
   }
 }

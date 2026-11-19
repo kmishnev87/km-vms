@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import Base
 from app.services import bootstrap, schema_update_control as control
-from app.services.schema_migrations import CAMERA_TALK_MIGRATION, MigrationRegistry, SchemaMigrationBlocked, execute_migration_plan, validate_current_target_schema
+from app.services.schema_migrations import CAMERA_TALK_MIGRATION, AI_RECORDING_MIGRATION, MigrationRegistry, SchemaMigrationBlocked, execute_migration_plan, validate_current_target_schema
 from app.services.schema_runtime_compatibility import RuntimeCompatibilityBlocked
 
 URL = os.getenv("KMVMS_STAGE3_POSTGRES_URL")
@@ -43,7 +43,7 @@ def test_exact_fresh_and_upgraded_target_shapes(talk_database, retired):
             db.execute(text("ALTER TABLE system_settings ADD COLUMN system_name VARCHAR(100) NULL")); db.commit()
         observed = control.database_shape_fingerprint(db)
         assert observed in control.TARGET_SHAPE_FINGERPRINTS, (retired, observed)
-        assert validate_current_target_schema(db)["schema_version"] == 13
+        assert validate_current_target_schema(db)["schema_version"] == 14
         assert inspect(db.connection()).get_columns("cameras")
 
 
@@ -60,6 +60,8 @@ def source12(engine):
                                 started_at=datetime(2026, 11, 17), status="ready", container_format="mkv"))
         db.commit()
         db.execute(text("ALTER TABLE cameras DROP COLUMN talk_password_encrypted"))
+        db.execute(text("ALTER TABLE cameras DROP COLUMN recording_policy, DROP COLUMN recording_signal_state"))
+        db.execute(text("ALTER TABLE system_settings DROP COLUMN event_recording_emergency_enabled"))
         db.execute(text("TRUNCATE schema_version_state, schema_migration_history"))
         db.commit()
         from test_schema_migration_runner_stage3 import seed_state
@@ -72,14 +74,16 @@ def test_schema12_migration_preserves_credentials_settings_and_recordings(talk_d
         before = {table: [dict(row) for row in db.execute(text(f'SELECT * FROM "{table}"')).mappings()] for table in ("users", "system_settings", "recording_segments")}
         camera_before = dict(db.execute(text("SELECT * FROM cameras WHERE id=1")).mappings().one())
         result = execute_migration_plan(db)
-        assert result["executed_migrations"] == [CAMERA_TALK_MIGRATION.migration_id]
+        assert result["executed_migrations"] == [CAMERA_TALK_MIGRATION.migration_id, AI_RECORDING_MIGRATION.migration_id]
         assert control.target_shape_is_exact(db)[0]
-        assert validate_current_target_schema(db)["schema_version"] == 13
+        assert validate_current_target_schema(db)["schema_version"] == 14
         assert execute_migration_plan(db)["executed_migrations"] == []
         for table, rows in before.items():
             assert [dict(row) for row in db.execute(text(f'SELECT * FROM "{table}"')).mappings()] == rows
         camera_after = dict(db.execute(text("SELECT * FROM cameras WHERE id=1")).mappings().one())
         assert camera_after.pop("talk_password_encrypted") is None
+        assert camera_after.pop("recording_policy") is None
+        assert camera_after.pop("recording_signal_state") is None
         assert camera_after == camera_before
 
 

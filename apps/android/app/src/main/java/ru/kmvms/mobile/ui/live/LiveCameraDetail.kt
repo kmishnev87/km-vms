@@ -29,6 +29,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.core.Stream
+import ru.kmvms.mobile.core.CameraStep
 import ru.kmvms.mobile.data.Camera
 import ru.kmvms.mobile.media.LiveController
 import ru.kmvms.mobile.media.VideoStatus
@@ -40,7 +41,8 @@ import kotlin.math.roundToInt
 @UnstableApi
 @Composable fun LiveCameraDetail(camera: Camera, capability: PtzCapabilities?, controller: LiveController,
                                  immersive: Boolean, fullscreen: () -> Unit, close: () -> Unit,
-                                 message: (String) -> Unit, mayTalk: Boolean = false) {
+                                 message: (String) -> Unit, mayTalk: Boolean = false,
+                                 onCameraSwipe: ((CameraStep) -> Unit)? = null) {
     val context = LocalContext.current
     val talk = remember(controller, camera.id, mayTalk) {
         if (mayTalk) TalkController(context.applicationContext, controller.api, camera.id) else null
@@ -68,7 +70,8 @@ import kotlin.math.roundToInt
     }
     val ready = video?.status == VideoStatus.PLAYING
     LaunchedEffect(handle, ready) { if (!ready) handle?.stop() }
-    Column(Modifier.fillMaxSize().background(if (immersive) Color.Black else MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize().testTag("live-detail-${camera.id}")
+        .background(if (immersive) Color.Black else MaterialTheme.colorScheme.background)) {
         if (!immersive) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) }
             Text(camera.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 1)
@@ -79,7 +82,8 @@ import kotlin.math.roundToInt
                 onTap = { if (!immersive) fullscreen() },
                 aspect = if (playback?.stream == Stream.MAIN) camera.mainAspect else camera.subAspect,
                 onPoint = { x, y -> if (ready) handle?.point(x, y) },
-                onArea = { left, top, right, bottom -> if (ready) handle?.area(left, top, right, bottom) })
+                onArea = { left, top, right, bottom -> if (ready) handle?.area(left, top, right, bottom) },
+                onCameraSwipe = onCameraSwipe)
             LiveCameraCaption(camera.name, video?.hlsFallback == true, Modifier.align(Alignment.CenterStart))
             Row(Modifier.align(Alignment.TopEnd).padding(10.dp).background(Color(0xB3233044), RoundedCornerShape(12.dp)).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {

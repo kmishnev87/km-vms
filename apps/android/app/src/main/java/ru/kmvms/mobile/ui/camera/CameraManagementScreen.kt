@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -98,7 +99,7 @@ import java.util.UUID
                             }
                             Row(Modifier.height(18.dp).testTag("camera-status-${camera.id}"),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
                                 Canvas(Modifier.size(7.dp)) { drawCircle(statusColor) }
-                                Text(stringResource(when(status) {
+                                Text(stringResource(if(!camera.enabled) R.string.rec_status_paused else when(status) {
                                     CameraCardStatus.RECORDING -> R.string.camera_recording_now
                                     CameraCardStatus.STOPPED -> R.string.camera_not_recording
                                     CameraCardStatus.STARTING -> R.string.camera_recording_starting
@@ -135,7 +136,9 @@ import java.util.UUID
 @Composable private fun CompactRecordingSwitch(checked:Boolean,enabled:Boolean,modifier:Modifier,onClick:()->Unit) {
     val track = if(checked)Color(0xFFDBEAFE) else Color(0xFFE2E8F0)
     val thumb = if(checked)Color(0xFF3B82F6) else Color(0xFF94A3B8)
-    Box(modifier.size(48.dp).toggleable(checked,enabled=enabled,role=Role.Switch,onValueChange={onClick()}),contentAlignment=Alignment.Center) {
+    val action = stringResource(if(checked)R.string.rec_pause else R.string.rec_resume)
+    Box(modifier.size(48.dp).toggleable(checked,enabled=enabled,role=Role.Switch,onValueChange={onClick()})
+        .semantics { contentDescription = action },contentAlignment=Alignment.Center) {
         Canvas(Modifier.size(36.dp,22.dp)) {
             val opacity=if(enabled)1f else .45f
             drawRoundRect(track.copy(alpha=opacity),cornerRadius=CornerRadius(size.height/2))

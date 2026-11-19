@@ -2034,7 +2034,7 @@ def validate_current_target_schema(db: Session) -> dict[str, Any]:
         or state.status not in SAFE_STATUSES
     ):
         raise RuntimeError("current_target_schema_state_invalid")
-    return _camera_talk_verify(db)
+    return _ai_recording_verify(db)
 
 
 STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
@@ -2247,6 +2247,62 @@ CAMERA_TALK_MIGRATION = MigrationDefinition(
 )
 
 
+AI_RECORDING_COLUMNS = {
+    "cameras": {"recording_policy": "JSON NULL", "recording_signal_state": "JSON NULL"},
+    "system_settings": {"event_recording_emergency_enabled": "BOOLEAN NOT NULL DEFAULT FALSE"},
+}
+
+
+def _ai_recording_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.schema_version != 13 or state.baseline_id != CURRENT_BASELINE_ID or state.status not in SAFE_STATUSES:
+        raise RuntimeError("ai_recording_source_schema_invalid")
+    _camera_talk_verify(db)
+    return {"source_schema_version": 13}
+
+
+def _ai_recording_apply(db: Session) -> dict[str, Any]:
+    added = []
+    for table, declarations in AI_RECORDING_COLUMNS.items():
+        columns = {item["name"] for item in inspect(db.connection()).get_columns(table)}
+        for name, ddl in declarations.items():
+            if name not in columns:
+                db.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                added.append(f"{table}.{name}")
+    # Deliberately no UPDATE of cameras, enable flags, recording modes or history.
+    return {"added_columns": added}
+
+
+def _ai_recording_verify(db: Session) -> dict[str, Any]:
+    result = _camera_talk_verify(db)
+    inspector = inspect(db.connection())
+    for table, declarations in AI_RECORDING_COLUMNS.items():
+        columns = {item["name"]: item for item in inspector.get_columns(table)}
+        for name, ddl in declarations.items():
+            column = columns.get(name)
+            if column is None or str(column["type"]).upper() != ddl.split()[0]:
+                raise RuntimeError("ai_recording_column_type_invalid")
+            if bool(column["nullable"]) != (ddl == "JSON NULL"):
+                raise RuntimeError("ai_recording_column_nullability_invalid")
+            if ddl != "JSON NULL" and str(column.get("default") or "").strip("()'\"").lower() not in {"false", "0"}:
+                raise RuntimeError("ai_recording_emergency_default_not_off")
+    return {**result, "schema_version": 14, "ai_recording": "prepared_not_active"}
+
+
+AI_RECORDING_MIGRATION = MigrationDefinition(
+    migration_id="ai_recording_foundation_schema_v14", from_version=13, to_version=14,
+    description="Prepare bounded recording policies and signal state; emergency recording remains default-off.",
+    risk=RISK_ADDITIVE_SAFE, transaction_mode="session_transaction",
+    preflight=_ai_recording_preflight, apply=_ai_recording_apply, verify=_ai_recording_verify,
+    safe_failure_summary="AI and recording foundation migration failed safely.",
+    rollback_note="Additive nullable camera fields and default-off settings; existing recording and archive data are unchanged.",
+    runtime_compatibility_floor=12,
+    definition_material={"source_schema_version": 13, "target_schema_version": 14,
+                         "columns": AI_RECORDING_COLUMNS, "existing_rows_preserved": True,
+                         "recording_activation": False},
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -2261,6 +2317,7 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE172_EVENT_RECEIVING_MIGRATION,
         ONLINE_MODE_MIGRATION,
         CAMERA_TALK_MIGRATION,
+        AI_RECORDING_MIGRATION,
     ),
     published_variants=(
         STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,

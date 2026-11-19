@@ -13,7 +13,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import aliased
 
 from app.models.audit_event import AuditEvent
@@ -27,6 +27,7 @@ PREFERENCE_KEY = "camera_events"
 RETENTION_DAYS = 30
 MAX_EVENTS = 100_000
 MAX_PAGE = 100
+AI_ORIGIN = "nas_ai"
 _listeners = {}
 _listeners_guard = threading.Lock()
 
@@ -111,7 +112,8 @@ def save_preferences(db, user_id, value):
 
 def read_expression(user_id):
     marker = aliased(AuditEvent)
-    return select(marker.id).where(marker.category == READ_CATEGORY, marker.actor_user_id == user_id, marker.target_id == AuditEvent.id).exists()
+    return or_(AuditEvent.event_metadata["ai_notify"].as_boolean().is_(False),
+               select(marker.id).where(marker.category == READ_CATEGORY, marker.actor_user_id == user_id, marker.target_id == AuditEvent.id).exists())
 
 
 def marked_read_ids(db, user_id, ids):
@@ -119,7 +121,8 @@ def marked_read_ids(db, user_id, ids):
         AuditEvent.actor_user_id == user_id, AuditEvent.target_id.in_(ids)).all()} if ids else set()
 
 
-def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread=False, user_id=None):
+def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread=False, user_id=None,
+             source=None, rule=None, condition=None):
     if camera_id is not None:
         query = query.filter(AuditEvent.target_type == "camera", AuditEvent.target_id == str(camera_id))
     if kind:
@@ -129,10 +132,26 @@ def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread
                                  AuditEvent.event_metadata["rule_kind"].as_string() == kind,
                                  (AuditEvent.event_type == "camera.other") & AuditEvent.event_metadata["topic"].as_string().in_(
                                      [topic for topic, label in LEGACY_TOPIC_KINDS.items() if label == kind])))
+    origin = AuditEvent.event_metadata["origin"].as_string()
+    if source == "ai" or rule or condition:
+        query = query.filter(origin == AI_ORIGIN)
+    elif source == "camera":
+        query = query.filter(or_(origin.is_(None), origin != AI_ORIGIN))
+    if rule and (term := rule.strip()):
+        query = query.filter(AuditEvent.event_metadata["ai_rule_name"].as_string().icontains(term, autoescape=True))
+    if condition:
+        query = query.filter(AuditEvent.event_metadata["ai_condition"].as_string() == condition)
+    # Device events retain their receipt-time semantics; NAS AI knows when it captured the frame.
+    capture = AuditEvent.event_metadata["ai_captured_epoch"].as_float()
+    use_receipt = or_(origin.is_(None), origin != AI_ORIGIN, capture.is_(None))
     if since:
-        query = query.filter(AuditEvent.created_at >= since)
+        query = query.filter(AuditEvent.created_at >= since - timedelta(seconds=5),
+            or_(and_(use_receipt, AuditEvent.created_at >= since),
+                and_(origin == AI_ORIGIN, capture >= since.replace(tzinfo=timezone.utc).timestamp())))
     if until:
-        query = query.filter(AuditEvent.created_at <= until)
+        query = query.filter(AuditEvent.created_at <= until + timedelta(minutes=10),
+            or_(and_(use_receipt, AuditEvent.created_at <= until),
+                and_(origin == AI_ORIGIN, capture <= until.replace(tzinfo=timezone.utc).timestamp())))
     if unread:
         query = query.filter(~read_expression(user_id))
     return query
@@ -143,7 +162,8 @@ def serialize(row, read=False, ctx=None):
     kind = row.event_type.removeprefix("camera.")
     if kind == "other":
         kind = LEGACY_TOPIC_KINDS.get(data.get("topic"), kind)
-    return {"id": row.id, "camera_id": int(row.target_id) if row.target_type == "camera" and str(row.target_id).isdigit() else None,
+    ai = data.get("origin") == AI_ORIGIN
+    result = {"id": row.id, "camera_id": int(row.target_id) if row.target_type == "camera" and str(row.target_id).isdigit() else None,
             "camera_name": row.target_name, "kind": kind if kind in KINDS else "other",
             "occurred_at": data.get("occurred_at") or format_storage_utc_iso(row.created_at),
             "received_at": row.created_at.replace(tzinfo=timezone.utc).isoformat(),
@@ -152,11 +172,22 @@ def serialize(row, read=False, ctx=None):
             "state_observed_at": data.get("last_seen_at") or format_storage_utc_iso(row.created_at),
             "initial_state": bool(data.get("initial_state")),
             "source_ambiguous": bool(data.get("source_ambiguous")), "occurrences": int(data.get("occurrences", 1)),
-            "read": bool(read), "state_unconfirmed": bool(data.get("state_unconfirmed")),
+            "read": bool(read or (ai and data.get("ai_notify") is False)), "state_unconfirmed": bool(data.get("state_unconfirmed")),
             "topic": str(data.get("topic") or "")[:512],
             "object_kind": data.get("object_kind") if data.get("object_kind") in {"person", "vehicle", "animal"} else None,
             "object_kinds": [kind for kind in ("person", "vehicle", "animal") if kind in (data.get("object_kinds") or [data.get("object_kind")])],
             "rule_kind": data.get("rule_kind") if data.get("rule_kind") in EVENT_KINDS else None}
+    if ai:
+        condition = data.get("ai_condition")
+        scope = data.get("ai_scope")
+        if scope not in {"frame", "zone", "line"}:
+            scope = "line" if condition == "crossing" else "zone" if condition in {"enter", "exit", "dwell"} else "frame"
+        result["ai"] = {"condition": condition, "rule_id": data.get("ai_rule_id"), "scope": scope,
+                        "rule_name": str(data.get("ai_rule_name") or "")[:48],
+                        "snapshot_available": data.get("ai_snapshot") is True,
+                        "false_positive": data.get("ai_false_positive") is True,
+                        "notify_requested": data.get("ai_notify") is True}
+    return result
 
 
 def list_camera_events(db, user_id, *, limit=50, offset=0, selection_id=None, **filters):
@@ -299,10 +330,15 @@ def delete_camera_events(db, *, ids=None, through=None, actor=None):
     return deleted
 
 
-def record_signal(db, group, camera, signal, *, diagnostics=None):
+def record_signal(db, group, camera, signal, *, diagnostics=None, history_allowed=True):
     if signal.kind not in EVENT_KINDS and signal.active is not False:
         return None  # Unknown signals belong to bounded receiver diagnostics.
     received = now_utc()
+    from app.services.ai_recording import observe_camera_signal
+    observe_camera_signal(db, group, camera, signal, received=received)
+    if not history_allowed:
+        db.commit()
+        return None
     target_type = "camera" if camera else "camera_device"
     target_id = str(camera["id"]) if camera else group["device_id"]
     name = camera["name"] if camera else " / ".join(c["name"] for c in group["cameras"])[:255]
@@ -406,6 +442,8 @@ def record_signal(db, group, camera, signal, *, diagnostics=None):
 
 
 def source_disconnected(db, group):
+    from app.services.ai_recording import invalidate_camera_signals
+    invalidate_camera_signals(db, group)
     ids = [str(c["id"]) for c in group["cameras"]] + [group["device_id"]]
     query = event_query(db).filter(AuditEvent.target_id.in_(ids), AuditEvent.event_metadata["active"].as_boolean().is_(True))
     changed = False
@@ -450,6 +488,8 @@ def updates(db, user_id, cursor=None):
 
 
 def notifications_allowed(preference, event, ctx, *, at=None):
+    if event.get("ai") is not None and event["ai"].get("notify_requested") is not True:
+        return False
     if not preference.get("notifications", True):
         return False
     if preference.get("camera_ids") is not None and event.get("camera_id") not in preference["camera_ids"]:

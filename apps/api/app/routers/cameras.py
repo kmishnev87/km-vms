@@ -92,7 +92,9 @@ from app.services.storage_operations_foundation import StorageOperationContractE
 from app.services.recording_storage import resolve_segment_file_path
 from app.services.camera_stream_dimensions import read_dimensions
 from app.services.camera_event_settings import validate_event_receiving
-from app.services.camera_events_worker import wake_camera_events
+from app.services.camera_events_worker import camera_receiving_revision, wake_camera_events
+from app.services.ai_recording import reset_recording_cutoff
+from app.services.ai_rule_frame import prune_editor_images
 from app.routers.camera_connection_helpers import persist_verified_stream_dimensions
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
@@ -762,6 +764,7 @@ def delete_camera_preview(camera_id: int) -> bool:
     preview_path = settings.camera_preview_path(camera_id)
     existed = preview_path.exists()
     preview_path.unlink(missing_ok=True)
+    prune_editor_images(camera_id)
     return existed
 
 
@@ -782,6 +785,7 @@ def update_camera(
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
+    receiving_revision = camera_receiving_revision(camera)
     raw_payload = payload.model_dump(exclude_unset=True)
     data = dict(raw_payload)
     preview_token = data.pop("preview_token", None)
@@ -865,6 +869,9 @@ def update_camera(
         preserve_manual_camera_disable(db, camera.id)
     for key, value in data.items():
         setattr(camera, key, value)
+    source_changed = receiving_revision != camera_receiving_revision(camera)
+    if source_changed or old_values["enabled"] != bool(camera.enabled):
+        reset_recording_cutoff(db, camera, keep_channel=not source_changed)
     camera.rtsp_host = next_rtsp_host
     camera.rtsp_port = next_rtsp_port
     if manual_unverified:
@@ -923,6 +930,8 @@ def enable_camera(
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
+    if not camera.enabled:
+        reset_recording_cutoff(db, camera, keep_channel=True)
     camera.enabled = True
     camera.status = "enabled"
     camera.last_error = None
@@ -957,6 +966,8 @@ def disable_camera(
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     preserve_manual_camera_disable(db, camera.id)
+    if camera.enabled:
+        reset_recording_cutoff(db, camera, keep_channel=True)
     camera.enabled = False
     camera.status = "disabled"
     camera.last_error = None

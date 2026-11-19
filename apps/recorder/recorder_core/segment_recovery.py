@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .event_buffer import PART_STAMP
+
 
 def same_file_version(left: os.stat_result, right: os.stat_result) -> bool:
     return stat.S_ISREG(right.st_mode) and all(
@@ -123,6 +125,43 @@ def matroska_has_seek_index(path: Path, size: int) -> bool:
         return False
 
 
+def buffered_mp4_has_seek_index(path: Path, size: int) -> bool:
+    """Fragmented MP4 needs SIDX for Media3 seek and clipped timeline sources.
+
+    A repaired unfragmented MP4 is also valid. Read only top-level headers,
+    never payload; FFprobe independently proves duration and video.
+    """
+    with path.open("rb") as stream:
+        position = 0
+        movie = indexed = False
+        for _ in range(128):
+            if position == size:
+                return movie
+            stream.seek(position)
+            header = stream.read(8)
+            if len(header) != 8:
+                return False
+            length, kind = int.from_bytes(header[:4], "big"), header[4:]
+            header_size = 8
+            if length == 1:
+                raw = stream.read(8)
+                if len(raw) != 8:
+                    return False
+                length, header_size = int.from_bytes(raw, "big"), 16
+            elif length == 0:
+                length = size - position
+            if length < header_size or length > size - position:
+                return False
+            if kind == b"moof":
+                return movie and indexed
+            if kind == b"moov":
+                movie = True
+            if kind == b"sidx" and length >= header_size + 24:
+                indexed = True
+            position += length
+    return False
+
+
 def inspect_closed_segment(path: Path, *, timeout: float = 3.0) -> tuple[ClosedSegment | None, str]:
     """Require duration, a seek index, and decodable video, not just first bytes."""
     try:
@@ -153,6 +192,8 @@ def inspect_closed_segment(path: Path, *, timeout: float = 3.0) -> tuple[ClosedS
         if not math.isfinite(duration) or duration <= 0:
             return None, "segment_recovery_missing_duration"
         if path.suffix.lower() == ".mkv" and not matroska_has_seek_index(path, before.st_size):
+            return None, "segment_recovery_missing_seek_index"
+        if path.suffix.lower() == ".mp4" and PART_STAMP.search(path.name) and not buffered_mp4_has_seek_index(path, before.st_size):
             return None, "segment_recovery_missing_seek_index"
         if not same_file_version(before, path.lstat()):
             return None, "segment_recovery_file_changed"

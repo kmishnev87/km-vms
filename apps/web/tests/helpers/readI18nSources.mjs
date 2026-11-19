@@ -11,6 +11,8 @@ export const I18N_SOURCE_FILES = Object.freeze([
   "lib/i18n/en.js",
   "lib/i18n/zhCN.js",
   "lib/i18n/legacyTextTranslations.js",
+  "lib/i18n/recordingCenterCopy.js",
+  "lib/i18n/aiRulesCopy.js",
 ]);
 
 function assertCompleteModuleInventory() {

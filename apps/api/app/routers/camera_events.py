@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import Response
+from starlette.responses import FileResponse, Response
 
 from app.core.permissions import user_has_permission
 from app.core.security import decrypt_text
@@ -28,6 +28,8 @@ from app.services.timezone_contract import format_system_iso, parse_api_timestam
 router = APIRouter(prefix="/camera-events", tags=["camera-events"])
 EventKind = Literal["motion", "person", "vehicle", "animal", "intrusion", "line_crossing",
                     "loitering", "tamper", "audio", "wrong_direction", "fire", "other"]
+EventSource = Literal["camera", "ai"]
+AiCondition = Literal["presence", "enter", "exit", "crossing", "dwell", "scene"]
 
 
 class CameraSchedule(BaseModel):
@@ -87,6 +89,9 @@ class FilterSelection(ReadAll):
     since: str | None = Field(None, max_length=40)
     until: str | None = Field(None, max_length=40)
     unread: StrictBool = False
+    source: EventSource | None = None
+    rule: str | None = Field(None, max_length=48)
+    condition: AiCondition | None = None
     visible_ids: list[UUID] = Field(default_factory=list, max_length=100)
 
 
@@ -99,6 +104,11 @@ class DetectorChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: StrictBool
     revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class AiReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    false_positive: StrictBool
 
 
 def _failure(code, status=409):
@@ -135,13 +145,15 @@ def history(camera_id: int | None = Query(None, ge=1), kind: EventKind | None = 
             since: str | None = Query(None, max_length=40), until: str | None = Query(None, max_length=40), unread: bool = False,
             limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100000),
             selection_id: UUID | None = None,
+            source: EventSource | None = None, rule: str | None = Query(None, max_length=48), condition: AiCondition | None = None,
             db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     start, end = _since(since, db), _since(until, db)
     if start and end and start > end:
         _failure("invalid_event_date", 422)
     try:
         return events.list_camera_events(db, user.id, camera_id=camera_id, kind=kind, since=start, until=end,
-                                        unread=unread, limit=limit, offset=offset, selection_id=selection_id)
+                                        unread=unread, limit=limit, offset=offset, selection_id=selection_id,
+                                        source=source, rule=rule, condition=condition)
     except selections.SelectionError as exc:
         _failure(exc.code)
 
@@ -153,7 +165,8 @@ def select_filtered(payload: FilterSelection, db: Session = Depends(get_db), use
         _failure("invalid_event_date", 422)
     try:
         return selections.create(db, user.id, _snapshot_cursor(payload.through),
-            {"camera_id": payload.camera_id, "kind": payload.kind, "since": start, "until": end, "unread": payload.unread}, payload.visible_ids)
+            {"camera_id": payload.camera_id, "kind": payload.kind, "since": start, "until": end, "unread": payload.unread,
+             "source": payload.source, "rule": payload.rule, "condition": payload.condition}, payload.visible_ids)
     except selections.SelectionError as exc:
         _failure(exc.code)
 
@@ -364,11 +377,60 @@ def change_detector(camera_id: int, rule_id: str, payload: DetectorChange, db: S
         _failure("detector_change_unconfirmed", 503)
 
 
-@router.get("/{event_id}/target")
-def target(event_id: UUID, mode: Literal["live", "archive"], db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
-    row = events.event_query(db).filter_by(id=str(event_id)).first()
+def event_row(db, event_id, *, lock=False):
+    query = events.event_query(db).filter_by(id=str(event_id))
+    row = (query.with_for_update() if lock else query).first()
     if row is None:
         _failure("event_not_found", 404)
+    return row
+
+
+@router.get("/{event_id}/evidence")
+def evidence(event_id: UUID, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    from app.services.ai_event_evidence import archive_evidence
+
+    row = event_row(db, event_id)
+    value = events.serialize(row, row.id in events.marked_read_ids(db, user.id, [row.id]))
+    if not value.get("ai"):
+        _failure("ai_event_not_found", 404)
+    return {"event": value, "archive": archive_evidence(db, user, value)}
+
+
+@router.get("/{event_id}/snapshot")
+def snapshot(event_id: UUID, db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    from app.services.ai_event_history import frame_path
+
+    value = events.serialize(event_row(db, event_id))
+    if not (value.get("ai") or {}).get("snapshot_available") or not value["camera_id"]:
+        _failure("ai_snapshot_not_found", 404)
+    _camera(db, value["camera_id"])
+    path = frame_path(event_id)
+    if path.is_symlink() or not path.is_file():
+        _failure("ai_snapshot_not_found", 404)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/{event_id}/review")
+def review(event_id: UUID, payload: AiReview, db: Session = Depends(get_db), user: User = Depends(require_permission("manage_cameras"))):
+    row = event_row(db, event_id, lock=True)
+    data = row.event_metadata or {}
+    if data.get("origin") != events.AI_ORIGIN:
+        _failure("ai_event_not_found", 404)
+    if bool(data.get("ai_false_positive")) != payload.false_positive:
+        row.event_metadata = {**data, "ai_false_positive": payload.false_positive}
+        audit = create_event(db=db, actor=user, category="cameras", event_type="cameras.ai_event_reviewed",
+            message_ru="Оценено срабатывание AI", message_en="AI event reviewed", target_type="camera_event",
+            target_id=row.id, metadata={"false_positive": payload.false_positive}, commit=False)
+        if audit is None:
+            _failure("ai_event_review_unavailable", 503)
+        db.commit()
+        events.notify_change()
+    return events.serialize(row, row.id in events.marked_read_ids(db, user.id, [row.id]))
+
+
+@router.get("/{event_id}/target")
+def target(event_id: UUID, mode: Literal["live", "archive"], db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
+    row = event_row(db, event_id)
     value = events.serialize(row)
     if not value["camera_id"]:
         _failure("event_source_ambiguous")
@@ -377,6 +439,13 @@ def target(event_id: UUID, mode: Literal["live", "archive"], db: Session = Depen
         return {"camera_id": camera.id, "camera_name": camera.name, "url": "/live?camera_event=" + row.id}
     if not user_has_permission(user.role, "view_timeline"):
         _failure("event_access_denied", 403)
+    if value.get("ai"):
+        from app.services.ai_event_evidence import archive_evidence
+
+        archive = archive_evidence(db, user, value)
+        if archive["state"] != "ready":
+            _failure("event_archive_pending" if archive["state"] == "pending" else "event_archive_unavailable", 404)
+        return archive
     try:
         instant = datetime.fromisoformat(value["occurred_at"].replace("Z", "+00:00"))
     except (ValueError, TypeError):

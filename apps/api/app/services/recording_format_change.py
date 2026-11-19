@@ -80,7 +80,8 @@ def format_change_status(db: Session, system: SystemSettings) -> dict:
     }
     if requested_at is None:
         return result
-    rows = [row for row in list_camera_recording_states(db) if row["enabled"] and row["recording_mode"] == "always"]
+    rows = [row for row in list_camera_recording_states(db)
+            if row.get("recording_expected", row["enabled"] and row["recording_mode"] == "always")]
     job_ids = [row["job_id"] for row in rows if row.get("job_id")]
     jobs = {job.id: job for job in db.query(RecordingJob).filter(RecordingJob.id.in_(job_ids)).all()} if job_ids else {}
     unfinalized = set(camera_id for camera_id, in (

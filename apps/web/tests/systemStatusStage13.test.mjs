@@ -64,11 +64,10 @@ for (const asset of [
 }
 
 assert.equal(home.includes("OperatorProblemBanners"), false);
-assert.equal(home.includes('href: "/system-status"'), true);
+assert.equal(home.includes('href: "/system-status"'), false);
+assert.equal(home.includes('href: "/ai-recording"'), true);
 assert.equal(home.includes('href: "/apk"'), false);
-assert.equal(home.includes("system-status-base.png"), true);
-assert.equal(home.includes("system-status-alert.png"), true);
-assert.equal(home.includes("dashboard-cards/system-status.svg"), true);
+assert.equal(home.includes("dashboard-cards/ai-recording.svg"), true);
 assert.equal(home.includes("dashboard-cards/apk.svg"), false);
 assert.equal(home.includes("dashboard-cards/storage.svg"), true);
 assert.equal(home.includes("dashboard-cards/settings.svg"), true);
@@ -80,7 +79,7 @@ const dashboardOrder = [
   'href: "/live"',
   'href: "/chronology"',
   'href: "/storage"',
-  'href: "/system-status"',
+  'href: "/ai-recording"',
   'href: "/?camera_events=1"',
   'href: "/settings"',
 ].map((needle) => home.indexOf(needle));
@@ -93,6 +92,8 @@ assert.equal(layout.includes("topUserChip"), false);
 assert.equal(layout.includes("username"), false);
 assert.equal(layout.includes('href="/storage"'), true);
 assert.equal(layout.includes("<SystemHealthIndicator"), true);
+assert.equal(indicator.includes('href="/system-status"'), true);
+assert.equal(layout.includes('href="/ai-recording"'), true);
 assert.equal(layout.indexOf("<SystemHealthIndicator") < layout.indexOf('href="/storage"'), true);
 assert.equal(layout.indexOf('href="/storage"') < layout.indexOf('href="/settings"'), true);
 assert.equal(layout.indexOf('href="/settings"') < layout.indexOf("topNavButton"), true);

@@ -27,6 +27,7 @@ import kotlin.math.max
         Section.EVENTS -> R.raw.dashboard_events
         Section.CHRONOLOGY -> R.raw.dashboard_chronology
         Section.STORAGE -> R.raw.dashboard_storage
+        Section.RECORDING_CENTER -> R.raw.dashboard_ai_recording
         Section.SYSTEM -> R.raw.dashboard_system_status
         Section.SETTINGS, Section.SERVER_SETTINGS -> R.raw.dashboard_settings
         else -> return
@@ -59,7 +60,7 @@ import kotlin.math.max
 internal val primaryNavigation = listOf(Section.HOME, Section.RECORDINGS, Section.LIVE, Section.CAMERAS, Section.EVENTS)
 
 internal val dashboardSections = listOf(Section.CAMERAS, Section.RECORDINGS, Section.CHRONOLOGY, Section.LIVE,
-    Section.SYSTEM, Section.EVENTS, Section.STORAGE, Section.SETTINGS)
+    Section.RECORDING_CENTER, Section.EVENTS, Section.STORAGE, Section.SETTINGS)
 
 internal fun menuArtwork(section: Section): Int? = when (section) {
     Section.HOME -> R.drawable.kmvms_menu_home

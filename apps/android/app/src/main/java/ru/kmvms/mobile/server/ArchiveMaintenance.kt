@@ -150,4 +150,5 @@ class ArchiveMaintenanceController(private val api:ArchiveMaintenanceApi,private
     }
     private fun failure(){mutable.update{it.copy(failures=it.failures+1)}}
     fun close(){scope.cancel()}
+    internal suspend fun awaitClosed() { scope.coroutineContext[Job]?.join() }
 }

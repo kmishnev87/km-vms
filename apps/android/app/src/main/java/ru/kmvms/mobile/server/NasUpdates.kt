@@ -198,4 +198,5 @@ class NasUpdatesController(private val api: NasUpdatesApi, private val store: Na
         }
     }
     fun close(){scope.cancel()}
+    internal suspend fun awaitClosed() { scope.coroutineContext[Job]?.join() }
 }

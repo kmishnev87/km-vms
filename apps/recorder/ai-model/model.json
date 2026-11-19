@@ -1,0 +1,16 @@
+{
+  "id": "yolox-tiny-416",
+  "version": "0.1.1rc0-kmvms.1",
+  "license": "Apache-2.0",
+  "upstream": "https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0",
+  "bytes": 20219662,
+  "sha256": "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
+  "input": "float32 BGR NCHW 1x3x416x416, letterbox 114, no normalization",
+  "output": "raw YOLOX P3/P4/P5, strides 8/16/32, COCO80, normalized boxes after class NMS",
+  "runtime": {"gpu": "OpenVINO 2025.4.0", "cpu": "ONNX Runtime 1.23.2"},
+  "class_map": {
+    "0": "person",
+    "1": "vehicle", "2": "vehicle", "3": "vehicle", "4": "vehicle", "5": "vehicle", "6": "vehicle", "7": "vehicle", "8": "vehicle",
+    "14": "animal", "15": "animal", "16": "animal", "17": "animal", "18": "animal", "19": "animal", "20": "animal", "21": "animal", "22": "animal", "23": "animal"
+  }
+}

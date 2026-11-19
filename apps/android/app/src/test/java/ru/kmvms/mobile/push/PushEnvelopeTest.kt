@@ -23,6 +23,12 @@ class PushEnvelopeTest {
             assertTrue(runCatching { PushEnvelope.parse(bytes) }.isFailure)
         }
     }
+    @Test fun aiConditionIsOptionalAndRecognizesZoneExitWithoutChangingOldMessages() {
+        assertNull(PushEnvelope.parse(body().toString().toByteArray()).aiCondition)
+        assertEquals(ru.kmvms.mobile.events.AiEventCondition.EXIT,
+            PushEnvelope.parse(body().put("ai_condition", "exit").toString().toByteArray()).aiCondition)
+        assertNull(PushEnvelope.parse(body().put("ai_condition", "unknown").toString().toByteArray()).aiCondition)
+    }
     @Test fun parsesRealNasUtcOffsetAndZIdenticallyIncludingFractionAndOtherOffsets() {
         for (value in listOf("2026-11-14T10:30:00Z", "2026-11-14T10:30:00+00:00", "2026-11-14T15:30:00+05:00")) {
             assertEquals(java.time.Instant.parse("2026-11-14T10:30:00Z"), PushEnvelope.parse(body().put("occurred_at", value).toString().toByteArray()).occurred)

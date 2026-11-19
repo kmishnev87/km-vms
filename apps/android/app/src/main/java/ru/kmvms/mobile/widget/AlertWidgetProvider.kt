@@ -12,6 +12,7 @@ import ru.kmvms.mobile.AppLocales
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.data.ProfileVault
 import ru.kmvms.mobile.MainActivity
+import ru.kmvms.mobile.push.NotificationNavigation
 
 /** No network, boot work, camera streams or periodic refresh in a home-screen widget. */
 open class AlertWidgetProvider : AppWidgetProvider() {
@@ -46,31 +47,47 @@ open class AlertWidgetProvider : AppWidgetProvider() {
             val views = RemoteViews(context.packageName, if (variant == WidgetVariant.COUNT) R.layout.alert_widget_count else R.layout.alert_widget).apply {
                 setTextViewText(R.id.alert_widget_title, localized.getString(R.string.widget_alerts))
                 setTextViewText(R.id.alert_widget_server, profile?.name ?: localized.getString(R.string.widget_configure))
-                setContentDescription(R.id.alert_widget_root, localized.getString(R.string.widget_open_for, profile?.name.orEmpty()))
-                setOnClickPendingIntent(R.id.alert_widget_root, click)
+                val settingsArea = if (variant == WidgetVariant.COUNT) R.id.alert_widget_settings else R.id.alert_widget_root
+                setContentDescription(settingsArea, localized.getString(R.string.widget_open_for, profile?.name.orEmpty()))
+                setOnClickPendingIntent(settingsArea, click)
                 if (variant == WidgetVariant.COUNT) {
                     val signedIn = profile != null && runCatching { ProfileVault(context).signIn(profile.id) }.getOrNull() != null
                     val value = profile?.takeIf { signedIn }?.let { WidgetUnreadStore(context).get(it)?.count }
                     setTextViewText(R.id.alert_widget_count, value?.toString() ?: "—")
                     setContentDescription(R.id.alert_widget_count, if (value == null) localized.getString(R.string.widget_count_unavailable)
                         else localized.getString(R.string.widget_unread_count, value))
-                    val events = Intent(context, MainActivity::class.java).setAction(OPEN_EVENTS)
-                        .setData(Uri.parse("kmvmswidget://events/$id")).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    setOnClickPendingIntent(R.id.alert_widget_count, if (configured)
-                        PendingIntent.getActivity(context, id, events, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE) else click)
+                    setContentDescription(R.id.alert_widget_live, localized.getString(R.string.live))
+                    setOnClickPendingIntent(R.id.alert_widget_live, if (configured) destinationClick(context, id, OPEN_LIVE, "live") else click)
+                    setOnClickPendingIntent(R.id.alert_widget_count, if (configured) destinationClick(context, id, OPEN_EVENTS, "events") else click)
                 }
             }
             AppWidgetManager.getInstance(context).updateAppWidget(id, views)
         }
         internal const val OPEN_EVENTS = "ru.kmvms.mobile.WIDGET_EVENTS"
-        internal fun openEvents(context: Context, intent: Intent?): Boolean {
-            if (intent?.action != OPEN_EVENTS || intent.data?.scheme != "kmvmswidget" || intent.data?.host != "events") return false
+        internal const val OPEN_LIVE = "ru.kmvms.mobile.WIDGET_LIVE"
+
+        private fun destinationClick(context: Context, id: Int, action: String, host: String): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java).setAction(action)
+                .setData(Uri.parse("kmvmswidget://$host/$id"))
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            return PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        }
+
+        internal fun openDestination(context: Context, intent: Intent?): Boolean {
+            intent ?: return false
+            val host = when (intent.action) {
+                OPEN_EVENTS -> "events"
+                OPEN_LIVE -> "live"
+                else -> return false
+            }
+            val data = intent.data ?: return false
+            if (data.scheme != "kmvmswidget" || data.host != host || data.query != null || data.fragment != null) return false
             val id = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
-            if (widgetVariant(context, id) != WidgetVariant.COUNT || intent.data?.path != "/$id") return false
+            if (widgetVariant(context, id) != WidgetVariant.COUNT || data.path != "/$id") return false
             val binding = AlertWidgetStore(context).binding(id) ?: return false
             if (ProfileVault(context).profiles().none(binding::matches)) return false
-            ru.kmvms.mobile.push.NotificationNavigation.events(binding.profileId)
+            if (host == "live") NotificationNavigation.live(binding.profileId) else NotificationNavigation.events(binding.profileId)
             return true
         }
     }

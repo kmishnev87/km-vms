@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
+import org.json.JSONObject
 import org.junit.Test
 import ru.kmvms.mobile.core.EventAction
 import ru.kmvms.mobile.core.ServerAddress
@@ -64,6 +65,25 @@ class EventVideoNavigationTest {
             repeat(2) { server.enqueue(MockResponse().setBody("""{"has_video":false}""")) }
             val result = navigator(server).open(event, EventAction.RECORDING, zone, occurred.plusSeconds(10_000))
             assertNull(result.request)
+            assertEquals(2, server.requestCount)
+        }
+    }
+
+    @Test fun aiRequiresExactArchiveProofAndUsesItsUtcOffset() = runBlocking {
+        MockWebServer().use { server ->
+            val ai = JSONObject().put("condition", "exit").put("rule_name", "Gate")
+            val row = JSONObject().put("id", event.id).put("camera_id", 3).put("camera_name", "Fixture")
+                .put("kind", "intrusion").put("occurred_at", occurred.toString()).put("ai", ai)
+            val body = JSONObject().put("event", row)
+            val aiEvent = CameraEvent.from(row, zone)
+            server.enqueue(MockResponse().setBody(body.put("archive", JSONObject().put("state", "unavailable")).toString()))
+            assertNull(navigator(server).open(aiEvent, EventAction.RECORDING, zone, occurred.plusSeconds(240)).request)
+            assertEquals("/api/camera-events/${event.id}/evidence", server.takeRequest().path)
+            val start = occurred.minusSeconds(2)
+            server.enqueue(MockResponse().setBody(body.put("archive", JSONObject().put("state", "ready")
+                .put("camera_id", 3).put("timestamp_utc", start.toString())).toString()))
+            assertEquals(start.toEpochMilli(),
+                navigator(server).open(aiEvent, EventAction.RECORDING, zone, occurred.plusSeconds(240)).request?.archiveTime)
             assertEquals(2, server.requestCount)
         }
     }

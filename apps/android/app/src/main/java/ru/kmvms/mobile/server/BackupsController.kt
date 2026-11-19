@@ -123,4 +123,5 @@ class BackupsController(private val api:ServerApi,private val store:BackupAttemp
     }
     private fun failure(){mutable.update{it.copy(failures=it.failures+1)}}
     fun close(){scope.cancel()}
+    internal suspend fun awaitClosed() { scope.coroutineContext[Job]?.join() }
 }

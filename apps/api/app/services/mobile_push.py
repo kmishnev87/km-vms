@@ -105,10 +105,13 @@ def push_timestamp(value):
 
 def event_payload(event):
     """No NAS address, password, access token, media URL, XML or arbitrary command."""
-    return json.dumps({"v": 1, "type": "camera_event", "event_id": event["id"],
+    data = {"v": 1, "type": "camera_event", "event_id": event["id"],
         "camera_id": event.get("camera_id"), "camera_name": (event.get("camera_name") or "")[:160],
         "kind": event["kind"], "objects": event.get("object_kinds") or [],
-        "occurred_at": push_timestamp(event["occurred_at"])}, ensure_ascii=False, separators=(",", ":"))
+        "occurred_at": push_timestamp(event["occurred_at"])}
+    if (ai := event.get("ai")) and ai.get("condition") in {"presence", "enter", "exit", "dwell", "crossing", "scene"}:
+        data["ai_condition"] = ai["condition"]
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 def send_test(db, user_id, device_id, *, sender=send_push):

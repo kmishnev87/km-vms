@@ -1,0 +1,27 @@
+<resources>
+    <string name="ai_event_title">Событие AI</string>
+    <string name="ai_event_both">Все источники</string>
+    <string name="ai_event_nas">Аналитика NAS</string>
+    <string name="ai_event_camera">Камера</string>
+    <string name="ai_event_rule">Правило / зона</string>
+    <string name="ai_event_conditions">Все условия</string>
+    <string name="ai_event_presence">Объект в кадре или зоне</string>
+    <string name="ai_event_enter">Вход в зону</string>
+    <string name="ai_event_exit">Выход из зоны</string>
+    <string name="ai_event_scene">Смена сцены</string>
+    <string name="ai_event_frame">Кадр срабатывания</string>
+    <string name="ai_event_no_frame">Снимок недоступен</string>
+    <string name="ai_event_whole_frame">Весь кадр</string>
+    <string name="ai_event_unnamed_zone">Зона без названия</string>
+    <string name="ai_event_unnamed_line">Линия без названия</string>
+    <string name="ai_event_pending">Сегмент ещё записывается. Проверьте после его завершения.</string>
+    <string name="ai_event_forbidden">У этой учётной записи нет доступа к хронологии.</string>
+    <string name="ai_event_ready">Запись доступна</string>
+    <string name="ai_event_check">Проверить запись</string>
+    <string name="ai_event_false">Ложное срабатывание</string>
+    <string name="ai_event_mark_false">Отметить как ложное</string>
+    <string name="ai_event_clear_false">Снять отметку</string>
+    <string name="ai_event_review_help">Отметка не меняет обучение AI.</string>
+    <string name="ai_event_save_clip">Сохранить отдельный клип</string>
+    <string name="ai_event_clip_help">Готовый клип хранится отдельно от исходной записи.</string>
+</resources>

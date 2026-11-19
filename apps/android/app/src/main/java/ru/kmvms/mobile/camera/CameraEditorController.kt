@@ -10,7 +10,8 @@ import org.json.JSONObject
 
 data class CameraEditorState(val draft:CameraDraft=CameraDraft.empty(),val phase:Int=0,val busy:Boolean=false,
     val catalog:CameraCatalog?=null,val source:String?=null,val eventsSupported:Boolean?=null,
-    val configurations:Map<String,JSONObject> = emptyMap(),val verified:Boolean=false,val saved:Boolean=false,val failures:Int=0)
+    val configurations:Map<String,JSONObject> = emptyMap(),val verified:Boolean=false,val saved:Boolean=false,val failures:Int=0,
+    val eventsWereEnabled:Boolean=false)
 
 class CameraEditorController(private val api:CameraApi,private val id:Long?) {
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
@@ -22,7 +23,7 @@ class CameraEditorController(private val api:CameraApi,private val id:Long?) {
     private val proofs=mutableMapOf<String,String>()
     private var proofAt=0L
     init { if(id!=null) request=scope.launch {
-        try { baseline=CameraDraft.from(api.get(id));mutable.update{it.copy(draft=baseline)} }
+        try { baseline=CameraDraft.from(api.get(id));mutable.update{it.copy(draft=baseline,eventsWereEnabled=baseline.flag("events_enabled"))} }
         catch(cancelled:CancellationException){throw cancelled}
         catch(_:Exception){error()}
         finally{mutable.update{it.copy(busy=false)}}
@@ -186,6 +187,7 @@ class CameraEditorController(private val api:CameraApi,private val id:Long?) {
     private fun ensureCurrent(own:Int){if(own!=generation)throw CancellationException("Camera form changed")}
     private fun error(){mutable.update{it.copy(failures=it.failures+1)}}
     fun close(){generation++;scope.cancel();proofs.clear()}
+    internal suspend fun awaitClosed() { scope.coroutineContext[Job]?.join() }
     companion object {
         fun assign(draft:CameraDraft,role:String,profile:CameraProfile?):CameraDraft = draft
             .change(if(role=="main")"onvif_profile_token"else"onvif_sub_profile_token",profile?.token.orEmpty())

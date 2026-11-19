@@ -48,6 +48,7 @@ import ru.kmvms.mobile.core.Stream
 import ru.kmvms.mobile.core.VisibleTile
 import ru.kmvms.mobile.core.visibleCameraIds
 import ru.kmvms.mobile.core.LiveCameraOrder
+import ru.kmvms.mobile.core.adjacentCamera
 import ru.kmvms.mobile.data.Camera
 import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.events.MobileVideoRequest
@@ -155,7 +156,10 @@ import ru.kmvms.mobile.ptz.PtzCapabilities
         }
     } else {
         key(selected.id) { LiveCameraDetail(selected, capabilities[selected.id], controller, immersive,
-            { dismissedLandscapeFullscreen = false; requestedFullscreen = true }, closeDetail, onMessage, mayTalk) }
+            { dismissedLandscapeFullscreen = false; requestedFullscreen = true }, closeDetail, onMessage, mayTalk,
+            onCameraSwipe = if (selected.id in viewingIds && viewingIds.size > 1) { step ->
+                adjacentCamera(viewingIds, selected.id, step)?.let { selectedId = it }
+            } else null) }
     }
     if (choosing && singleId == null) LiveCameraPicker(cameras, viewingIds, { choosing = false }) { ids ->
         savedOrder = ids; preferences.save(profileId, ids); choosing = false

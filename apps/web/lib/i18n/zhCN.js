@@ -3,6 +3,7 @@ export const zhCNDictionary = {
   androidDownload: { checking: "正在加载 APK 信息…", available: "Android APK", failed: "无法获取 APK 信息，请刷新页面。", unpublished: "官方 APK 尚未发布。", subtitle: "Android 版 KM VMS", instructions: "将 APK 下载到手机，打开文件并在 Android 中确认安装。然后添加 NAS 地址并登录 KM VMS 账户。支持 HTTP 和 HTTPS。", version: "版本", download: "下载 APK", check: "检查版本", languages: "支持 Android 8 及以上版本，提供英文、中文和俄文。可在 Android 应用中获取更新。" },
   chronologyArchive: { retainedCameras: "仍有录像的已删除摄像机", deleted: "已删除", archiveOnly: "仅保留的录像" },
   cameraEvents: {
+    ai: {"unnamedZone":"未命名区域","unnamedLine":"未命名线","details":"AI 事件","filters":"AI 筛选","source":"来源","both":"全部来源","fromAi":"NAS 分析","fromCamera":"摄像机","condition":"条件","anyCondition":"全部条件","rule":"规则 / 区域","ruleSearch":"规则名称","search":"查找","conditions":{"presence":"画面或区域内出现目标","enter":"进入区域","exit":"离开区域","crossing":"越线","dwell":"区域内逗留","scene":"场景变化"},"frame":"检测画面","noFrame":"快照不可用","wholeFrame":"整个画面","pending":"仍在录制此片段，请在录制完成后查看。","unavailable":"事件发生时没有录像，或录像已不可用。","forbidden":"此帐户没有时间线访问权限。","ready":"录像可用","check":"检查录像","checkFailed":"无法检查录像，请重试。","falsePositive":"误报","markFalse":"标记为误报","unmarkFalse":"清除标记","reviewHelp":"标记会显示在历史记录中，不会训练 AI。","saveClip":"另存为片段","clipHelp":"完成的片段是独立副本，不会更改原录像的保留期限。","invalidRange":"请选择有效的片段时间范围。"},
     "title": "摄像机事件",
     "dashboardText": "移动、人员和车辆。查看事件历史并直接打开视频。",
     "history": "历史",
@@ -108,6 +109,7 @@ export const zhCNDictionary = {
       "capacity_limit": "已达到连接上限"
     },
     "errors": {
+      "event_archive_pending": "仍在录制此片段，请在录制完成后查看。",
       "event_selection_expired": "此选择已不可用，请重新选择事件。",
       "event_selection_too_large": "所选事件过多，请缩小摄像机或时间范围。",
       "request_failed": "操作未完成，请检查连接后重试。",
@@ -206,6 +208,7 @@ export const zhCNDictionary = {
     }
   },
   archiveClips: {
+    "fromEvent": "AI 事件",
     "cameraDeletedMark": "已删除",
     "title": "创建片段",
     "fromRecordings": "来自录像",
@@ -455,6 +458,26 @@ export const zhCNDictionary = {
     settingsText: "系统配置和参数管理。",
   },
   systemStatus: {
+    source: {
+      aiTitle: "NAS AI 不可用",
+      aiCause: "NAS 上的视频分析已中断。",
+      eventsTitle: "摄像机事件接收已中断",
+      eventsCause: "系统无法通过摄像机订阅接收事件。",
+      recording: {
+        recording: "录像继续进行",
+        emergency: "正在应急录像",
+        paused: "录像已手动暂停",
+        storage_suspended: "存储已暂停录像",
+        stopped: "当前未在录像",
+        unconfirmed: "尚未确认录像",
+      },
+      nextAttempt: "下次重试：{time}",
+      openAi: "打开此摄像机的录像设置",
+      openCamera: "打开摄像机",
+      retry: "重试",
+      queued: "已请求重试。",
+      failed: "无法开始重试。正在刷新状态。",
+    },
     stale: "状态尚未更新",
     staleHint: "显示上次收到的状态。系统将自动重试检查。",
     title: "系统状态",

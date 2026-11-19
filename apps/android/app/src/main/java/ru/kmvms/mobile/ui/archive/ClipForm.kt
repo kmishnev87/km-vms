@@ -22,15 +22,21 @@ import ru.kmvms.mobile.archive.zoneLabel
 import java.time.*
 import java.time.format.DateTimeFormatter
 
-@Composable fun ClipForm(cameras: List<ArchiveCamera>, zone: ZoneId, maxDuration: Long?, busy: Boolean,
+data class ClipDraft(val cameraId: Long, val title: String, val start: OffsetDateTime, val end: OffsetDateTime)
+
+@Composable fun ClipForm(cameras: List<ArchiveCamera>, zone: ZoneId, maxDuration: Long?, busy: Boolean, initial: ClipDraft? = null,
                          create: (Long,String,OffsetDateTime,OffsetDateTime) -> Unit) {
-    var cameraId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var cameraId by rememberSaveable { mutableStateOf(initial?.cameraId) }
     var menu by remember { mutableStateOf(false) }
-    var title by rememberSaveable { mutableStateOf("") }
-    var startText by rememberSaveable { mutableStateOf(LocalDateTime.now(zone).minusMinutes(5).withSecond(0).withNano(0).toString()) }
-    var endText by rememberSaveable { mutableStateOf(LocalDateTime.now(zone).withSecond(0).withNano(0).toString()) }
-    val start=LocalDateTime.parse(startText).atZone(zone).toOffsetDateTime()
-    val end=LocalDateTime.parse(endText).atZone(zone).toOffsetDateTime()
+    var title by rememberSaveable { mutableStateOf(initial?.title.orEmpty()) }
+    val initialStart = initial?.start?.atZoneSameInstant(zone)?.toLocalDateTime()
+    val initialEnd = initial?.end?.atZoneSameInstant(zone)?.toLocalDateTime()
+    var startText by rememberSaveable { mutableStateOf((initialStart ?: LocalDateTime.now(zone).minusMinutes(5).withSecond(0).withNano(0)).toString()) }
+    var endText by rememberSaveable { mutableStateOf((initialEnd ?: LocalDateTime.now(zone).withSecond(0).withNano(0)).toString()) }
+    val startLocal = LocalDateTime.parse(startText)
+    val endLocal = LocalDateTime.parse(endText)
+    val start = if (initial != null && startLocal == initialStart) initial.start else startLocal.atZone(zone).toOffsetDateTime()
+    val end = if (initial != null && endLocal == initialEnd) initial.end else endLocal.atZone(zone).toOffsetDateTime()
     val duration=Duration.between(start,end).seconds
     val valid=cameraId!=null && duration>0 && maxDuration!=null && duration<=maxDuration
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
