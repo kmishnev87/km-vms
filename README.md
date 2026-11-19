@@ -149,7 +149,7 @@ Two-way audio is device- and firmware-dependent: a camera microphone, speaker or
 
 The **AI & Recording** workspace in the browser and Android manages policies on the same NAS. You choose which cameras to analyze and which to leave on continuous recording.
 
-- Keep continuous recording with optional analytics, record when compatible camera events or local AI rules trigger, or record a second view during the actual recording of an explicitly linked camera. This can pair two lenses of one device or two separate cameras.
+- Keep continuous recording with optional analytics, record when compatible camera events or local AI rules trigger, or record a second view during an explicitly linked camera's recording window. This can pair two lenses of one device or two separate cameras.
 - Choose **Economical** for camera-triggered recording without a prebuffer, **Balanced** for a lower-bandwidth prebuffer that switches to recording quality, or **Full quality** to retain the configured recording stream before the trigger. Local AI uses Balanced or Full quality; it does not open a separate video stream just to analyze it.
 - Detect people, vehicles and supported animals on the NAS. Draw zones and directional lines on a camera frame; set dwell, exclusions and schedules. Choose which rules trigger recording and which notify you.
 - Browse AI snapshots and rule details in the same event history as camera events. Open the matching archive when it exists, save a separate clip, or label a false positive without changing the model.

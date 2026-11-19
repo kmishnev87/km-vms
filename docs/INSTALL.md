@@ -180,6 +180,8 @@ The private journal is capped at 5 MiB and seven days; a report includes the lat
 
 Prefer **Settings → Maintenance** to check and apply an available published release. The update workflow checks the candidate, prepares it, and verifies activation. A reported failure is not a completed update; inspect the provided status/diagnostics before retrying.
 
+**For the 1.0.3 upgrade from schema 13 to 14, use Settings → Maintenance in the browser or Android app.** The terminal launcher can stop this migration when its operation status is missing and restore the previous release. Do not bypass that safeguard or edit the database.
+
 Do not rerun the new-install command over an existing installation. Do not replace application files manually, delete Docker volumes, or regenerate the existing configuration/secrets to force an update.
 
 For the terminal update path, substitute your real application directory and an actual published tag. A non-mutating plan can be inspected first:

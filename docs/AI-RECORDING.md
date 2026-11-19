@@ -16,7 +16,7 @@ In the **AI & Recording** page, choose a mode, then its source and profile. For 
 
 Only the Economical profile can wait without holding video for that recording policy. Timing, keyframes, network availability and available RAM can reduce the actual prebuffer. Balanced can keep parts in preview and recording quality rather than forcing different formats into a single raw stream.
 
-A linked camera does not inherit another camera's credentials, stream or settings. Pausing the source makes the linked camera wait; it does not turn the linked camera off. Its own pause and storage limits still apply.
+A linked camera follows the source's recording window, not whether the source successfully writes a file. A source video outage does not cut off the other viewpoint while that window is still active. Pausing the source makes the linked camera wait; it does not turn the linked camera off. The linked camera uses its own stream and respects its own pause and storage limits.
 
 ## Configure local rules
 
