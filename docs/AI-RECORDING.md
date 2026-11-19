@@ -1,6 +1,6 @@
 # AI & Recording
 
-**AI & Recording** is available starting with NAS 1.0.2 and Android 0.8.15. The web and Android controls manage the same NAS configuration; an owner or administrator changes recording policies. An update does not opt cameras into event-based recording or NAS AI. Existing cameras keep their continuous recording behavior and any manual pause until you choose another policy.
+**AI & Recording** is available starting with NAS 1.0.3 and Android 0.8.15. The web and Android controls manage the same NAS configuration; an owner or administrator changes recording policies. An update does not opt cameras into event-based recording or NAS AI. Existing cameras keep their continuous recording behavior and any manual pause until you choose another policy.
 
 ## Choose a policy
 

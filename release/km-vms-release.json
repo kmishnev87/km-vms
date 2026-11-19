@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "1.0.2",
-  "tag": "v1.0.2",
-  "title": "KM VMS 1.0.2 — Local AI and event-based recording",
+  "version": "1.0.3",
+  "tag": "v1.0.3",
+  "title": "KM VMS 1.0.3 — Local AI and event-based recording",
   "summary": "Choose how each camera records: continuously, on camera events or local NAS detections, or in sync with a linked camera. AI rules, event snapshots and archive actions connect detections to footage. Android 0.8.15 adds the same recording workspace, camera swipes and a Live shortcut in the 3×1 widget.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v1.0.2",
+  "source_ref": "v1.0.3",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -26,12 +26,13 @@
     "Review AI snapshots alongside camera events, filter by source or rule, jump to available footage, and save a clip or mark a false positive.",
     "See detection outages in System Health. Optional emergency recording temporarily protects event-based cameras; it is off by default.",
     "Android 0.8.15 adds AI & Recording, cyclic camera swipes in Live and Chronology, an unread-only event filter and a Live shortcut in the 3×1 widget.",
-    "The managed updater moves the database to schema 14. Existing cameras are not switched to analytics or event-based recording."
+    "The managed updater moves the database to schema 14. Existing cameras are not switched to analytics or event-based recording.",
+    "Allow pinned AI packages to download on slower links, with bounded retries, stalled-transfer detection and the same SHA-256 checks."
   ],
   "title_i18n": {
-    "en": "KM VMS 1.0.2 — Local AI and event-based recording",
-    "ru": "KM VMS 1.0.2 — Локальный AI и запись по событиям",
-    "zh-CN": "KM VMS 1.0.2 — 本地 AI 与事件录像"
+    "en": "KM VMS 1.0.3 — Local AI and event-based recording",
+    "ru": "KM VMS 1.0.3 — Локальный AI и запись по событиям",
+    "zh-CN": "KM VMS 1.0.3 — 本地 AI 与事件录像"
   },
   "summary_i18n": {
     "en": "Choose how each camera records: continuously, on camera events or local NAS detections, or in sync with a linked camera. AI rules, event snapshots and archive actions connect detections to footage. Android 0.8.15 adds the same recording workspace, camera swipes and a Live shortcut in the 3×1 widget.",
@@ -46,7 +47,8 @@
       "Review AI snapshots alongside camera events, filter by source or rule, jump to available footage, and save a clip or mark a false positive.",
       "See detection outages in System Health. Optional emergency recording temporarily protects event-based cameras; it is off by default.",
       "Android 0.8.15 adds AI & Recording, cyclic camera swipes in Live and Chronology, an unread-only event filter and a Live shortcut in the 3×1 widget.",
-      "The managed updater moves the database to schema 14. Existing cameras are not switched to analytics or event-based recording."
+      "The managed updater moves the database to schema 14. Existing cameras are not switched to analytics or event-based recording.",
+      "Allow pinned AI packages to download on slower links, with bounded retries, stalled-transfer detection and the same SHA-256 checks."
     ],
     "ru": [
       "В разделе «AI и запись» для каждой камеры выбирается непрерывная, событийная или связанная запись. Связанная камера пишет вместе с выбранной камерой-источником.",
@@ -55,7 +57,8 @@
       "Снимки AI доступны вместе с событиями камер. Есть фильтрация по источнику или правилу, переход к доступной записи, сохранение клипа и отметка ложного срабатывания.",
       "Сбои источников событий видны в «Состоянии системы». Опциональная аварийная запись защищает событийные камеры; по умолчанию она выключена.",
       "Android 0.8.15: раздел «AI и запись», циклическое переключение камер свайпом в онлайне и хронологии, фильтр непрочитанных и быстрый переход в онлайн из виджета 3×1.",
-      "Штатное обновление переводит базу на схему 14. Камеры не переключаются на AI или событийную запись без выбора пользователя."
+      "Штатное обновление переводит базу на схему 14. Камеры не переключаются на AI или событийную запись без выбора пользователя.",
+      "Сборка AI-компонентов на медленном соединении: увеличен срок загрузки, но сохранены предел повторов, остановка зависшей передачи и проверка SHA-256."
     ],
     "zh-CN": [
       "在「AI 与录像」中逐台选择持续录像、摄像机事件触发、本地 AI 触发或关联录像。关联摄像机跟随所选设备的实际录像状态。",
@@ -64,7 +67,8 @@
       "在摄像机事件历史中查看 AI 截图，按来源或规则筛选，跳转到可用录像、保存片段或标记误报。",
       "在系统健康页面查看检测故障。可选的应急录像可以临时保护事件录像，默认关闭。",
       "Android 0.8.15 新增 AI 与录像管理、实时与时间轴中的循环滑动切换、未读事件筛选及 3×1 小组件的实时查看入口。",
-      "受管理的更新将数据库升级至架构 14，不会自行将已有摄像机改为 AI 或事件触发录像。"
+      "受管理的更新将数据库升级至架构 14，不会自行将已有摄像机改为 AI 或事件触发录像。",
+      "较慢网络也可下载固定版本的 AI 组件；保留重试上限、停滞检测和 SHA-256 校验。"
     ]
   }
 }

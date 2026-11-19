@@ -16,7 +16,7 @@ Run it on your own NAS or Docker-capable Linux server. Keep video on storage you
 
 [Quick start](#quick-start) · [Features](#what-km-vms-can-do) · [Android](#native-android-app) · [Releases](https://github.com/kmishnev87/km-vms/releases) · [Report a problem](https://github.com/kmishnev87/km-vms/issues)
 
-![KM VMS 1.0.2 dashboard in English, including AI & Recording and Camera Events](docs/images/dashboard-en.png)
+![KM VMS dashboard in English, including AI & Recording and Camera Events](docs/images/dashboard-en.png)
 
 ## Why choose KM VMS?
 
@@ -60,11 +60,11 @@ Built for homes, holiday properties, small sites, and homelabs where control ove
 
 Prepare a NAS or Linux server with Docker Engine **25.0+**, Docker Compose **2.20.2+** or compatible `healthcheck.start_interval` support, Python 3, `curl`, a POSIX shell, archive utilities, and `getfacl`. The installing user needs Docker access and permission to write to the application directory.
 
-For a **new installation** of KM VMS **[1.0.2](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.2)**, run in the server terminal:
+For a **new installation** of KM VMS **[1.0.3](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.3)**, run in the server terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.2/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.2
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.3/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.3
 ```
 
 The installer offers `$HOME/km-vms` and port `8088` by default. To choose another persistent application directory, add `--app-dir /path/to/km-vms` to the second command, replacing the example with your own path.
@@ -264,7 +264,7 @@ For remote access, configure a secured HTTPS reverse proxy or VPN. Initial HTTP 
 
 ## Project development
 
-The [release history](https://github.com/kmishnev87/km-vms/releases) documents what shipped in each version. Start with the [AI & Recording guide](docs/AI-RECORDING.md) for the recording policies, local rules and troubleshooting added in 1.0.2.
+The [release history](https://github.com/kmishnev87/km-vms/releases) documents what shipped in each version. Start with the [AI & Recording guide](docs/AI-RECORDING.md) for the recording policies, local rules and troubleshooting.
 
 Assigning recordings from individual cameras to specific storage devices is not currently supported.
 

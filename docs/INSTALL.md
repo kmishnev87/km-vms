@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[1.0.2](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.2)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[1.0.3](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.3)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.2/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.2
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.3/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.3
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.2 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v1.0.3 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.2 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v1.0.3 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -129,7 +129,7 @@ With camera-management permission, the adjacent trash icon deletes selected even
 
 ## AI & Recording
 
-Open **AI & Recording** to configure continuous, event-based or linked recording. A camera can use its own detections or local NAS AI; enable NAS AI only on inputs you need to analyze. Existing continuous recording and pause choices carry across the update. NAS 1.0.2 installs schema 14 through the managed updater; do not edit the database manually. See the [AI & Recording guide](AI-RECORDING.md) for prebuffer options, drawing rules, emergency recording and hardware limits.
+Open **AI & Recording** to configure continuous, event-based or linked recording. A camera can use its own detections or local NAS AI; enable NAS AI only on inputs you need to analyze. Existing continuous recording and pause choices carry across the update. NAS 1.0.3 installs schema 14 through the managed updater; do not edit the database manually. See the [AI & Recording guide](AI-RECORDING.md) for prebuffer options, drawing rules, emergency recording and hardware limits.
 
 ## Live mode: Fast or Stable
 
@@ -156,7 +156,7 @@ Calls temporarily use the low-latency video path and preserve the saved sound/PT
 
 KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up. The standard adapter continues to use hold-to-speak.
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.15.apk** from the [1.0.2 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.2). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.15.apk** from the [1.0.3 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.3). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.

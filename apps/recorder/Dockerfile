@@ -26,7 +26,9 @@ RUN if [ "$(dpkg --print-architecture)" = amd64 ]; then \
         ocl-icd-libopencl1 libnuma1 libdrm2 && rm -rf /var/lib/apt/lists/* && \
       install -d /opt/kmvms-intel && \
       while read -r digest file url; do \
-        curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 --max-time 150 "$url" -o "/tmp/$file" && \
+        curl -fsSL --proto '=https' --proto-redir '=https' \
+          --connect-timeout 25 --speed-limit 4096 --speed-time 60 \
+          --retry 2 --retry-max-time 1200 --max-time 900 "$url" -o "/tmp/$file" && \
         printf '%s  %s\n' "$digest" "/tmp/$file" | sha256sum -c - && \
         dpkg-deb -x "/tmp/$file" /opt/kmvms-intel && rm -f -- "/tmp/$file" || exit 1; \
       done < /tmp/km-vms-intel-opencl.lock; \
@@ -37,7 +39,9 @@ RUN if [ -f /opt/kmvms-intel/etc/OpenCL/vendors/intel.icd ]; then \
     fi
 
 RUN install -d -m 0755 /app/ai-model \
-    && curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 --max-time 120 \
+    && curl -fsSL --proto '=https' --proto-redir '=https' \
+      --connect-timeout 25 --speed-limit 4096 --speed-time 60 \
+      --retry 2 --retry-max-time 1200 --max-time 600 \
       https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx -o /app/ai-model/yolox_tiny.onnx \
     && curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 --max-time 30 \
       https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/main/LICENSE -o /app/ai-model/LICENSE-YOLOX.txt \
