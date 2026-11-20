@@ -19,10 +19,12 @@ import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 import ru.kmvms.mobile.data.NasApi
 import ru.kmvms.mobile.data.NasException
+import ru.kmvms.mobile.diagnostics.DiagnosticEntry
 import java.util.concurrent.TimeUnit
 
 data class TalkCapability(val status: String = "loading", val reason: String = "", val fullDuplex: Boolean = false,
-                          val credentials: Boolean = false, val saved: Boolean = false) {
+                          val credentials: Boolean = false, val saved: Boolean = false,
+                          val detectedDuplex: String = "unknown", val preference: String = "auto") {
     val available get() = status in setOf("supported", "needs_credentials")
 }
 enum class CallPhase { IDLE, CONNECTING, ACTIVE, FAILED }
@@ -33,6 +35,8 @@ data class CredentialState(val saving: Boolean = false, val reason: String = "")
 class TalkController(context: Context, private val api: NasApi, private val cameraId: Long) {
     private val context = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val modes = this.context.getSharedPreferences("camera_talk_modes", Context.MODE_PRIVATE)
+    private val modeKey = DiagnosticEntry.profileKey(api.address.base.toASCIIString() + ":" + cameraId)
     private val mutable = MutableStateFlow(CallState())
     val state = mutable.asStateFlow()
     private val capabilityState = MutableStateFlow(TalkCapability())
@@ -59,12 +63,27 @@ class TalkController(context: Context, private val api: NasApi, private val came
             capabilityState.value = TalkCapability()
             capabilityState.value = try {
                 val value = api.json("api/talk/cameras/$cameraId") as JSONObject
-                TalkCapability(value.optString("status"), value.optString("reason"), value.optString("duplex") == "full",
-                    value.optBoolean("credential_required"), value.optBoolean("credential_saved"))
+                val detected = value.optString("duplex", "unknown")
+                val preference = modes.getString(modeKey, "auto") ?: "auto"
+                TalkCapability(value.optString("status"), value.optString("reason"), isDuplex(detected, preference),
+                    value.optBoolean("credential_required"), value.optBoolean("credential_saved"), detected, preference)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { TalkCapability("unsupported", "camera_unavailable") }
         }
     }
+
+    fun chooseMode(value: String) {
+        if (value !in setOf("auto", "full", "push_to_talk")) return
+        val capability = capabilityState.value
+        if (capability.detectedDuplex == "push_to_talk" && value == "full") return
+        if (capability.preference == value) return
+        end() // A new mode is applied only to a new, explicitly started call.
+        modes.edit().putString(modeKey, value).apply()
+        capabilityState.value = capability.copy(fullDuplex = isDuplex(capability.detectedDuplex, value), preference = value)
+    }
+
+    private fun isDuplex(detected: String, preference: String) =
+        detected != "push_to_talk" && preference != "push_to_talk" && (detected == "full" || preference == "full")
 
     fun saveCredential(password: String?, after: () -> Unit) {
         if (closed || credentialState.value.saving) return

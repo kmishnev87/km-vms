@@ -4,9 +4,9 @@
 
 Bring cameras from different manufacturers into one system on your NAS or Linux server. Watch live in the browser or the native Android app, and use a shared timeline to see what happened from more than one angle. Your footage stays on the storage you choose. Local recording, viewing, and AI don't require a camera manufacturer's cloud service.
 
-[Install on your NAS](#quick-start) · [Download the Android APK](https://github.com/kmishnev87/km-vms/releases/download/v1.0.4/km-vms-android-0.8.16.apk) · [Why KM VMS](#why-km-vms) · [Compatibility](#compatibility) · [Complete feature map](#complete-feature-map)
+[Install on your NAS](#quick-start) · [Download the Android APK](https://github.com/kmishnev87/km-vms/releases/download/v1.0.5/km-vms-android-0.8.17.apk) · [Why KM VMS](#why-km-vms) · [Compatibility](#compatibility) · [Complete feature map](#complete-feature-map)
 
-![KM VMS web dashboard with Cameras, Recordings, Chronology, Live, and AI & Recording](https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.4/docs/images/dashboard-en.png)
+![KM VMS web dashboard with Cameras, Recordings, Chronology, Live, and AI & Recording](https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/docs/images/dashboard-en.png)
 
 ## Why KM VMS
 
@@ -14,7 +14,7 @@ Bring cameras from different manufacturers into one system on your NAS or Linux 
 
 Someone comes through the gate. Open the alert to check the camera live, or jump to the event in the archive when footage is available. Add the other cameras to **Chronology** and play them on the same timeline: see where the person came from and where they went without lining up recording files by hand. If one camera has a gap, the others keep playing.
 
-The timeline distinguishes event markers from recorded footage. You can also revisit footage from a camera you've removed, as long as its archive was kept. Export the relevant time range as a separate clip without changing the originals. If you need a record of what you exported, download the clip manifest with its source, time range, and checksum.
+The timeline distinguishes event markers from recorded footage. If none of the selected cameras has video at the current time, the shared clock keeps moving toward the next recording. Use **Next recording** to skip the gap. You can also revisit footage from a camera you've removed, as long as its archive was kept. Export the relevant time range as a separate clip without changing the originals. If you need a record of what you exported, download the clip manifest with its source, time range, and checksum.
 
 ### Choose what each camera records — including what happened before the trigger
 
@@ -30,7 +30,7 @@ Set how long to record after the last matching event. New activity extends the s
 
 ### Make local AI look for what matters to you
 
-Draw a zone around your driveway and leave out the road, or draw a line at the gate and detect a person crossing in one direction. Choose which objects matter to each rule — people, vehicles, or supported animals. A rule can also react when an object stays in an area for a set time, or detect a major scene change.
+Draw a zone around your driveway and leave out the road, or draw a line at the gate and detect a person crossing in one direction. Choose which objects matter to each rule — people, vehicles, or supported animals. A rule can also react when an object stays in an area for a set time. A scene-change rule can optionally trigger on a person, vehicle, or supported animal even if the camera hasn't moved — useful when a PTZ camera is watching a blind spot.
 
 Edit rules on a camera frame. In the web editor you can work fullscreen and still reach the rule controls. On supported views, turn on the saved outlines in Live to check where your rules are drawn, then hide them for a clean picture. Analysis runs on your own server; a dedicated graphics card isn't required.
 
@@ -38,13 +38,13 @@ Edit rules on a camera frame. In the web editor you can work fullscreen and stil
 
 The first matching event opens an episode and generates an alert. Further activity extends the episode without sending another alert. With continuous recording and analytics, you can set how much quiet time must pass before the next event starts a new episode.
 
-Pick the cameras and hours you want to hear from, for all cameras together or camera by camera. Mute an indoor camera while you're working in the room: the NAS can keep detecting and recording, and the event history stays available without adding new unread alerts for that camera while it's muted.
+Pick the cameras and hours you want to hear from, for all cameras together or camera by camera. Mute an indoor camera while you're working in the room: the NAS can keep detecting and recording, and the event history stays available without adding new unread alerts for that camera while it's muted. In the web history, select **Source** to compare camera detections and NAS AI, or narrow the AI results to a rule and condition.
 
 ### Watch and control cameras without changing tools
 
 Build a multi-camera view, open a single camera fullscreen, and switch between its Main and Sub streams without leaving the view. Pick **Fast** live viewing when low latency matters or **Stable** for more buffering on an uneven connection. This is a server setting shared by web and Android; a stream that can't use Fast can fall back individually without switching the other cameras.
 
-Use supported PTZ controls and camera presets from Live. When you're at the door or away from home, use Android to talk through a compatible camera. Discover compatible cameras on your local network or selected reachable private subnets, or add them by address.
+Use supported PTZ controls and camera presets from Live. When you're at the door or away from home, use Android to talk through a compatible camera. On supported models, speak and listen at the same time; others use hold-to-speak. Discover compatible cameras on your local network or selected reachable private subnets, or add them by address.
 
 ### Know what is recording, what needs attention, and where the video goes
 
@@ -54,21 +54,21 @@ KM VMS can recover usable unfinished recordings after an interruption. Give othe
 
 ## Native Android app
 
-[**Download the signed APK**](https://github.com/kmishnev87/km-vms/releases/download/v1.0.4/km-vms-android-0.8.16.apk) for **Android 8.0 or later**, or get it on your NAS under **Settings → Download APK**. Save more than one NAS connection and switch between them. Choose which cameras to watch, swipe between them in fullscreen, or pinch to zoom. In Chronology, changing the fullscreen camera doesn't pause shared playback. Manage supported NAS settings within your account's permissions.
+[**Download the signed APK**](https://github.com/kmishnev87/km-vms/releases/download/v1.0.5/km-vms-android-0.8.17.apk) for **Android 8.0 or later**, or get it on your NAS under **Settings → Download APK**. Save more than one NAS connection and switch between them. Choose which cameras to watch, swipe between them in fullscreen, or pinch to zoom. In Chronology, changing the fullscreen camera doesn't pause shared playback. Save an original recording straight to Android Downloads without making a clip first. Manage supported NAS settings within your account's permissions.
 
-From the home screen, use the **2×1 widget** to change alert settings by camera, or the **3×1 widget** to also open Live or jump to events from the unread count. Expand an Android alert to see the event image when available and choose Live or Recording. Background alerts use a compatible UnifiedPush provider without continuous polling by the app.
+From the home screen, use the **2×1 widget** to change alert settings by camera, or the **3×1 widget** to also open Live or jump to events from the unread count. Expand an Android alert to see the event image when ready and choose Live or Recording. In the app's event history, the same camera icon opens the available frame for both camera detections and NAS AI. Background alerts use a compatible UnifiedPush provider without continuous polling by the app.
 
-<img width="300" src="https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.4/docs/images/android-home-en.jpg" alt="Native KM VMS Android home screen with access to live video, recordings, and camera events">
+<img width="300" src="https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/docs/images/android-home-en.jpg" alt="Native KM VMS Android home screen with access to live video, recordings, and camera events">
 
 ## Quick start
 
-Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose **2.20.2+** (or compatible `healthcheck.start_interval` support), and the [required host utilities and permissions](https://github.com/kmishnev87/km-vms/blob/v1.0.4/docs/INSTALL.md#before-you-start). You do not need Node.js, npm, or Git on the host for a normal installation.
+Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose **2.20.2+** (or compatible `healthcheck.start_interval` support), and the [required host utilities and permissions](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md#before-you-start). You do not need Node.js, npm, or Git on the host for a normal installation.
 
 1. **Install the published release** on the server:
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.4/scripts/install.sh -o km-vms-install.sh
-   sh km-vms-install.sh --branch v1.0.4
+   curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/scripts/install.sh -o km-vms-install.sh
+   sh km-vms-install.sh --branch v1.0.5
    ```
 
 2. **Open `http://<NAS-IP>:8088/setup`** on a trusted network. Choose where to keep the archive and create your owner account. There is no default administrator password.
@@ -76,7 +76,7 @@ Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose 
 
 **Already installed?** Use **Settings → Maintenance** to update. Do not run the new installation command over your existing directory.
 
-[Installation and maintenance guide](https://github.com/kmishnev87/km-vms/blob/v1.0.4/docs/INSTALL.md) · [All releases](https://github.com/kmishnev87/km-vms/releases)
+[Installation and maintenance guide](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md) · [All releases](https://github.com/kmishnev87/km-vms/releases)
 
 ## Compatibility
 
@@ -85,21 +85,21 @@ Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose 
 - **Network.** Use HTTP on a trusted local network. For remote access, use a VPN or HTTPS through a secured reverse proxy. Android accepts a local `IP:port` address, warns before connecting over unencrypted HTTP, and verifies HTTPS certificates. The installer doesn't open your NAS to the internet or issue a certificate.
 - **Languages.** The web and Android interfaces are available in English, Russian, and Simplified Chinese.
 
-[Camera setup and compatibility notes](https://github.com/kmishnev87/km-vms/blob/v1.0.4/docs/INSTALL.md#4-add-cameras-and-choose-your-language)
+[Camera setup and compatibility notes](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md#4-add-cameras-and-choose-your-language)
 
 ## Documentation and support
 
-- [Install, update, and troubleshoot](https://github.com/kmishnev87/km-vms/blob/v1.0.4/docs/INSTALL.md)
-- [Set up recording profiles and local AI rules](https://github.com/kmishnev87/km-vms/blob/v1.0.4/docs/AI-RECORDING.md)
+- [Install, update, and troubleshoot](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md)
+- [Set up recording profiles and local AI rules](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/AI-RECORDING.md)
 - [Report a bug or suggest an improvement](https://github.com/kmishnev87/km-vms/issues)
 
 Diagnostic reports are sent only at your request. Server reports don't contain video recordings; the Android app sends its own diagnostics separately. Keep credentials and private diagnostic archives out of public issues.
 
-KM VMS code is [MIT licensed](https://github.com/kmishnev87/km-vms/blob/v1.0.4/LICENSE). [Third-party components retain their own licenses](https://github.com/kmishnev87/km-vms/blob/v1.0.4/docs/DEPENDENCIES.md).
+KM VMS code is [MIT licensed](https://github.com/kmishnev87/km-vms/blob/v1.0.5/LICENSE). [Third-party components retain their own licenses](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/DEPENDENCIES.md).
 
 ## Complete feature map
 
-Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.4): 515 entries in 21 tables. Each row describes an action, setting, or visible behavior. Some actions are available in more than one workspace. Availability can depend on your role, client, and camera capabilities.
+Reference for [NAS 1.0.5 and Android 0.8.17](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.5): 520 entries in 21 tables. Each row describes an action, setting, or visible behavior. Some actions are available in more than one workspace. Availability can depend on your role, client, and camera capabilities.
 
 ### Installation and first launch
 
@@ -194,7 +194,7 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 
 <details>
 
-<summary>Show 27 functions</summary>
+<summary>Show 28 functions</summary>
 
 | No. | Function |
 |---:|---|
@@ -218,13 +218,14 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 | 18 | Pinch to zoom into a recording on Android. |
 | 19 | Remember the playback position when closing an unfinished recording on Android. |
 | 20 | Replay a recording from the beginning after it ends. |
-| 21 | Download the original recording file from the web app. |
+| 21 | Download the original recording file from the web app or Android. |
 | 22 | Delete an individual recording after confirmation. |
 | 23 | Swipe a recording card on Android to reveal the delete action. |
 | 24 | Select and delete multiple recordings in one operation. |
 | 25 | Prepare and confirm the deletion of all recordings for one camera in the web app. |
 | 26 | Prepare and confirm deletion of the entire recording archive in the web app. |
 | 27 | See which files a bulk deletion removed, skipped, or could not process. |
+| 28 | Follow an original recording's download in Android and find the file in Downloads. |
 
 </details>
 
@@ -298,15 +299,15 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 
 <details>
 
-<summary>Show 14 functions</summary>
+<summary>Show 15 functions</summary>
 
 | No. | Function |
 |---:|---|
 | 1 | Start talking through a compatible camera from its live view. |
 | 2 | Check for a compatible audio backchannel. |
 | 3 | Ask for Android microphone permission when using talk. |
-| 4 | Hold a button to speak through the standard backchannel. |
-| 5 | Talk and listen simultaneously on compatible devices with the appropriate adapter. |
+| 4 | Hold a button to speak when only half-duplex is supported or the capability is unknown. |
+| 5 | Talk and listen simultaneously when the Android app detects a supported full-duplex mode. |
 | 6 | Mute the microphone during a call. |
 | 7 | Turn incoming camera audio on or off during a call. |
 | 8 | Automatically turn on incoming audio when the call starts. |
@@ -316,6 +317,7 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 | 12 | See when another session is using the camera speaker. |
 | 13 | End the call manually. |
 | 14 | Stop microphone capture when leaving the camera, backgrounding the app, or losing the connection. |
+| 15 | Select automatic detection, full duplex, or hold-to-speak for that camera. |
 
 </details>
 
@@ -323,7 +325,7 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 
 <details>
 
-<summary>Show 35 functions</summary>
+<summary>Show 37 functions</summary>
 
 | No. | Function |
 |---:|---|
@@ -362,6 +364,8 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 | 33 | Download the original recording covering the chosen point in time. |
 | 34 | Download those originals for multiple cameras through the web app. |
 | 35 | Start creating a clip from the current point in Chronology. |
+| 36 | Let the shared timeline keep moving through a gap when there is footage ahead. |
+| 37 | Skip a gap and jump to the nearest recording ahead for a selected camera in web or Android. |
 
 </details>
 
@@ -406,7 +410,7 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 
 <details>
 
-<summary>Show 40 functions</summary>
+<summary>Show 41 functions</summary>
 
 | No. | Function |
 |---:|---|
@@ -450,6 +454,7 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 | 38 | Use one reference frame for a fixed camera across lighting changes. |
 | 39 | Apply spatial rules to a moving PTZ lens only when the viewpoint matches. |
 | 40 | Show AI outlines in web and Android live views only when there are contours to display. |
+| 41 | Let a scene-change rule also trigger when selected object classes appear without a major scene change. |
 
 </details>
 
@@ -575,9 +580,9 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 | 21 | Filter event history by event type. |
 | 22 | Filter event history by time range. |
 | 23 | Show only unread events. |
-| 24 | Filter event history by camera or AI source. |
-| 25 | Filter AI events by rule, zone, or condition. |
-| 26 | See the detection frame when a snapshot was captured. |
+| 24 | Filter web event history by source: all, camera events, or NAS AI. |
+| 25 | Choose an AI rule from the selected camera and period or filter by condition. |
+| 26 | Open the available event frame from Android history for both camera and NAS AI detections. |
 | 27 | Review the rule and detected object details. |
 | 28 | Mark or unmark an AI event as a false positive without retraining the model. |
 | 29 | Open the relevant camera's live view directly from an event. |
@@ -603,7 +608,7 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 | 49 | Receive Android background alerts through a compatible UnifiedPush provider. |
 | 50 | Enable or disable delivery to a specific phone only. |
 | 51 | Send a test notification to the phone. |
-| 52 | View an available event snapshot in an expanded Android notification. |
+| 52 | View the available snapshot in the first Android notification; if it isn't ready, get one text alert instead. |
 | 53 | Open Live or Recording from separate buttons on the notification. |
 | 54 | Tap a notification to open Live for an event under an hour old, or check archive availability for an older one. |
 | 55 | Update the widget's unread count without posting a separate visible notification. |
@@ -820,7 +825,7 @@ Reference for [NAS 1.0.4 and Android 0.8.16](https://github.com/kmishnev87/km-vm
 | 26 | Mute alerts from individual cameras on the home screen. |
 | 27 | Keep your personal schedule in effect when changing camera notification settings from the widget. |
 | 28 | Open Live for the chosen NAS from the widget. |
-| 29 | See the unread event count on the 3×1 widget. |
+| 29 | See the unread count on the 3×1 widget, shown as 99+ above 99. |
 | 30 | Open event history by tapping the count. |
 | 31 | Distinguish an unavailable count from a real zero. |
 

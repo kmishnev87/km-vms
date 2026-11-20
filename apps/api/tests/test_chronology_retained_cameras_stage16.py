@@ -58,3 +58,14 @@ def test_retained_catalog_still_requires_timeline_permission(db):
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, role="unknown")
     with TestClient(app) as client:
         assert client.get("/chronology/cameras").status_code == 403
+        assert client.get("/chronology/next-recording", params={"camera_ids": "1", "after": "2026-11-10T00:00:00Z"}).status_code == 403
+
+
+def test_next_recording_crosses_day_and_respects_camera_selection(db):
+    camera, first, _, _, _, user, _ = overlap(db)
+    other = add_camera(db, name="Not selected")
+    after = "2026-11-01T23:55:00Z"
+    assert chronology.next_recording(str(other.id), after, db, user) == {"next": None}
+    result = chronology.next_recording(f"{other.id},{camera.id}", after, db, user)
+    assert result["next"]["timestamp_utc"].startswith(first.started_at.isoformat())
+    assert result["next"]["timestamp_utc"] > "2026-11-01T23:59:59"

@@ -11,6 +11,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -112,6 +114,7 @@ import ru.kmvms.mobile.talk.TalkController
 @Composable fun CallStatus(talk: TalkController, modifier: Modifier = Modifier) {
     val state by talk.state.collectAsStateWithLifecycle()
     val capability by talk.capability.collectAsStateWithLifecycle()
+    var modeMenu by remember { mutableStateOf(false) }
     if (state.phase == CallPhase.IDLE) return
     Row(modifier.background(Color(0xD9233044), RoundedCornerShape(12.dp)).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -140,6 +143,20 @@ import ru.kmvms.mobile.talk.TalkController
             CallPhase.FAILED -> Text(stringResource(callReason(state.reason)), modifier = Modifier.widthIn(max = 210.dp),
                 color = Color.White, style = MaterialTheme.typography.labelMedium)
             else -> Unit
+        }
+        if (state.phase == CallPhase.ACTIVE && capability.detectedDuplex != "push_to_talk") {
+            Box {
+                IconButton(onClick = { modeMenu = true }, modifier = Modifier.size(38.dp).testTag("call-mode")) {
+                    Icon(Icons.Outlined.Settings, stringResource(R.string.call_mode), tint = Color.White, modifier = Modifier.size(19.dp))
+                }
+                DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                    listOf("auto" to R.string.call_mode_auto, "full" to R.string.call_mode_full,
+                        "push_to_talk" to R.string.call_mode_hold).forEach { (key, label) ->
+                        DropdownMenuItem(text = { Text(stringResource(label)) },
+                            onClick = { modeMenu = false; talk.chooseMode(key) })
+                    }
+                }
+            }
         }
         IconButton(onClick = talk::end, modifier = Modifier.testTag("call-hangup")) {
             PlayerGlyph(PlayerGlyph.HANGUP, Color(0xFFFDA4AF), stringResource(R.string.call_end))

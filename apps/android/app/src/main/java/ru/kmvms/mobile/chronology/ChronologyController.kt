@@ -28,6 +28,8 @@ data class ChronologyState(
     val ranges: Map<Long, List<TimelineRange>> = emptyMap(),
     val loadingRanges: Boolean = false,
     val failures: Int = 0,
+    val findingNext: Boolean = false,
+    val noNextRecording: Boolean = false,
 )
 
 /** Foreground-only owner of all selected archive players and their common clock. */
@@ -47,6 +49,11 @@ class ChronologyController(private val context: Context, private val api: Chrono
     private val emptyProbeAfter = mutableMapOf<Long, Long>()
     private val reads = ChronologyReadQueue(api.api.mediaClient.dispatcher.maxRequestsPerHost)
     private var rangesJob: Job? = null
+    private var nextJob: Job? = null
+    private var gapJob: Job? = null
+    private var gapChecked = false
+    private var gapLookupFailed = false
+    private var gapNext: Long? = null
     private var epoch = 0L
     private var active = true
     private var rangeRequest = 0L
@@ -106,6 +113,8 @@ class ChronologyController(private val context: Context, private val api: Chrono
         if(visibleWindow?.let{position<it.first||position>=it.second}==true)visibleWindow=null
         if (dayChanged) mutable.update { it.copy(day = day) }
         epoch++
+        nextJob?.cancel(); nextJob = null
+        clearGap()
         lookups.values.forEach(Job::cancel); lookups.clear()
         prefetches.values.forEach(Job::cancel); prefetches.clear(); prefetchAttempted.clear()
         clock.prepare(position, tracks.keys.toSet(),resetBuffer=resetBuffer)
@@ -114,7 +123,8 @@ class ChronologyController(private val context: Context, private val api: Chrono
             if (canReuseTimelineSource(track.phase(), track.canServe(position), track.ended())) track.seek(position)
             else resolve(track.cameraId, position)
         }
-        mutable.update { it.copy(position = position, running = false, waiting = tracks.keys.toSet()) }
+        mutable.update { it.copy(position = position, running = false, waiting = tracks.keys.toSet(),
+            findingNext = false, noNextRecording = false) }
         if (dayChanged && zoneKnown) refreshRanges()
     }
 
@@ -125,6 +135,46 @@ class ChronologyController(private val context: Context, private val api: Chrono
 
     fun firstRecording() {
         mutable.value.ranges.values.flatten().minOfOrNull { it.start }?.let(::seek)
+    }
+
+    fun nextRecording() {
+        val selected = mutable.value.selected
+        if (selected.isEmpty() || nextJob?.isActive == true) return
+        val position = clock.positionMillis
+        val marker = epoch
+        mutable.update { it.copy(findingNext = true, noNextRecording = false) }
+        nextJob = scope.launch {
+            try {
+                val result = api.nextRecording(selected, position)
+                if (marker == epoch) {
+                    if (result != null) {
+                        // Do not cancel the currently executing seek job.
+                        nextJob = null
+                        seek(maxOf(clock.positionMillis, result))
+                    } else mutable.update { it.copy(noNextRecording = true) }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (marker == epoch) failure() }
+            finally { if (marker == epoch) mutable.update { it.copy(findingNext = false) } }
+        }
+    }
+
+    private fun clearGap() {
+        gapJob?.cancel(); gapJob = null
+        gapChecked = false; gapLookupFailed = false; gapNext = null
+    }
+
+    private fun findEndOfGap() {
+        if (gapChecked) return
+        gapChecked = true
+        val marker = epoch
+        val selected = mutable.value.selected
+        val position = clock.positionMillis
+        gapJob = scope.launch {
+            try { val result = api.nextRecording(selected, position); if (marker == epoch) gapNext = result }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (marker == epoch) gapLookupFailed = true }
+        }
     }
 
     fun refreshRanges() {
@@ -190,6 +240,15 @@ class ChronologyController(private val context: Context, private val api: Chrono
     }
 
     private fun tick(elapsed: Long) {
+        val inGap = tracks.isNotEmpty() && tracks.values.all { it.phase() == TimelinePhase.EMPTY }
+        if (inGap && clock.wantsPlayback) {
+            findEndOfGap()
+            val next = gapNext
+            if (next != null && clock.positionMillis >= next) {
+                seek(clock.positionMillis, resetBuffer = false)
+                return
+            }
+        } else if (!inGap && gapChecked) clearGap()
         val boundary = tracks.values.filter { it.ended() && !it.hasQueuedNext() &&
             it.phase() in setOf(TimelinePhase.READY, TimelinePhase.BUFFERING) }
             .mapNotNull { it.source()?.end }.minOrNull()
@@ -198,7 +257,8 @@ class ChronologyController(private val context: Context, private val api: Chrono
         }
         for ((id, track) in tracks) {
             val source = track.source()
-            if (track.phase() == TimelinePhase.EMPTY && clock.wantsPlayback && clock.positionMillis >= (emptyProbeAfter[id] ?: 0)) {
+            if (track.phase() == TimelinePhase.EMPTY && clock.wantsPlayback && (!inGap || gapLookupFailed)
+                && clock.positionMillis >= (emptyProbeAfter[id] ?: 0)) {
                 val ranges = mutable.value.ranges[id]
                 if (ranges == null || ranges.any { it.contains(clock.positionMillis) }) resolve(id, clock.positionMillis)
             }

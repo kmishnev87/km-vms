@@ -31,6 +31,7 @@ EventKind = Literal["motion", "person", "vehicle", "animal", "intrusion", "line_
                     "loitering", "tamper", "audio", "wrong_direction", "fire", "other"]
 EventSource = Literal["camera", "ai"]
 AiCondition = Literal["presence", "enter", "exit", "crossing", "dwell", "scene"]
+RuleRefPattern = r"^[1-9][0-9]{0,9}:[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$"
 
 
 class CameraSchedule(BaseModel):
@@ -92,6 +93,7 @@ class FilterSelection(ReadAll):
     unread: StrictBool = False
     source: EventSource | None = None
     rule: str | None = Field(None, max_length=48)
+    rule_ref: str | None = Field(None, max_length=91, pattern=RuleRefPattern)
     condition: AiCondition | None = None
     visible_ids: list[UUID] = Field(default_factory=list, max_length=100)
 
@@ -147,6 +149,7 @@ def history(camera_id: int | None = Query(None, ge=1), kind: EventKind | None = 
             limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100000),
             selection_id: UUID | None = None,
             source: EventSource | None = None, rule: str | None = Query(None, max_length=48), condition: AiCondition | None = None,
+            rule_ref: str | None = Query(None, max_length=91, pattern=RuleRefPattern),
             db: Session = Depends(get_db), user: User = Depends(require_permission("view_live"))):
     start, end = _since(since, db), _since(until, db)
     if start and end and start > end:
@@ -154,9 +157,15 @@ def history(camera_id: int | None = Query(None, ge=1), kind: EventKind | None = 
     try:
         return events.list_camera_events(db, user.id, camera_id=camera_id, kind=kind, since=start, until=end,
                                         unread=unread, limit=limit, offset=offset, selection_id=selection_id,
-                                        source=source, rule=rule, condition=condition)
+                                        source=source, rule=rule, condition=condition, rule_ref=rule_ref)
     except selections.SelectionError as exc:
         _failure(exc.code)
+
+
+@router.get("/ai-rule-options")
+def ai_rule_options(camera_id: int | None = Query(None, ge=1), since: str | None = Query(None, max_length=40),
+                    db: Session = Depends(get_db), _user: User = Depends(require_permission("view_live"))):
+    return {"items": events.ai_rule_options(db, camera_id=camera_id, since=_since(since, db))}
 
 
 @router.post("/selections")
@@ -167,7 +176,8 @@ def select_filtered(payload: FilterSelection, db: Session = Depends(get_db), use
     try:
         return selections.create(db, user.id, _snapshot_cursor(payload.through),
             {"camera_id": payload.camera_id, "kind": payload.kind, "since": start, "until": end, "unread": payload.unread,
-             "source": payload.source, "rule": payload.rule, "condition": payload.condition}, payload.visible_ids)
+             "source": payload.source, "rule": payload.rule, "rule_ref": payload.rule_ref,
+             "condition": payload.condition}, payload.visible_ids)
     except selections.SelectionError as exc:
         _failure(exc.code)
 
@@ -392,9 +402,10 @@ def evidence(event_id: UUID, db: Session = Depends(get_db), user: User = Depends
 
     row = event_row(db, event_id)
     value = events.serialize(row, row.id in events.marked_read_ids(db, user.id, [row.id]))
+    archive = archive_evidence(db, user, value) if not value.get("source_ambiguous") else {"state": "unavailable"}
     if not value.get("ai"):
-        _failure("ai_event_not_found", 404)
-    return {"event": value, "archive": archive_evidence(db, user, value)}
+        archive.pop("clip", None)
+    return {"event": value, "archive": archive}
 
 
 @router.get("/{event_id}/snapshot")
@@ -403,9 +414,7 @@ def snapshot(event_id: UUID, db: Session = Depends(get_db), user: User = Depends
 
     row = event_row(db, event_id)
     value = events.serialize(row)
-    available = ((value.get("ai") or {}).get("snapshot_available") if value.get("ai") else
-                 bool((row.event_metadata or {}).get("camera_snapshot")))
-    if not available or not value["camera_id"]:
+    if not value["snapshot_available"] or not value["camera_id"]:
         _failure("ai_snapshot_not_found", 404)
     _camera(db, value["camera_id"])
     path = frame_path(event_id)

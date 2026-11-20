@@ -134,7 +134,10 @@ def _sensor_identity(camera, value):
         if not isinstance(rule_id, str) or len(rule_id) > 64:
             return None
         rule = next((item for item in config.get("rules", []) if item["id"] == rule_id), None)
-        if not rule or rule["kind"] != condition or not set(kinds).issubset(rule["classes"]):
+        if not rule or not set(kinds).issubset(rule["classes"]):
+            return None
+        scene_objects = rule["kind"] == "scene" and rule.get("scene_objects") is True and condition == "presence"
+        if rule["kind"] != condition and not scene_objects:
             return None
         name = rule.get("name", "")
         scope = "line" if condition == "crossing" else "zone" if rule.get("points") or condition in {"enter", "exit", "dwell"} else "frame"

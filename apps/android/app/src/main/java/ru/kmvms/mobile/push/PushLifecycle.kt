@@ -9,6 +9,7 @@ object PushLifecycle {
         val disabled = PushStore(context).disable(profileId, all = true)
         if (disabled != null) UnifiedPush.unregister(context, disabled.instance)
         MobileNotifications.clear(context, profileId)
+        ru.kmvms.mobile.events.EventFrameCache.clear(context, profileId)
         ru.kmvms.mobile.widget.WidgetUnreadStore(context).clear(profileId)
         ru.kmvms.mobile.widget.AlertWidgetProvider.refresh(context)
         return disabled

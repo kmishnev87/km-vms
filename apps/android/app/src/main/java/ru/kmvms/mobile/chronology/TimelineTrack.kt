@@ -59,7 +59,7 @@ class TimelineTrack(context: Context, private val api: ChronologyApi, val camera
     }
 
     fun resolving() { state = TimelinePhase.RESOLVING; player.pause() }
-    fun empty() { player.stop(); state = TimelinePhase.EMPTY }
+    fun empty() { state = TimelinePhase.EMPTY; player.stop(); player.clearMediaItems(); slots.clear() }
     fun failed() { player.pause(); state = TimelinePhase.FAILED }
 
     fun load(source: TimelineSource, target: Long) {

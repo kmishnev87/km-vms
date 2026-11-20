@@ -44,6 +44,7 @@ class NasApi(val address: ServerAddress) {
     val mediaClient = OkHttpClient.Builder().cookieJar(cookies).followRedirects(false).followSslRedirects(false)
         .connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS).build()
     internal val longPollClient = mediaClient.newBuilder().readTimeout(35, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build()
+    private val quickFrameClient = mediaClient.newBuilder().callTimeout(1150, TimeUnit.MILLISECONDS).build()
     @Volatile private var access: String? = null
     // Opaque, in-memory boundary for scoped media leases; never expose the bearer.
     @Volatile private var mediaAuthority: Any? = null
@@ -106,19 +107,20 @@ class NasApi(val address: ServerAddress) {
         require(cameraId > 0)
         return getImage("api/previews/camera-previews/$cameraId.jpg", 4L * 1024 * 1024, true, mayRenew)
     }
-    internal suspend fun eventSnapshot(id: String): ByteArray {
+    internal suspend fun eventSnapshot(id: String, quick: Boolean = false): ByteArray {
         require(id.matches(Regex("[a-fA-F0-9-]{36}")))
-        return getImage("api/camera-events/$id/snapshot", 128L * 1024, false)
+        return getImage("api/camera-events/$id/snapshot", 128L * 1024, false, quick = quick)
     }
-    private suspend fun getImage(path: String, maxBytes: Long, allowPng: Boolean, mayRenew: Boolean = true): ByteArray = withContext(Dispatchers.IO) {
+    private suspend fun getImage(path: String, maxBytes: Long, allowPng: Boolean, mayRenew: Boolean = true,
+                                 quick: Boolean = false): ByteArray = withContext(Dispatchers.IO) {
         val ownAccess = access ?: throw NasException(ApiProblem.AUTHENTICATION)
         val request = Request.Builder().url(address.endpoint(path).toASCIIString())
             .header("Accept", "image/jpeg").header("Authorization", "Bearer $ownAccess").build()
         try {
-            execute(request).use { response ->
+            execute(request, quickFrame = quick).use { response ->
                 if (response.code == 401 && mayRenew && renewal != null) {
                     response.close(); renewSession(ownAccess)
-                    return@withContext getImage(path, maxBytes, allowPng, false)
+                    return@withContext getImage(path, maxBytes, allowPng, false, quick)
                 }
                 if (!response.isSuccessful) throw NasException(when (response.code) {
                     401 -> ApiProblem.AUTHENTICATION; 403 -> ApiProblem.FORBIDDEN; else -> ApiProblem.SERVER
@@ -223,8 +225,10 @@ class NasApi(val address: ServerAddress) {
     @Volatile private var sessionUsername: String? = null
     fun sessionUser(username: String) { sessionUsername = username }
 
-    private suspend fun execute(request: Request, longOperation: Boolean = false, longPolling: Boolean = false): Response = suspendCancellableCoroutine { continuation ->
-        val client = if (longOperation) mediaClient.newBuilder().callTimeout(20, TimeUnit.MINUTES).readTimeout(20, TimeUnit.MINUTES).build()
+    private suspend fun execute(request: Request, longOperation: Boolean = false, longPolling: Boolean = false,
+                                quickFrame: Boolean = false): Response = suspendCancellableCoroutine { continuation ->
+        val client = if (quickFrame) quickFrameClient
+            else if (longOperation) mediaClient.newBuilder().callTimeout(20, TimeUnit.MINUTES).readTimeout(20, TimeUnit.MINUTES).build()
             else if (longPolling) longPollClient else mediaClient
         val call = client.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }

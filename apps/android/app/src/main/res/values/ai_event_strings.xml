@@ -1,4 +1,7 @@
 <resources>
+    <string name="camera_event_title">Camera event</string>
+    <string name="event_photo">Event photo</string>
+    <string name="event_photo_loading">Loading photo…</string>
     <string name="ai_event_title">AI event</string>
     <string name="ai_event_both">All sources</string>
     <string name="ai_event_nas">NAS analytics</string>

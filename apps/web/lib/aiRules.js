@@ -6,6 +6,7 @@ export const aiRuleCount = (config) => (config?.rules?.length ?? 0) + (config?.e
 export const needsPolygon = (kind) => ["enter", "exit", "dwell"].includes(kind);
 export const defaultRule = (id) => ({
   id, name: "", kind: "presence", classes: ["person"], points: [], direction: "both",
+  scene_objects: false,
   confidence: 50, confirm_seconds: 0, release_seconds: 2, dwell_seconds: 10, schedule: null, record: true, notify: true,
 });
 export function polygonValid(points) {
@@ -25,7 +26,7 @@ export function ruleError(config) {
   if ((config.exclusions.length || config.rules.some(rule => rule.points.length)) && !config.reference) return "rule_capture_first";
   if (config.exclusions.some(points => !polygonValid(points))) return "rule_polygon_invalid";
   for (const rule of config.rules) {
-    if (rule.kind !== "scene" && !rule.classes.length) return "rule_class_required";
+    if ((rule.kind !== "scene" || rule.scene_objects) && !rule.classes.length) return "rule_class_required";
     if (rule.schedule && !rule.schedule.days.length) return "rule_days_required";
     if (rule.kind === "crossing") {
       const [a, b] = rule.points;

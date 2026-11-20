@@ -29,7 +29,7 @@ object MobileNotifications {
     const val CHANNEL = "camera-events-v1"
     private val lock = Any()
     fun allowed(context: Context) = (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) && NotificationManagerCompat.from(context).areNotificationsEnabled()
-    fun show(original: Context, profile: ServerProfile, event: PushEnvelope) = synchronized(lock) {
+    fun show(original: Context, profile: ServerProfile, event: PushEnvelope, image: Bitmap? = null) = synchronized(lock) {
         fun log(code: DiagnosticCode) = AppDiagnostics.record(code, DiagnosticArea.PUSH, profile.id, event.eventId, event.cameraId)
         if (!allowed(original)) { log(DiagnosticCode.PUSH_PERMISSION_BLOCKED); return@synchronized }
         val context = AppLocales.wrap(original)
@@ -47,7 +47,8 @@ object MobileNotifications {
             DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault()).format(event.occurred)
         val builder = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (event.test) profile.name else profile.name + " · " + event.cameraName)
-            .setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentText(text).setStyle(if (image != null) NotificationCompat.BigPictureStyle().bigPicture(image).setSummaryText(text)
+                else NotificationCompat.BigTextStyle().bigText(text))
             .setCategory(NotificationCompat.CATEGORY_EVENT).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setOnlyAlertOnce(true)
             .setGroup("nas:${profile.id}")
@@ -64,7 +65,6 @@ object MobileNotifications {
             }
             // Means handed to Android, not proof that the person saw a banner.
             log(DiagnosticCode.PUSH_POSTED)
-            if (event.preview) runCatching { EventPreviewWorker.enqueue(original, profile.id, event) }
         } else log(DiagnosticCode.PUSH_LIVE_SUPPRESSED)
         history.edit().putString("delivered_v1", JSONArray(delivered.takeLast(255) + key).toString()).apply()
         history.edit().putLong("last_received.${profile.id}", System.currentTimeMillis()).apply()
@@ -73,19 +73,6 @@ object MobileNotifications {
         val intent = Intent(context, MainActivity::class.java).setData(Uri.parse("kmvms://notification/$profile/$event/$action"))
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    }
-    internal fun active(context: Context, tag: String): Boolean =
-        context.getSystemService(NotificationManager::class.java).activeNotifications.any { it.tag == tag && it.id == 1 }
-
-    internal fun addPreview(context: Context, tag: String, image: Bitmap) = synchronized(lock) {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        if (!allowed(context)) return@synchronized
-        // Do not bring back an event the user already opened or dismissed.
-        val old = manager.activeNotifications.firstOrNull { it.tag == tag && it.id == 1 }?.notification ?: return@synchronized
-        val style = Notification.BigPictureStyle().bigPicture(image)
-            .setSummaryText(old.extras.getCharSequence(Notification.EXTRA_TEXT))
-        val updated = Notification.Builder.recoverBuilder(context, old).setStyle(style).setOnlyAlertOnce(true).build()
-        manager.notify(tag, 1, updated)
     }
     fun clear(context: Context, profile: String) {
         val manager = context.getSystemService(NotificationManager::class.java)

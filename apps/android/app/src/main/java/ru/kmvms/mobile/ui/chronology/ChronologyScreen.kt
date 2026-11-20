@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -184,6 +185,11 @@ import java.time.format.DateTimeFormatter
             if (state.wantsPlay) Text("Ⅱ", style = MaterialTheme.typography.titleLarge, color = Accent)
             else Icon(Icons.Default.PlayArrow, label)
         }
+        IconButton(onClick = controller::nextRecording, enabled = state.selected.isNotEmpty() && !state.findingNext,
+            modifier = Modifier.size(40.dp).testTag("timeline-next-recording")) {
+            Icon(painterResource(R.drawable.ic_timeline_next), stringResource(R.string.timeline_next_recording),
+                tint = Accent, modifier = Modifier.size(20.dp))
+        }
         var speedMenu by remember { mutableStateOf(false) }
         Box {
             TextButton(onClick = { speedMenu = true }, modifier = Modifier.testTag("timeline-speed")) { Text("${state.speed.toString().removeSuffix(".0")}×") }
@@ -198,6 +204,7 @@ import java.time.format.DateTimeFormatter
                     CircularProgressIndicator(Modifier.size(14.dp),strokeWidth=2.dp)
                     Text(stringResource(R.string.timeline_buffering),color=Muted,style=MaterialTheme.typography.labelSmall,modifier=Modifier.testTag("timeline-state"))
                 }
+            else if(state.noNextRecording) Text(stringResource(R.string.timeline_no_next),color=Muted,style=MaterialTheme.typography.labelSmall,modifier=Modifier.testTag("timeline-state"))
             else if(!state.wantsPlay) Text(stringResource(R.string.timeline_paused),color=Muted,style=MaterialTheme.typography.labelSmall,modifier=Modifier.testTag("timeline-state"))
         }
         TextButton(onClick = controller::firstRecording, enabled = state.ranges.values.any { it.isNotEmpty() }, modifier = Modifier.testTag("timeline-first")) { Text(stringResource(R.string.timeline_find)) }

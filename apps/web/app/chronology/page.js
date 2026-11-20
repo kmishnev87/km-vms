@@ -60,6 +60,8 @@ const SPEED_OPTIONS = [
 ];
 
 const CHRONOLOGY_TEXT = {
+  nextRecording: "К следующей записи",
+  noNextRecording: "Дальше записей нет",
   cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
   align: "\u0412\u044b\u0440\u043e\u0432\u043d\u044f\u0442\u044c",
   addAll: "\u0412\u0441\u0435",
@@ -234,6 +236,7 @@ export default function ChronologyPage() {
   const workspaceGenerationRef = useRef(0);
   const cacheOwnerRef = useRef(null);
   const [operationToast, setOperationToast] = useState(null);
+  const [findingNextRecording, setFindingNextRecording] = useState(false);
   const cameraLoadErrorRef = useRef("");
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
@@ -1355,6 +1358,29 @@ export default function ChronologyPage() {
     setFullscreenControlsVisible(false);
   }
 
+  async function handleNextRecording() {
+    const ids = () => [...new Set(tilesRef.current.map(tile => String(tile.cameraId || "")).filter(Boolean))].sort().join(",");
+    const cameras = ids();
+    const position = currentTsRef.current;
+    if (!cameras || !position || findingNextRecording) return;
+    const actionId = seekActionIdRef.current;
+    setFindingNextRecording(true);
+    try {
+      const result = await apiFetch(`/chronology/next-recording?camera_ids=${encodeURIComponent(cameras)}&after=${encodeURIComponent(formatProductTimestampParam(position))}`);
+      if (seekActionIdRef.current !== actionId || ids() !== cameras) return;
+      if (!result?.next?.timestamp_system) {
+        setOperationToast({ id: `chronology-next-${Date.now()}`, title: TEXT.noNextRecording, tone: "warning" });
+        return;
+      }
+      const next = productCalendarDate(result.next.timestamp_system);
+      if (Number.isFinite(next.getTime()) && next >= currentTsRef.current) await handleTimelineSelect(next);
+    } catch (_) {
+      if (seekActionIdRef.current === actionId) {
+        setOperationToast({ id: `chronology-next-error-${Date.now()}`, title: TEXT.loadError, tone: "error" });
+      }
+    } finally { setFindingNextRecording(false); }
+  }
+
   async function seekBySeconds(seconds) {
     const nextDate = currentTsRef.current
       ? new Date(currentTsRef.current.getTime() + seconds * 1000)
@@ -1947,6 +1973,13 @@ export default function ChronologyPage() {
                 aria-pressed={playRequested}
                 aria-busy={playPending}
               ><span className="chronologyPlayGlyph" aria-hidden="true">{"\u25b6"}</span></button>
+              <button type="button" className="chronologyIconButton" onClick={handleNextRecording}
+                disabled={findingNextRecording || !selectedCameraIds.length}
+                aria-busy={findingNextRecording} title={TEXT.nextRecording} aria-label={TEXT.nextRecording}>
+                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+                  <path d="M6 5v14l10-7zM17 5h2v14h-2z" />
+                </svg>
+              </button>
               <button type="button" className="chronologyIconButton" onClick={handlePause} title={TEXT.pause} aria-label={TEXT.pause}>{"\u275a\u275a"}</button>
               <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(10)} title={TEXT.forward10} aria-label={TEXT.forward10}>+10</button>
 

@@ -73,6 +73,13 @@ class ChronologyApi(val api: NasApi, initialZone: ZoneId? = null) {
         })
     }
 
+    suspend fun nextRecording(cameraIds: List<Long>, position: Long): Long? {
+        require(cameraIds.isNotEmpty() && cameraIds.size <= 64 && cameraIds.all { it > 0 })
+        val after = encode(timestamp(Instant.ofEpochMilli(position)))
+        val body = api.json("api/chronology/next-recording?camera_ids=${cameraIds.distinct().joinToString(",")}&after=$after") as JSONObject
+        return body.optJSONObject("next")?.getString("timestamp_utc")?.let { Instant.parse(it).toEpochMilli() }
+    }
+
     suspend fun resolve(cameraId: Long, position: Long): TimelineLookup {
         require(cameraId > 0)
         // Match the existing browser contract: a NAS-local timestamp allows the

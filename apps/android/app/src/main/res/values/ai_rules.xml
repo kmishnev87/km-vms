@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="ai_rule_scene_objects">Also detect objects in the whole frame</string>
     <string name="ai_rule_edit">Set up AI rules</string>
     <string name="ai_rule_done">Done</string>
     <string name="ai_rule_count">Rules: %1$d</string>

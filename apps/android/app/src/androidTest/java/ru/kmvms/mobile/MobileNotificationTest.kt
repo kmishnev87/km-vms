@@ -31,8 +31,9 @@ class MobileNotificationTest {
         val event = PushEnvelope(UUID.randomUUID().toString(), 1, "Gate", CameraEventKind.INTRUSION, Instant.now(), objects = setOf(CameraEventKind.PERSON))
         val manager = context.getSystemService(NotificationManager::class.java)
         val history = context.getSharedPreferences("push_delivery_ids", Context.MODE_PRIVATE)
+        val preview = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888).apply { eraseColor(0xff356080.toInt()) }
         try {
-            MobileNotifications.show(context, profile, event)
+            MobileNotifications.show(context, profile, event, preview)
             val deadline = SystemClock.elapsedRealtime() + 3000
             var found = manager.activeNotifications.firstOrNull { it.tag == "${profile.id}:${event.eventId}" }
             while (found == null && SystemClock.elapsedRealtime() < deadline) {
@@ -43,28 +44,15 @@ class MobileNotificationTest {
             val posted = found!!
             assertEquals(Notification.VISIBILITY_PRIVATE, posted.notification.visibility)
             assertEquals(2, posted.notification.actions.size)
+            assertTrue(posted.notification.extras.getString(Notification.EXTRA_TEMPLATE).orEmpty().endsWith("BigPictureStyle"))
+            assertTrue(posted.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
             if (Build.VERSION.SDK_INT >= 31) posted.notification.actions.forEach { assertTrue(it.actionIntent.isImmutable) }
             assertEquals(context.packageName, posted.notification.contentIntent.creatorPackage)
             MobileNotifications.show(context, profile, event)
             SystemClock.sleep(100)
             assertEquals(posted.postTime, manager.activeNotifications.first { it.tag == posted.tag }.postTime)
-            val preview = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
-            try {
-                preview.eraseColor(0xff356080.toInt())
-                MobileNotifications.addPreview(context, posted.tag, preview)
-                val until = SystemClock.elapsedRealtime() + 3000
-                var updated = manager.activeNotifications.first { it.tag == posted.tag }
-                while (!updated.notification.extras.getString(Notification.EXTRA_TEMPLATE).orEmpty().endsWith("BigPictureStyle")
-                    && SystemClock.elapsedRealtime() < until) {
-                    SystemClock.sleep(50)
-                    updated = manager.activeNotifications.first { it.tag == posted.tag }
-                }
-                assertTrue(updated.notification.extras.getString(Notification.EXTRA_TEMPLATE).orEmpty().endsWith("BigPictureStyle"))
-                assertEquals(posted.key, updated.key)
-                assertEquals(2, updated.notification.actions.size)
-                assertTrue(updated.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
-            } finally { preview.recycle() }
         } finally {
+            preview.recycle()
             MobileNotifications.clear(context, profile.id)
             val prior = JSONArray(history.getString("delivered_v1", "[]"))
             val retained = (0 until prior.length()).map { prior.getString(it) }.filterNot { it.startsWith(profile.id + ":") }

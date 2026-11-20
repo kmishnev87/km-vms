@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -38,6 +39,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import ru.kmvms.mobile.R
 import ru.kmvms.mobile.archive.ArchiveApi
@@ -77,6 +80,23 @@ import java.time.format.DateTimeFormatter
     var detail by remember(service) { mutableStateOf<CameraEvent?>(null) }
     var detailZone by remember(service) { mutableStateOf<ZoneId?>(null) }
     var clip by remember(service) { mutableStateOf<Pair<ClipDraft, ArchiveCamera>?>(null) }
+    val historyList = rememberLazyListState()
+    LaunchedEffect(service, profileId, state.page, detail?.id, preferencesOpen) {
+        if (profileId == null || detail != null || preferencesOpen) return@LaunchedEffect
+        val candidates = state.page?.items.orEmpty().filter { it.snapshotAvailable }.associateBy { it.id }
+        if (candidates.isEmpty()) return@LaunchedEffect
+        snapshotFlow { historyList.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } }.collectLatest { visible ->
+            visible.filter { it in candidates }.take(4).chunked(2).forEach { batch ->
+                coroutineScope {
+                    batch.forEach { id -> launch {
+                        try { EventFrameCache.load(widgetContext, profileId, id) { service.snapshot(id) } }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { /* The selected event can retry on demand. */ }
+                    } }
+                }
+            }
+        }
+    }
     LaunchedEffect(focusedEvent, service) {
         focusedEvent?.let { (event, zone) -> detail = event; detailZone = zone; onFocusHandled() }
     }
@@ -165,7 +185,7 @@ import java.time.format.DateTimeFormatter
                         modifier = Modifier.testTag("events-delete")) { Icon(painterResource(R.drawable.ic_camera_trash), stringResource(if (state.selectedCount==0) R.string.events_delete_all else R.string.events_delete_selected),tint=Muted,modifier=Modifier.size(22.dp)) }
                 }
             }
-            LazyColumn(Modifier.weight(1f).testTag("events-list"), contentPadding = PaddingValues(vertical = 8.dp)) {
+            LazyColumn(Modifier.weight(1f).testTag("events-list"), state = historyList, contentPadding = PaddingValues(vertical = 8.dp)) {
                 if (page?.items.isNullOrEmpty() && !state.loading) item {
                     Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) { Text(stringResource(R.string.events_empty), color = Muted) }
                 }
@@ -195,7 +215,7 @@ import java.time.format.DateTimeFormatter
         }
     }
     detail?.let { event ->
-        AiEventSheet(service, event, detailZone ?: state.page?.zone ?: ZoneOffset.UTC, canDelete, canClip, opening,
+        AiEventSheet(service, event, detailZone ?: state.page?.zone ?: ZoneOffset.UTC, canDelete, canClip, opening, profileId = profileId,
             onDismiss = { detail = null; detailZone = null },
             open = { navigate(event, it) }, onReview = { controller.refresh(state.page?.offset ?: 0) },
             onClip = { range, title ->
@@ -246,8 +266,8 @@ import java.time.format.DateTimeFormatter
     Surface(color = Color.White) {
         Row(Modifier.fillMaxWidth().heightIn(min = 92.dp).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(state.isSelected(event.id), select, enabled = !state.busy && state.canSelect(event.id), modifier = Modifier.testTag("event-check-${event.id}"))
-            Column(Modifier.weight(1f).clickable(enabled = !opening && (event.ai != null || event.cameraId != null && !event.ambiguous)) {
-                    if (event.ai != null && showDetails != null) showDetails() else open(if (canArchive) EventAction.OPEN else EventAction.LIVE)
+            Column(Modifier.weight(1f).clickable(enabled = !opening && (showDetails != null || event.cameraId != null && !event.ambiguous)) {
+                    if (showDetails != null) showDetails() else open(if (canArchive) EventAction.OPEN else EventAction.LIVE)
                 }
                 .padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Box(Modifier.fillMaxWidth()) {
@@ -257,19 +277,24 @@ import java.time.format.DateTimeFormatter
                         style = MaterialTheme.typography.bodyMedium, modifier=Modifier.testTag("event-camera-${event.id}"))
                 }
                 val labels = eventLabels(event.kind, event.objects, event.ai?.condition).map { stringResource(it) }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (event.ai != null) Text("AI", color = Accent, style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.background(Accent.copy(alpha = .09f), CircleShape).padding(horizontal = 5.dp, vertical = 1.dp))
-                    Text(labels.joinToString(" · "),maxLines=2,overflow=TextOverflow.Ellipsis,
-                        color = color, style = MaterialTheme.typography.bodySmall, modifier=Modifier.testTag("event-kind-${event.id}"))
-                }
+                Text(labels.joinToString(" · "), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    color = color, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("event-kind-${event.id}"))
                 event.ai?.let { ai ->
                     val note = listOfNotNull(ai.ruleName.takeIf(String::isNotBlank), if (ai.falsePositive) stringResource(R.string.ai_event_false) else null)
                     if (note.isNotEmpty()) Text(note.joinToString(" · "), maxLines = 1, overflow = TextOverflow.Ellipsis,
                         color = Muted, style = MaterialTheme.typography.labelSmall)
                 }
-                Text(event.occurred.atZone(state.page?.zone ?: java.time.ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")), color = Muted, style = MaterialTheme.typography.labelSmall, modifier=Modifier.testTag("event-time-${event.id}"))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(event.occurred.atZone(state.page?.zone ?: java.time.ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")),
+                        color = Muted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.testTag("event-time-${event.id}"))
+                    if (event.ai != null) Text("AI", color = Accent, style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.background(Accent.copy(alpha = .09f), CircleShape).padding(horizontal = 4.dp, vertical = 1.dp))
+                }
                 if (event.ambiguous) Text(stringResource(R.string.events_source_unknown), color = Muted, style = MaterialTheme.typography.labelSmall)
+            }
+            if (showDetails != null) IconButton(onClick = showDetails, enabled = !opening && !state.busy,
+                modifier = Modifier.size(42.dp).testTag("event-photo-${event.id}")) {
+                Icon(painterResource(R.drawable.ic_event_photo), stringResource(R.string.event_photo), tint = Accent, modifier = Modifier.size(22.dp))
             }
             IconButton(onClick = { open(EventAction.LIVE) }, enabled = !opening && !state.busy && event.cameraId != null && !event.ambiguous,
                 modifier = Modifier.testTag("event-live-${event.id}")) { EventActionIcon(true) }

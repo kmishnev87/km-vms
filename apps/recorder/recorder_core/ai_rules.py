@@ -323,9 +323,14 @@ class RuleEngine:
             active = started = False
             starting_objects = set()
             if kind == "scene":
-                # Masked scenes cannot report pixel changes from an unverified view.
-                active = started = scene_shift and (not self.masks or was_aligned and same_view)
-            elif not points or self.view == "aligned":
+                # The scene signal does not depend on the object branch. Those
+                # branches share a recording episode, but report actual causes.
+                if scene_shift and (not self.masks or was_aligned and same_view):
+                    hits.append(RuleHit(rule["id"], "scene", True))
+                if not rule.get("scene_objects") or scene_shift:
+                    continue
+                kind, rule = "presence", {**rule, "kind": "presence"}
+            if not points or self.view == "aligned":
                 threshold = rule["confidence"]/100
                 for track_id, track in tracks.items():
                     if track.object.kind in rule["classes"] and track.object.confidence >= threshold:
@@ -346,15 +351,16 @@ class RuleEngine:
             # A short disappearance can delay ending only an already active
             # object rule. It can never invent an exit or a crossing.
             rule = next((item for item, points in self.rule_rows if item["id"] == key[0]
-                         and item["kind"] in {"presence", "dwell"}
+                         and (item["kind"] in {"presence", "dwell"} or item["kind"] == "scene" and item.get("scene_objects"))
                          and (not points or self.view == "aligned")
                          and (not self.masks or self.view == "aligned")
                          and window_open(item["schedule"], local)), None)
             if (rule and rule["id"] not in held and memo.active and memo.last_activity is not None
                     and when-memo.last_activity <= rule["release_seconds"]):
                 held.add(rule["id"])
-                if not any(hit.rule_id == rule["id"] for hit in hits):
-                    hits.append(RuleHit(rule["id"], rule["kind"], False))
+                kind = "presence" if rule["kind"] == "scene" else rule["kind"]
+                if not any(hit.rule_id == rule["id"] and hit.kind == kind for hit in hits):
+                    hits.append(RuleHit(rule["id"], kind, False))
             else:
                 self.memory.pop(key)
         return hits

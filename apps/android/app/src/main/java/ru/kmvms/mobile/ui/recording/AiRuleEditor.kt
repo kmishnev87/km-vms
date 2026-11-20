@@ -177,9 +177,15 @@ internal fun AiRuleEditor(
                             label = { Text(stringResource(R.string.ai_rule_name)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         LabeledChoice(stringResource(R.string.ai_rule_type), stringResource(ruleLabel(rule.kind)),
                             aiRuleKinds.map { it to stringResource(ruleLabel(it)) }, true, "ai-rule-kind") { kind ->
-                            patch { it.copy(kind = kind, points = emptyList(), direction = "both") }; drawing = false
+                            patch { it.copy(kind = kind, points = emptyList(), direction = "both",
+                                sceneObjects = kind == "scene" && it.sceneObjects) }; drawing = false
                         }
-                        if (rule.kind != "scene") {
+                        if (rule.kind == "scene") {
+                            RuleToggle(R.string.ai_rule_scene_objects, rule.sceneObjects) { on ->
+                                patch { it.copy(sceneObjects = on) }
+                            }
+                        }
+                        if (rule.kind != "scene" || rule.sceneObjects) {
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                                 CameraEventKind.entries.filter { it.code in aiRuleClasses }.forEach { entry ->
                                     FilterChip(entry.code in rule.classes, onClick = {

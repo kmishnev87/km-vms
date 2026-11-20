@@ -31,17 +31,19 @@ internal data class AiRule(
     val classes: Set<String> = setOf("person"), val points: List<AiPoint> = emptyList(), val direction: String = "both",
     val confidence: Int = 50, val confirm: Int = 0, val release: Int = 2, val dwell: Int = 10,
     val schedule: AiSchedule? = null,
+    val sceneObjects: Boolean = false,
 ) {
     fun json() = JSONObject().put("id", id).put("name", name).put("kind", kind).put("classes", JSONArray(classes.toList()))
         .put("points", JSONArray(points.map { it.json() })).put("direction", direction).put("confidence", confidence)
         .put("confirm_seconds", confirm).put("release_seconds", release).put("dwell_seconds", dwell)
         // Old NAS releases still read the legacy action fields.
         .put("schedule", schedule?.json() ?: JSONObject.NULL).put("record", true).put("notify", true)
+        .apply { if (sceneObjects && kind == "scene") put("scene_objects", true) }
     companion object {
         fun read(row: JSONObject) = AiRule(row.getString("id"), row.optString("name"), row.getString("kind"),
             row.getJSONArray("classes").stringSet(), shape(row.optJSONArray("points")), row.optString("direction", "both"),
             row.optInt("confidence", 50), row.optInt("confirm_seconds"), row.optInt("release_seconds", 2),
-            row.optInt("dwell_seconds", 10), row.optJSONObject("schedule")?.let(AiSchedule::read))
+            row.optInt("dwell_seconds", 10), row.optJSONObject("schedule")?.let(AiSchedule::read), row.optBoolean("scene_objects"))
     }
 }
 
@@ -56,7 +58,7 @@ internal data class AiRules(
         if (reference.isNullOrBlank() && (exclusions.isNotEmpty() || rules.any { it.points.isNotEmpty() })) return R.string.ai_rule_capture_first
         if (exclusions.any { !validPolygon(it) }) return R.string.ai_rule_polygon_invalid
         for (rule in rules) {
-            if (rule.kind != "scene" && rule.classes.isEmpty()) return R.string.ai_rule_class_required
+            if ((rule.kind != "scene" || rule.sceneObjects) && rule.classes.isEmpty()) return R.string.ai_rule_class_required
             if (rule.schedule?.days?.isEmpty() == true) return R.string.ai_rule_days_required
             if (rule.kind == "crossing") {
                 if (rule.points.size != 2 || rule.points.let { (a, b) ->

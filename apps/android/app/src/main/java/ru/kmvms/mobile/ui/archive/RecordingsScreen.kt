@@ -1,7 +1,12 @@
 package ru.kmvms.mobile.ui.archive
 
+import android.Manifest
 import android.app.DatePickerDialog
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,11 +25,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import ru.kmvms.mobile.R
@@ -56,6 +63,26 @@ import kotlinx.coroutines.launch
     var clips by rememberSaveable { mutableStateOf(false) }
     val positions = remember { mutableMapOf<String, Long>() }
     val context = LocalContext.current
+    var pendingDownload by remember(archiveApi) { mutableStateOf<Recording?>(null) }
+    var requestingDownload by remember(archiveApi) { mutableStateOf(false) }
+    val downloadStarted = stringResource(R.string.download_started)
+    val downloadFailed = stringResource(R.string.server_error)
+    fun save(recording: Recording) {
+        if (requestingDownload) return
+        requestingDownload = true
+        scope.launch {
+            try { downloadRecording(context, archiveApi, recording); message(downloadStarted) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { message(downloadFailed) }
+            finally { requestingDownload = false }
+        }
+    }
+    val storagePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val recording = pendingDownload.also { pendingDownload = null }
+        if (recording != null) {
+            if (granted) save(recording) else message(downloadFailed)
+        }
+    }
     val playing = selected
     val deleteSelection = state.items.filter { it.identityKey in revealed }
     LaunchedEffect(browser, camera, date) { browser.search(camera, date?.let(LocalDate::parse)) }
@@ -131,6 +158,18 @@ import kotlinx.coroutines.launch
                                 Text(recording.size, color=Muted, style=MaterialTheme.typography.labelMedium)
                                 if (!recording.canPlay) Text(stringResource(R.string.video_unavailable), color=MaterialTheme.colorScheme.error, style=MaterialTheme.typography.labelMedium)
                             }
+                            if (recording.canDownload) IconButton(
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT <= 28 && ContextCompat.checkSelfPermission(
+                                            context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                                        pendingDownload = recording
+                                        storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                    } else save(recording)
+                                },
+                                enabled = !requestingDownload && pendingDownload == null && !deleting,
+                                modifier = Modifier.testTag("download-recording-${recording.id}")
+                            ) { Icon(painterResource(R.drawable.ic_recording_download), stringResource(R.string.download),
+                                tint = Muted, modifier = Modifier.size(22.dp)) }
                             IconButton(onClick={selected=recording},enabled=recording.canPlay && !state.loading) {
                                 Icon(Icons.Default.PlayArrow, stringResource(R.string.play))
                             }

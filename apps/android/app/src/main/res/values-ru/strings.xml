@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="timeline_next_recording">К следующей записи</string>
+    <string name="timeline_no_next">Дальше записей нет</string>
+    <string name="call_mode">Режим разговора</string>
+    <string name="call_mode_auto">Авто</string>
+    <string name="call_mode_full">Двусторонний</string>
+    <string name="call_mode_hold">Удержание</string>
     <string name="home">Главная</string>
     <string name="live">Онлайн</string>
     <string name="recordings">Записи</string>

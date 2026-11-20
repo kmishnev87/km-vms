@@ -26,7 +26,7 @@ export function filteredSelectionBody(query, through, rows) {
   return { through, camera_id: params.has("camera_id") ? Number(params.get("camera_id")) : null,
     kind: params.get("kind"), since: params.get("since"), until: params.get("until"),
     ...(params.has("source") ? { source: params.get("source") } : {}),
-    ...(params.has("rule") ? { rule: params.get("rule") } : {}),
+    ...(params.has("rule_ref") ? { rule_ref: params.get("rule_ref") } : {}),
     ...(params.has("condition") ? { condition: params.get("condition") } : {}),
     unread: params.get("unread") === "true", visible_ids: rows.map(row => row.id) };
 }

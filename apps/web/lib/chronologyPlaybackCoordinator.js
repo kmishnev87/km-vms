@@ -20,6 +20,7 @@ export function coordinatorBarrierComplete(coordinator) {
 
 export function createPlaybackCoordinator({
   onResume = () => {}, onHold = () => {}, onProgress = () => {},
+  clockPosition = () => null,
   now = Date.now, schedule = setTimeout, cancelTimer = clearTimeout,
   softTimeoutMs = 3500, hardTimeoutMs = 7000,
 } = {}) {
@@ -50,7 +51,11 @@ export function createPlaybackCoordinator({
     const value = players.get(id)?.sample?.();
     return value && Number.isFinite(value.positionMs) ? [{ id, ...value }] : [];
   });
+  const allEmpty = () => snapshot?.expectedTileIds.length > 0 &&
+    snapshot.expectedTileIds.every(id => snapshot.tileStates[id]?.state === "empty");
   const position = () => {
+    const cursor = clockPosition();
+    if (allEmpty() && Number.isFinite(cursor)) return Math.max(lastPositionMs ?? cursor, cursor);
     const values = samples();
     return values.length ? Math.min(...values.map(value => value.positionMs)) : lastPositionMs ?? snapshot?.targetMs;
   };
@@ -125,7 +130,9 @@ export function createPlaybackCoordinator({
     }
     if (snapshot.releaseState === "released" && snapshot.shouldResume
         && ["loading", "buffering", "boundary", "error", "unsupported"].includes(state)) {
-      hold(state, state === "boundary" && Number.isFinite(facts.targetMs) ? facts.targetMs : position());
+      const current = position();
+      const boundary = state === "boundary" && Number.isFinite(facts.targetMs);
+      hold(state, boundary ? (allEmpty() ? Math.max(current, facts.targetMs) : facts.targetMs) : current);
       return true;
     }
     publish({ ...snapshot, tileStates: { ...snapshot.tileStates,

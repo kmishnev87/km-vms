@@ -61,6 +61,7 @@ class AiRule(StrictModel):
     id: Identifier
     name: str = Field(default="", max_length=48)
     kind: Literal["presence", "enter", "exit", "crossing", "dwell", "scene"]
+    scene_objects: StrictBool = False
     classes: list[Class] = Field(default_factory=lambda: ["person"], max_length=3)
     points: list[Point] = Field(default_factory=list, max_length=10)
     direction: Literal["both", "forward", "reverse"] = "both"
@@ -81,7 +82,9 @@ class AiRule(StrictModel):
 
     @model_validator(mode="after")
     def valid_rule(self):
-        if self.kind != "scene" and (not self.classes or len(set(self.classes)) != len(self.classes)):
+        if self.scene_objects and self.kind != "scene":
+            raise ValueError("scene_objects_requires_scene_rule")
+        if (self.kind != "scene" or self.scene_objects) and (not self.classes or len(set(self.classes)) != len(self.classes)):
             raise ValueError("ai_rule_classes_required")
         if self.kind != "crossing" and self.direction != "both":
             raise ValueError("direction_requires_ai_line")

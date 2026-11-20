@@ -29,11 +29,11 @@ A linked camera follows the source's recording window, not whether the source su
 
 The web editor keeps its rule panel open in fullscreen, so you can edit the rules and points without leaving the expanded frame. The **AI** button in Live is available only for cameras with saved lines, zones or exclusions. The NAS identifies each ONVIF lens separately. An unverified lens profile or mismatched framing is indicated instead of drawing shapes at unverified coordinates.
 
-The local engine recognizes people, vehicles and supported animal classes. Basic scene change is separate. There is no identification of faces or vehicle plates, and it does not scan existing archive recordings automatically. A zone is meaningful only in the camera view used when it was drawn.
+The local engine recognizes people, vehicles and supported animal classes. A **Major scene change** rule can optionally also react to selected object classes without a large change to the view. For example, a PTZ camera can trigger when it turns to follow an event and when it detects someone while parked. There is no identification of faces or vehicle plates, and it does not scan existing archive recordings automatically. A zone is meaningful only in the camera view used when it was drawn.
 
 ## Inspect an event
 
-Open **Camera Events → History**. An AI event has a detection frame when available, its type and the selected rule. Filter by source, period, object and rule name.
+Open **Camera Events → History**. An AI event has a detection frame when available, its type and the matched rule. Select **Source → NAS AI** in web history to choose a rule from the selected camera and period or to filter by condition. Android also opens available snapshots of camera events through the same event details control.
 
 Starting with NAS 1.0.4, the first accepted detection opens the camera's episode without waiting for the recorder. Further matching activity on that camera, including a different selected event type or AI rule, extends it without another history entry or alert. A new episode can start after **After** minutes of quiet. For event recording this is the same interval that extends recording. Ending one detection or rolling to a new file does not rearm alerts. If you mute the opening alert, continuing activity does not send it again after you re-enable alerts.
 

@@ -1,4 +1,7 @@
 <resources>
+    <string name="camera_event_title">Событие камеры</string>
+    <string name="event_photo">Снимок события</string>
+    <string name="event_photo_loading">Загружаем снимок…</string>
     <string name="ai_event_title">Событие AI</string>
     <string name="ai_event_both">Все источники</string>
     <string name="ai_event_nas">Аналитика NAS</string>

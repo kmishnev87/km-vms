@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "1.0.4",
-  "tag": "v1.0.4",
-  "title": "KM VMS 1.0.4 — One alert per camera episode",
-  "summary": "The first matching camera or NAS AI detection opens an episode immediately. Continuing activity extends it without another alert, and continuous recording gets a configurable quiet interval. This release also improves AI rule editing, fixed-camera geometry, event previews, and backup verification. Includes Android 0.8.16.",
+  "version": "1.0.5",
+  "tag": "v1.0.5",
+  "title": "KM VMS 1.0.5 — Faster event review and archive navigation",
+  "summary": "Filter web events by source and AI rule, skip empty intervals in Chronology, and save original recordings on Android. The signed Android 0.8.17 app also improves event photos, camera calls and the 3×1 widget.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v1.0.4",
+  "source_ref": "v1.0.5",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,55 +20,51 @@
     "target_version": 14
   },
   "changelog": [
-    "The first matching detection opens a camera episode before any file is written. Continued activity adds no new history row, unread badge, or push.",
-    "Event recording uses its existing After duration. Continuous recording with analytics gains a quiet interval of one to five minutes.",
-    "Select camera event types for continuous or event recording. AI rules no longer require separate record and notify switches.",
-    "Edit AI rules beside the fullscreen frame and keep the saved reference frame. Show the saved zones and lines on demand in Live.",
-    "Lighting changes no longer invalidate fixed-camera geometry. Moving PTZ lenses still require the configured viewpoint for spatial rules.",
-    "Android shows available full-frame event previews. A tap opens Live within an hour or checks the archive for older events; both manual actions remain.",
-    "Manual backups run a trial restore. System Health handles brief camera subscription interruptions more accurately.",
-    "Includes signed Android 0.8.16 and a more compact 3×1 widget with independent alerts, Live, and unread shortcuts."
+    "Web event history puts Source in the main filter row. For NAS AI, choose a rule from the camera and period or filter by condition.",
+    "Chronology keeps the shared clock moving through gaps when footage lies ahead. Next recording jumps to the nearest selected-camera recording in web and Android.",
+    "Android 0.8.17 saves original recording files to Downloads without creating a clip.",
+    "One Android camera icon opens snapshots of camera or AI events. The first and only push includes the picture if ready; otherwise it contains text.",
+    "Android camera calls select full duplex when the adapter confirms it. Hold-to-speak remains available for other cameras, with a per-camera mode override.",
+    "A major scene-change rule can optionally trigger on selected people, vehicles or supported animals even without a major change to the view.",
+    "The 3×1 Android widget uses its space better, retains its three independent actions and shows 99+ for larger unread counts."
   ],
   "title_i18n": {
-    "en": "KM VMS 1.0.4 — One alert per camera episode",
-    "ru": "KM VMS 1.0.4 — Одно оповещение на эпизод камеры",
-    "zh-CN": "KM VMS 1.0.4 — 每个摄像机事件时段只提醒一次"
+    "en": "KM VMS 1.0.5 — Faster event review and archive navigation",
+    "ru": "KM VMS 1.0.5 — История событий и навигация по архиву",
+    "zh-CN": "KM VMS 1.0.5 — 改进事件查看与录像导航"
   },
   "summary_i18n": {
-    "en": "The first matching camera or NAS AI detection opens an episode immediately. Continuing activity extends it without another alert, and continuous recording gets a configurable quiet interval. This release also improves AI rule editing, fixed-camera geometry, event previews, and backup verification. Includes Android 0.8.16.",
-    "ru": "Первое подходящее событие камеры или AI на NAS сразу открывает эпизод. Активность продлевает его без нового оповещения, а для постоянной записи можно задать время тишины. Также улучшены настройка правил AI, работа со статичными камерами, предпросмотр событий и проверка резервных копий. Включён Android 0.8.16.",
-    "zh-CN": "首个符合条件的摄像机事件或 NAS AI 检测立即开启事件时段。后续活动延长时段而不重复提醒，持续录像可设置静默间隔。同时改进 AI 规则编辑、固定摄像机几何规则、事件预览与备份验证，并包含 Android 0.8.16。"
+    "en": "Filter web events by source and AI rule, skip empty intervals in Chronology, and save original recordings on Android. The signed Android 0.8.17 app also improves event photos, camera calls and the 3×1 widget.",
+    "ru": "Фильтруйте события в вебе по источнику и правилам AI, переходите к следующей записи в хронологии и сохраняйте оригиналы на Android. Подписанный Android 0.8.17 также улучшает снимки событий, звонки и виджет 3×1.",
+    "zh-CN": "网页可按来源和 AI 规则筛选事件，时间线可跳过录像空白，Android 可保存原始录像。签名版 Android 0.8.17 还改进了事件图片、摄像机通话和 3×1 小组件。"
   },
   "changelog_i18n": {
     "en": [
-      "The first matching detection opens a camera episode before any file is written. Continued activity adds no new history row, unread badge, or push.",
-      "Event recording uses its existing After duration. Continuous recording with analytics gains a quiet interval of one to five minutes.",
-      "Select camera event types for continuous or event recording. AI rules no longer require separate record and notify switches.",
-      "Edit AI rules beside the fullscreen frame and keep the saved reference frame. Show the saved zones and lines on demand in Live.",
-      "Lighting changes no longer invalidate fixed-camera geometry. Moving PTZ lenses still require the configured viewpoint for spatial rules.",
-      "Android shows available full-frame event previews. A tap opens Live within an hour or checks the archive for older events; both manual actions remain.",
-      "Manual backups run a trial restore. System Health handles brief camera subscription interruptions more accurately.",
-      "Includes signed Android 0.8.16 and a more compact 3×1 widget with independent alerts, Live, and unread shortcuts."
+      "Web event history puts Source in the main filter row. For NAS AI, choose a rule from the camera and period or filter by condition.",
+      "Chronology keeps the shared clock moving through gaps when footage lies ahead. Next recording jumps to the nearest selected-camera recording in web and Android.",
+      "Android 0.8.17 saves original recording files to Downloads without creating a clip.",
+      "One Android camera icon opens snapshots of camera or AI events. The first and only push includes the picture if ready; otherwise it contains text.",
+      "Android camera calls select full duplex when the adapter confirms it. Hold-to-speak remains available for other cameras, with a per-camera mode override.",
+      "A major scene-change rule can optionally trigger on selected people, vehicles or supported animals even without a major change to the view.",
+      "The 3×1 Android widget uses its space better, retains its three independent actions and shows 99+ for larger unread counts."
     ],
     "ru": [
-      "Первое подходящее событие открывает эпизод камеры до записи файла. Продолжение активности не добавляет строку, значок непрочитанного или пуш.",
-      "При записи по событиям действует прежнее «После». Для постоянной записи с аналитикой можно выбрать от одной до пяти минут тишины.",
-      "Типы событий камеры применяются к постоянной и событийной записи. Правила AI больше не требуют отдельных галочек «записывать» и «оповещать».",
-      "Правила AI редактируются рядом с полноэкранным кадром. Опорный кадр сохраняется, линии и зоны в онлайне включаются по желанию.",
-      "Смена освещения больше не отменяет правила статичной камеры. Для поворотного объектива по-прежнему используется настроенный ракурс.",
-      "Android показывает доступный кадр события. Тап в течение часа открывает онлайн, позже — проверяет архив. Обе ручные кнопки остаются.",
-      "Ручная резервная копия проходит пробное восстановление. В «Состоянии системы» точнее обрабатываются кратковременные сбои подписки.",
-      "Включён подписанный Android 0.8.16. Обновлён виджет 3×1 с отдельными областями для настроек оповещений, онлайна и счётчика."
+      "В веб-истории «Источник» виден сразу. Для AI на NAS можно выбрать правило по камере и периоду или уточнить условие.",
+      "Общее время хронологии идёт через пустые участки, если впереди есть видео. «Следующая запись» переносит к ближайшему видео выбранных камер в вебе и Android.",
+      "Android 0.8.17 сохраняет оригиналы записей в «Загрузки» без создания клипа.",
+      "В истории Android один значок фотоаппарата открывает доступные снимки событий камер и AI. Кадр приходит в первом пуше, если готов; иначе приходит одно текстовое оповещение.",
+      "Android включает двусторонний разговор при подтверждённой поддержке. Для остальных камер доступно удержание микрофона; режим можно выбрать для камеры вручную.",
+      "Правило крупной смены сцены можно дополнить распознаванием людей, транспорта или животных без обязательной смены картинки.",
+      "Виджет Android 3×1 компактнее распределяет место, сохраняет три отдельные зоны нажатия и показывает 99+ при большом числе непросмотренных."
     ],
     "zh-CN": [
-      "首个接受的检测立即开启摄像机的事件时段，无需等待录像文件。随后符合条件的事件类型或 AI 规则延长时段，不新增历史记录、未读数或推送。",
-      "事件录像沿用「之后」时长；带分析的持续录像可在「AI 与录像」的「提醒」中设定一至五分钟的静默间隔。个人摄像机与通知计划独立设置。",
-      "在同一页面选择摄像机事件或 NAS AI。持续录像与事件录像都可筛选摄像机事件类型。启用 AI 规则后无需再分别勾选录像和通知。",
-      "可在全屏画面旁编辑 AI 规则并保留参考帧，按需在实时画面显示轮廓。",
-      "日夜光照变化不再使固定摄像机的几何规则失效；可移动的 PTZ 镜头仍需对应的视角。",
-      "Android 在有可用画面时显示通知预览。点击不足一小时的事件打开实时画面，较早的事件检查录像。展开通知后仍有两个独立操作。",
-      "手动备份后自动进行试恢复。检测来源故障仍在系统健康中显示，改进了短暂摄像机订阅中断的处理。",
-      "包含签名的 Android 0.8.16。更新 3×1 小组件布局，保留提醒设置、实时入口和未读数三个独立区域。"
+      "网页事件历史将来源筛选放在主行。选择 NAS AI 后可按所选摄像机和时段的规则或按条件筛选。",
+      "后续存在录像时，共享时间线可继续走过空白。网页和 Android 均可跳到所选摄像机的下一段录像。",
+      "Android 0.8.17 可直接将原始录像保存到下载目录，无需创建片段。",
+      "Android 使用同一个相机图标查看摄像机或 NAS AI 事件图片。图片就绪时随首条推送发送，否则只发一条文字通知。",
+      "在确认支持时，Android 摄像机通话启用全双工。其他摄像机可按住发言，并可为单台摄像机选择通话模式。",
+      "重大场景变化规则可选检测人员、车辆或受支持的动物，即使画面没有明显变化。",
+      "3×1 Android 小组件改进布局，保留三个独立操作区域，未读数量超过 99 时显示 99+。"
     ]
   }
 }

@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="timeline_next_recording">下一段录像</string>
+    <string name="timeline_no_next">没有后续录像</string>
+    <string name="call_mode">通话模式</string>
+    <string name="call_mode_auto">自动</string>
+    <string name="call_mode_full">双向通话</string>
+    <string name="call_mode_hold">按住说话</string>
     <string name="home">首页</string>
     <string name="live">实时</string>
     <string name="recordings">录像</string>

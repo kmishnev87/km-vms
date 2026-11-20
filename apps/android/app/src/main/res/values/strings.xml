@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="timeline_next_recording">Next recording</string>
+    <string name="timeline_no_next">No later recording</string>
+    <string name="call_mode">Conversation mode</string>
+    <string name="call_mode_auto">Auto</string>
+    <string name="call_mode_full">Two-way</string>
+    <string name="call_mode_hold">Hold to talk</string>
     <string name="home">Home</string>
     <string name="live">Live</string>
     <string name="recordings">Recordings</string>

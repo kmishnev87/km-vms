@@ -36,10 +36,13 @@ import java.time.format.DateTimeFormatter
 @Composable internal fun AiEventSheet(
     service: EventsApi, event: CameraEvent, zone: ZoneId, canReview: Boolean, canClip: Boolean, opening: Boolean,
     onDismiss: () -> Unit, open: (EventAction) -> Unit, onReview: () -> Unit, onClip: (EventClip, String) -> Unit,
+    profileId: String? = null,
 ) {
     var row by remember(event.id) { mutableStateOf(event) }
     var evidence by remember(event.id) { mutableStateOf<EventEvidence?>(null) }
-    var frame by remember(event.id) { mutableStateOf<ImageBitmap?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var frame by remember(profileId, event.id) { mutableStateOf(EventFrameCache.memory(profileId, event.id)?.asImageBitmap()) }
+    var fetchingFrame by remember(profileId, event.id) { mutableStateOf(event.snapshotAvailable && frame == null) }
     var error by remember(event.id) { mutableStateOf(false) }
     var checking by remember(event.id) { mutableStateOf(false) }
     var reviewing by remember(event.id) { mutableStateOf(false) }
@@ -54,39 +57,42 @@ import java.time.format.DateTimeFormatter
         catch (_: Exception) { evidence = null; error = true }
         finally { checking = false }
     }
-    LaunchedEffect(event.id, service, row.ai?.snapshot) {
-        frame = null
-        if (row.ai?.snapshot == true) try {
-            val bytes = service.snapshot(event.id)
-            frame = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
+    LaunchedEffect(event.id, service, profileId, row.snapshotAvailable) {
+        if (frame == null && row.snapshotAvailable) try {
+            fetchingFrame = true
+            frame = EventFrameCache.load(context, profileId, event.id) { service.snapshot(event.id) }?.asImageBitmap()
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Keep the event useful without its thumbnail. */ }
+        finally { fetchingFrame = false }
     }
-    val ai = row.ai ?: return
-    val title = stringResource(R.string.ai_event_title)
-    val labels = eventLabels(row.kind, row.objects, ai.condition).map { stringResource(it) }
+    val ai = row.ai
+    val title = stringResource(if (ai == null) R.string.camera_event_title else R.string.ai_event_title)
+    val labels = eventLabels(row.kind, row.objects, ai?.condition).map { stringResource(it) }
     val video = evidence?.state
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)
-            .padding(bottom = 20.dp).testTag("ai-event-detail"), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                .padding(bottom = 20.dp).testTag(if (ai == null) "camera-event-detail" else "ai-event-detail"), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge)
             Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).aspectRatio(16f / 9)
                 .clip(RoundedCornerShape(12.dp)).background(SoftAccent), contentAlignment = Alignment.Center) {
                 val image = frame
                 if (image != null) Image(image, stringResource(R.string.ai_event_frame), Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                else Text(stringResource(R.string.ai_event_no_frame), color = Muted, style = MaterialTheme.typography.bodySmall)
+                else Text(stringResource(if (fetchingFrame) R.string.event_photo_loading else R.string.ai_event_no_frame),
+                    color = Muted, style = MaterialTheme.typography.bodySmall)
             }
             Text(row.camera, fontWeight = FontWeight.SemiBold)
             Text(row.occurred.atZone(zone).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")),
                 color = Muted, style = MaterialTheme.typography.labelMedium)
             Text(labels.joinToString(" · "), style = MaterialTheme.typography.bodyMedium)
-            val scopeLabel = when (ai.scope) {
-                "zone" -> R.string.ai_event_unnamed_zone
-                "line" -> R.string.ai_event_unnamed_line
-                else -> R.string.ai_event_whole_frame
+            if (ai != null) {
+                val scopeLabel = when (ai.scope) {
+                    "zone" -> R.string.ai_event_unnamed_zone
+                    "line" -> R.string.ai_event_unnamed_line
+                    else -> R.string.ai_event_whole_frame
+                }
+                Text(stringResource(R.string.ai_event_rule) + ": " + ai.ruleName.ifBlank { stringResource(scopeLabel) },
+                    color = Muted, style = MaterialTheme.typography.bodySmall)
             }
-            Text(stringResource(R.string.ai_event_rule) + ": " + ai.ruleName.ifBlank { stringResource(scopeLabel) },
-                color = Muted, style = MaterialTheme.typography.bodySmall)
             HorizontalDivider()
             if (error) Text(stringResource(R.string.server_error), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             if (checking) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -97,7 +103,7 @@ import java.time.format.DateTimeFormatter
                 EventArchiveState.FORBIDDEN -> R.string.ai_event_forbidden
             }), color = Muted, style = MaterialTheme.typography.bodySmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                OutlinedButton(onClick = { open(EventAction.LIVE) }, enabled = !opening && row.cameraId != null) {
+                OutlinedButton(onClick = { open(EventAction.LIVE) }, enabled = !opening && row.cameraId != null && !row.ambiguous) {
                     Text(stringResource(R.string.push_watch_live))
                 }
                 if (video == EventArchiveState.READY) Button(onClick = { open(EventAction.RECORDING) }, enabled = !opening && !checking) {
@@ -113,7 +119,7 @@ import java.time.format.DateTimeFormatter
                 }
                 Text(stringResource(R.string.ai_event_clip_help), color = Muted, style = MaterialTheme.typography.bodySmall)
             }
-            if (canReview || ai.falsePositive) {
+            if (ai != null && (canReview || ai.falsePositive)) {
                 HorizontalDivider()
                 if (ai.falsePositive) Text(stringResource(R.string.ai_event_false), style = MaterialTheme.typography.bodySmall)
                 if (canReview) {

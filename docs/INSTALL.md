@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[1.0.4](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.4)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[1.0.5](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.5)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.4/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.4
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.5
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.4 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v1.0.5 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.4 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v1.0.5 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -117,9 +117,13 @@ History and personal notification selection support eleven useful types: motion,
 
 Use the bell to open camera events. To receive ONVIF detections, choose **Camera events** as the source in **AI & Recording**. Select all or specific types under **Conditions**, for continuous or event-based recording. One managed subscription serves an opted-in physical device; reported source identifiers distinguish lenses where available. Changing the camera's source preserves its history and does not change the device's own detection settings.
 
+In web **History**, **Source** filters camera events and NAS AI separately. Select **NAS AI** to narrow the results by a rule from that camera and period, or by condition. This does not change what is detected, recorded or delivered.
+
 **Notifications** changes only your account's camera and schedule preferences. Select common hours or individual camera schedules; hours use the NAS time zone, and an interval can cross midnight. Equal start and end times mean all day. Events excluded by your preferences remain in history as viewed, without increasing your unread count or sending a push. Previously unread events keep their status, and muted arrivals do not become unread later. The Android **Alerts on this phone** switch controls delivery to that phone only; it does not mark NAS events viewed or change reception.
 
 An event can open its camera's live view or available archive footage around five seconds before the event. Chronology also has event markers and previous/next navigation. Missing recordings are not created by clicking an event; brown event markers remain visible without a recording. Browser notifications require the web application to be open. Native mobile push uses a compatible provider as described below.
+
+If the selected cameras have a gap but there is video ahead, the shared Chronology clock can keep playing through the gap. Use **Next recording** in the web or Android player to jump straight to the next recorded interval.
 
 The first accepted detection starts an episode, without waiting for a video file. Later matching activity on that camera extends the episode, even when its type or AI rule differs, without another history row or push. With event-based recording, use the recording policy's **After** interval. With continuous recording and analytics, choose **After** in the **Alerts** profile. The camera can alert again after that many quiet minutes. This does not change personal alert preferences.
 
@@ -144,7 +148,7 @@ New or resumed viewing uses the current setting, and an already-open view receiv
 
 ## Camera calls on Android
 
-Open one camera in Android Live and use the handset control. Only owners and administrators can initiate calls. Grant microphone permission when prompted; talk is never started automatically from an event or notification. Compatible ONVIF RTSP backchannels use hold-to-speak; the Tapo local adapter provides a full-duplex path with a microphone mute control.
+Open one camera in Android Live and use the handset control. Only owners and administrators can initiate calls. Grant microphone permission when prompted; talk is never started automatically from an event or notification. Calls use full duplex if supported by the Tapo adapter or confirmed by the selected ONVIF audio profile. Otherwise Android uses hold-to-speak. The call menu provides a per-camera mode override; forcing full duplex cannot add support to a camera that lacks it.
 
 The initial standard adapter supports mono 8 kHz G.711 A-law/µ-law. A speaker/microphone or ONVIF support alone does not guarantee a compatible backchannel. An unsupported device shows a reason rather than silently reporting a connected call. If Tapo requests its separate account password for local call authentication, it is encrypted on the NAS, not saved on the phone. It may differ from the camera account used for RTSP/ONVIF.
 
@@ -154,15 +158,17 @@ Calls temporarily use the low-latency video path and preserve the saved sound/PT
 
 ## Native Android client
 
-KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up. The standard adapter continues to use hold-to-speak.
+KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up.
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.16.apk** from the [1.0.4 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.4). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.17.apk** from the [1.0.5 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.5). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.
 5. After the first login to each NAS, accept the notification setup offer to request Android permission and register an available **UnifiedPush** provider. Declining is remembered for that NAS; existing explicit disabling is preserved. Revisit **Events → Notifications → Alerts on this phone** to change the choice. Provider/network access, OS notification permission and battery restrictions apply. The app does not poll the NAS in the background or guarantee delivery on every untested Huawei/microG configuration.
 
 The app checks the official APK metadata on the first foreground opening in a new day and on manual request. It checks size, hash, package/version and signing certificate before offering the system installer. Download and Android installation confirmation are explicit; the update keeps app data and NAS profiles. The NAS and mobile version numbers are independent. Use only the official signed asset for subsequent updates.
+
+In **Recordings**, download an available original to Android's **Downloads** without creating a clip. Use the camera icon in **Events** to open an available event frame from either source. An expanded push notification includes the frame if ready; otherwise the app posts one text notification with the same Live and Recording actions.
 
 To add an optional home-screen notification widget, open **Settings → Notification widget**, choose **2×1 without a counter** or **3×1 with a counter**, select a saved NAS, and confirm Android's add-widget prompt. Nothing is added automatically during installation. Launcher cell sizes vary; both variants also support standard launcher configuration.
 

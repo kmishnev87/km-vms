@@ -120,6 +120,45 @@ def test_events_use_shared_inbox_filters_and_personal_preferences(api):
         assert db.get(AuditEvent, quiet).event_metadata["ai_record"] is False
 
 
+def test_history_rule_choices_span_pages_and_bulk_selection_matches_exact_camera_and_rule(api):
+    client, factory, state = api
+
+    def row(camera, rule, name, seconds, *, source="nas_ai"):
+        return AuditEvent(id=str(uuid.uuid4()), category=events.CATEGORY, event_type="camera.person",
+            target_type="camera", target_id=str(camera), target_name=f"Camera {camera}", severity="info",
+            message_ru="", message_en="", created_at=NOW + timedelta(seconds=seconds),
+            event_metadata={"origin": source, "ai_rule_id": rule, "ai_rule_name": name, "ai_condition": "presence"})
+
+    old = row(7, "gate", "Old gate", 0)
+    latest = row(7, "gate", "Gate", 1)
+    other_camera = row(8, "gate", "Gate", 2)
+    with factory() as db:
+        db.add_all([old, latest, other_camera, row(7, "expired", "Expired rule", -120),
+                    row(7, "camera", "Not AI", 4, source="device"),
+                    *(row(7, "other", "Gate", 5 + n) for n in range(26))])
+        db.commit()
+
+    state["user"] = 2  # History access does not require managing AI rules.
+    since = (UTC_NOW - timedelta(seconds=60)).isoformat()
+    response = client.get("/camera-events/ai-rule-options", params={"since": since})
+    assert response.status_code == 200
+    assert response.json()["items"] == [
+        {"ref": "7:gate", "camera_name": "Camera 7", "name": "Gate"},
+        {"ref": "7:other", "camera_name": "Camera 7", "name": "Gate"},
+        {"ref": "8:gate", "camera_name": "Camera 8", "name": "Gate"},
+    ]
+    assert len(client.get("/camera-events/ai-rule-options", params={"camera_id": 8, "since": since}).json()["items"]) == 1
+    filters = {"source": "ai", "rule_ref": "7:gate", "since": since, "condition": "presence"}
+    page = client.get("/camera-events", params={**filters, "limit": 1}).json()
+    assert page["total"] == 2 and [item["id"] for item in page["items"]] == [latest.id]
+    snapshot = client.post("/camera-events/selections", json={
+        **filters, "through": page["read_cursor"], "visible_ids": [latest.id]}).json()
+    assert snapshot["count"] == 2
+    next_page = client.get("/camera-events", params={**filters, "limit": 1, "offset": 1, "selection_id": snapshot["id"]}).json()
+    assert next_page["selection"]["visible_ids"] == [old.id]
+    assert client.get("/camera-events", params={"rule_ref": "gate"}).status_code == 422
+
+
 def test_event_scenario_delivers_legacy_disabled_rule_without_changing_older_read_state(api):
     client, factory, _ = api
     old, ok = offer(api, rule="quiet", condition="presence", objects=("person",))

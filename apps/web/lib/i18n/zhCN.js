@@ -3,7 +3,8 @@ export const zhCNDictionary = {
   androidDownload: { checking: "正在加载 APK 信息…", available: "Android APK", failed: "无法获取 APK 信息，请刷新页面。", unpublished: "官方 APK 尚未发布。", subtitle: "Android 版 KM VMS", instructions: "将 APK 下载到手机，打开文件并在 Android 中确认安装。然后添加 NAS 地址并登录 KM VMS 账户。支持 HTTP 和 HTTPS。", version: "版本", download: "下载 APK", check: "检查版本", languages: "支持 Android 8 及以上版本，提供英文、中文和俄文。可在 Android 应用中获取更新。" },
   chronologyArchive: { retainedCameras: "仍有录像的已删除摄像机", deleted: "已删除", archiveOnly: "仅保留的录像" },
   cameraEvents: {
-    ai: {"unnamedZone":"未命名区域","unnamedLine":"未命名线","details":"AI 事件","filters":"AI 筛选","source":"来源","both":"全部来源","fromAi":"NAS 分析","fromCamera":"摄像机","condition":"条件","anyCondition":"全部条件","rule":"规则 / 区域","ruleSearch":"规则名称","search":"查找","conditions":{"presence":"画面或区域内出现目标","enter":"进入区域","exit":"离开区域","crossing":"越线","dwell":"区域内逗留","scene":"场景变化"},"frame":"检测画面","noFrame":"快照不可用","wholeFrame":"整个画面","pending":"仍在录制此片段，请在录制完成后查看。","unavailable":"事件发生时没有录像，或录像已不可用。","forbidden":"此帐户没有时间线访问权限。","ready":"录像可用","check":"检查录像","checkFailed":"无法检查录像，请重试。","falsePositive":"误报","markFalse":"标记为误报","unmarkFalse":"清除标记","reviewHelp":"标记会显示在历史记录中，不会训练 AI。","saveClip":"另存为片段","clipHelp":"完成的片段是独立副本，不会更改原录像的保留期限。","invalidRange":"请选择有效的片段时间范围。"},
+    historyRule: { all: "所有规则", loading: "正在加载规则…", empty: "该时段内无规则触发", unavailable: "无法加载规则", unnamed: "未命名规则" },
+    ai: {"unnamedZone":"未命名区域","unnamedLine":"未命名线","details":"AI 事件","source":"来源","both":"全部来源","fromAi":"NAS AI","fromCamera":"摄像机事件","condition":"条件","anyCondition":"全部条件","rule":"规则","conditions":{"presence":"画面或区域内出现目标","enter":"进入区域","exit":"离开区域","crossing":"越线","dwell":"区域内逗留","scene":"场景变化"},"frame":"检测画面","noFrame":"快照不可用","wholeFrame":"整个画面","pending":"仍在录制此片段，请在录制完成后查看。","unavailable":"事件发生时没有录像，或录像已不可用。","forbidden":"此帐户没有时间线访问权限。","ready":"录像可用","check":"检查录像","checkFailed":"无法检查录像，请重试。","falsePositive":"误报","markFalse":"标记为误报","unmarkFalse":"清除标记","reviewHelp":"标记会显示在历史记录中，不会训练 AI。","saveClip":"另存为片段","clipHelp":"完成的片段是独立副本，不会更改原录像的保留期限。","invalidRange":"请选择有效的片段时间范围。"},
     "title": "摄像机事件",
     "dashboardText": "移动、人员和车辆。查看事件历史并直接打开视频。",
     "history": "历史",
@@ -18,7 +19,7 @@ export const zhCNDictionary = {
     "scheduleAll": "所有摄像机使用相同时段",
     "schedulePerCamera": "分别设置摄像机时段",
     "camera": "摄像机",
-    "type": "事件",
+    "type": "事件类型",
     "period": "时间范围",
     "allCameras": "所有摄像机",
     "allTypes": "所有事件",

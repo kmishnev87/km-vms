@@ -1,4 +1,7 @@
 <resources>
+    <string name="camera_event_title">摄像机事件</string>
+    <string name="event_photo">事件照片</string>
+    <string name="event_photo_loading">正在加载照片…</string>
     <string name="ai_event_title">AI 事件</string>
     <string name="ai_event_both">全部来源</string>
     <string name="ai_event_nas">NAS 分析</string>

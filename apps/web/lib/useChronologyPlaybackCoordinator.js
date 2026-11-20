@@ -12,6 +12,7 @@ export default function useChronologyPlaybackCoordinator(setIsPlaying, options =
   optionsRef.current = options;
   const storeRef = useRef(null);
   if (!storeRef.current) storeRef.current = createPlaybackCoordinator({
+    clockPosition: () => optionsRef.current.getTargetMs?.(),
     onResume: facts => { optionsRef.current.onEmptyMode?.(facts.empty); resumeRef.current(true); },
     onHold: (targetMs, reason) => { resumeRef.current(false); optionsRef.current.onHold?.(targetMs, reason); },
     onProgress: value => optionsRef.current.onProgress?.(value),

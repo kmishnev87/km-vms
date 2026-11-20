@@ -6,7 +6,7 @@ import { apiFetch, captureAuthSession } from "../lib/api";
 import { useAuthSession } from "../lib/useAuthSession";
 import { useI18n } from "../lib/i18n";
 import { formatProductDateTime } from "../lib/timezone";
-import { AI_EVENT_CONDITIONS, CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, CAMERA_EVENT_HUB_OPEN, eventErrorKey, eventHistoryQuery, eventLabelKey, eventObjectLabelKeys } from "../lib/cameraEvents";
+import { AI_EVENT_CONDITIONS, CAMERA_EVENT_KINDS, CAMERA_EVENT_REFRESH, CAMERA_EVENT_OPEN, CAMERA_EVENT_HUB_OPEN, changeEventHistoryFilter, eventErrorKey, eventHistoryQuery, eventLabelKey, eventObjectLabelKeys, eventRuleOptionsQuery } from "../lib/cameraEvents";
 import AiEventDetails from "./AiEventDetails";
 import CameraEventPreferences from "./CameraEventPreferences";
 import { mergeEventPreferenceDraft } from "../lib/cameraEventPreferences";
@@ -44,8 +44,9 @@ export default function CameraEventsHub({ currentUser }) {
   const [unread, setUnread] = useState(0);
   const [refresh, setRefresh] = useState(0);
   const [filters, setFilters] = useState({ camera: "", kind: "", days: 7, unread: false });
-  const [aiFiltersOpen, setAiFiltersOpen] = useState(false);
-  const [ruleDraft, setRuleDraft] = useState("");
+  const [ruleOptions, setRuleOptions] = useState(null);
+  const [ruleLabel, setRuleLabel] = useState("");
+  const [ruleRefresh, setRuleRefresh] = useState(0);
   const [detail, setDetail] = useState(null);
   const [offset, setOffset] = useState(0);
   const [history, setHistory] = useState(null);
@@ -68,6 +69,25 @@ export default function CameraEventsHub({ currentUser }) {
   openRef.current = open;
   const query = useMemo(() => snapshotHistoryQuery(eventHistoryQuery(filters, offset), offset, selectionSnapshot),
     [filters, offset, selectionSnapshot?.id]);
+  const showAiFilters = filters.source === "ai";
+  const ruleQuery = useMemo(() => eventRuleOptionsQuery({ camera: filters.camera, days: filters.days }),
+    [filters.camera, filters.days, ruleRefresh]);
+  const currentRuleOptions = ruleOptions?.query === ruleQuery && ruleOptions.session === session ? ruleOptions : null;
+  const availableRules = currentRuleOptions?.items || [];
+  const ruleNames = availableRules.map(rule => ({
+    ref: rule.ref,
+    label: [rule.name || t("cameraEvents.historyRule.unnamed"), !filters.camera && rule.camera_name].filter(Boolean).join(" · "),
+  }));
+  const ruleLabelCounts = new Map();
+  ruleNames.forEach(rule => ruleLabelCounts.set(rule.label, (ruleLabelCounts.get(rule.label) || 0) + 1));
+  const ruleLabelOrdinals = new Map();
+  const ruleChoices = ruleNames.map(rule => {
+    const ordinal = (ruleLabelOrdinals.get(rule.label) || 0) + 1;
+    ruleLabelOrdinals.set(rule.label, ordinal);
+    return { ...rule, label: ruleLabelCounts.get(rule.label) > 1 ? `${rule.label} (${ordinal})` : rule.label };
+  });
+  const ruleStatus = ruleChoices.length || filters.ruleRef ? "all"
+    : !currentRuleOptions ? "loading" : currentRuleOptions.failed ? "unavailable" : "empty";
 
   function clearSelection() { selectionGeneration.current++; setSelection([]); setSelectionSnapshot(null); }
 
@@ -166,6 +186,20 @@ export default function CameraEventsHub({ currentUser }) {
     return () => controller.abort();
   }, [open, tab, query, refresh, session]);
 
+  useEffect(() => {
+    if (!open || tab !== "history" || !showAiFilters || !session) return undefined;
+    const controller = new AbortController();
+    const current = captureAuthSession();
+    apiFetch(`/camera-events/ai-rule-options?${ruleQuery}`, { signal: controller.signal })
+      .then(value => {
+        if (!controller.signal.aborted && current()) setRuleOptions({ query: ruleQuery, session, items: value.items });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted && current()) setRuleOptions({ query: ruleQuery, session, failed: true });
+      });
+    return () => controller.abort();
+  }, [open, tab, showAiFilters, ruleQuery, session]);
+
   async function act(action) {
     if (busy) return;
     const current = captureAuthSession();
@@ -232,11 +266,7 @@ export default function CameraEventsHub({ currentUser }) {
   }
 
   function changeFilter(key, value) { clearSelection();
-    setFilters(previous => ({
-      ...previous, [key]: value,
-      ...(key === "source" && value !== "ai" ? { rule: "", condition: "" } : {}),
-    }));
-    if (key === "source" && value !== "ai") setRuleDraft("");
+    setFilters(previous => changeEventHistoryFilter(previous, key, value));
     setOffset(0);
   }
   const rows = history?.items || [];
@@ -285,23 +315,27 @@ export default function CameraEventsHub({ currentUser }) {
   const historyContent = <div className="cameraEventsWorkbench" style={{ "--camera-events-scrollbar": `${scrollbarWidth}px` }}>
     <div className="cameraEventsFilters">
       <label>{t("cameraEvents.camera")}<select disabled={busy} value={filters.camera} onChange={e => changeFilter("camera", e.target.value)}><option value="">{t("cameraEvents.allCameras")}</option>{cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.name}</option>)}</select></label>
-      <div className="cameraEventsTypeFilter"><label>{t("cameraEvents.type")}<select disabled={busy} value={filters.kind} onChange={e => changeFilter("kind", e.target.value)}><option value="">{t("cameraEvents.allTypes")}</option>{CAMERA_EVENT_KINDS.map(kind => <option key={kind} value={kind}>{t(`cameraEvents.kinds.${kind}`)}</option>)}</select></label><button className="cameraEventsAiTag" type="button" aria-controls="camera-ai-filters" aria-expanded={aiFiltersOpen} data-active={Boolean(filters.source)} onClick={() => setAiFiltersOpen(value => !value)} title={t("cameraEvents.ai.filters")} aria-label={t("cameraEvents.ai.filters")}>AI</button></div>
+      <label>{t("cameraEvents.ai.source")}<select disabled={busy} value={filters.source || ""} onChange={e => changeFilter("source", e.target.value)}>
+        <option value="">{t("cameraEvents.ai.both")}</option><option value="camera">{t("cameraEvents.ai.fromCamera")}</option><option value="ai">{t("cameraEvents.ai.fromAi")}</option>
+      </select></label>
+      <label>{t("cameraEvents.type")}<select disabled={busy} value={filters.kind} onChange={e => changeFilter("kind", e.target.value)}><option value="">{t("cameraEvents.allTypes")}</option>{CAMERA_EVENT_KINDS.map(kind => <option key={kind} value={kind}>{t(`cameraEvents.kinds.${kind}`)}</option>)}</select></label>
       <label>{t("cameraEvents.period")}<select disabled={busy} value={filters.days} onChange={e => changeFilter("days", Number(e.target.value))}>{[1, 7, 30].map(day => <option key={day} value={day}>{t(`cameraEvents.days${day}`)}</option>)}</select></label>
       <div className="cameraEventsFilterActions"><label className="cameraEventsCheck"><input type="checkbox" disabled={busy} checked={filters.unread} onChange={e => changeFilter("unread", e.target.checked)}/><span>{t("cameraEvents.unreadOnly")}</span></label>
-      <button className="cameraEventsIconButton" title={t("cameraEvents.refresh")} aria-label={t("cameraEvents.refresh")} type="button" onClick={() => setRefresh(n => n + 1)} disabled={loading || busy}><EventActionIcon action="refresh"/></button>
+      <button className="cameraEventsIconButton" title={t("cameraEvents.refresh")} aria-label={t("cameraEvents.refresh")} type="button" onClick={() => { setRefresh(n => n + 1); setRuleRefresh(n => n + 1); }} disabled={loading || busy}><EventActionIcon action="refresh"/></button>
       </div>
     </div>
-    {aiFiltersOpen ? <div className="cameraEventsAiFilters" id="camera-ai-filters">
-      <label>{t("cameraEvents.ai.source")}<select disabled={busy} value={filters.source || ""} onChange={event => changeFilter("source", event.target.value)}>
-        <option value="">{t("cameraEvents.ai.both")}</option><option value="ai">{t("cameraEvents.ai.fromAi")}</option><option value="camera">{t("cameraEvents.ai.fromCamera")}</option>
+    {showAiFilters ? <div className="cameraEventsAiFilters">
+      <label>{t("cameraEvents.ai.rule")}<select disabled={busy || (!ruleChoices.length && !filters.ruleRef)} value={filters.ruleRef || ""} onChange={e => {
+        setRuleLabel(e.target.selectedOptions[0]?.text || "");
+        changeFilter("ruleRef", e.target.value);
+      }}>
+        <option value="">{t(`cameraEvents.historyRule.${ruleStatus}`)}</option>
+        {filters.ruleRef && !ruleChoices.some(rule => rule.ref === filters.ruleRef) ? <option value={filters.ruleRef}>{ruleLabel}</option> : null}
+        {ruleChoices.map(rule => <option key={rule.ref} value={rule.ref}>{rule.label}</option>)}
       </select></label>
-      <label>{t("cameraEvents.ai.condition")}<select disabled={busy || filters.source !== "ai"} value={filters.condition || ""} onChange={event => changeFilter("condition", event.target.value)}>
+      <label>{t("cameraEvents.ai.condition")}<select disabled={busy} value={filters.condition || ""} onChange={e => changeFilter("condition", e.target.value)}>
         <option value="">{t("cameraEvents.ai.anyCondition")}</option>{AI_EVENT_CONDITIONS.map(key => <option key={key} value={key}>{t(`cameraEvents.ai.conditions.${key}`)}</option>)}
       </select></label>
-      <form onSubmit={event => { event.preventDefault(); changeFilter("rule", ruleDraft.trim()); }}>
-        <label>{t("cameraEvents.ai.rule")}<input type="search" value={ruleDraft} maxLength={48} placeholder={t("cameraEvents.ai.ruleSearch")} disabled={busy || filters.source !== "ai"} onChange={event => setRuleDraft(event.target.value)}/></label>
-        <button className="button secondary small" type="submit" disabled={busy || filters.source !== "ai" || ruleDraft.trim() === (filters.rule || "")}>{t("cameraEvents.ai.search")}</button>
-      </form>
     </div> : null}
     <div className="cameraEventsHistory">
     <div className="cameraEventsSelection">

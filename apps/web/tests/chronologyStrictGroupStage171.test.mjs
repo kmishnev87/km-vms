@@ -36,6 +36,20 @@ test("three recordings and a proven archive gap start together, never before the
   g.store.dispose();
 });
 
+test("new media after an empty interval holds at the live cursor, not the last seek", () => {
+  let cursor = 10000;
+  const store = createPlaybackCoordinator({ clockPosition: () => cursor });
+  const operation = store.start({ targetMs: cursor, targetTs: "synthetic", shouldResume: true, expectedTileIds: ["a","b"] });
+  store.updateTile("a", operation.id, "empty");
+  store.updateTile("b", operation.id, "empty");
+  assert.equal(store.getSnapshot().releaseState, "released");
+  cursor += 6500;
+  store.updateTile("b", operation.id, "loading");
+  assert.equal(store.getSnapshot().targetMs, 16500);
+  assert.equal(store.getSnapshot().releaseState, "holding");
+  store.dispose();
+});
+
 for (const blocked of ["pending", "loading", "buffering", "timeout", "error", "unsupported"]) {
   test(`${blocked} is not an archive gap and cannot release the group`, () => {
     const g = group(["a", "b"]); g.ready("a"); g.ready("b", blocked); g.expire();

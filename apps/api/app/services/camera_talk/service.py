@@ -1,20 +1,22 @@
 import asyncio
 import audioop
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import secrets
 import time
 
 from .rtsp import RtspTalk
+from .duplex import onvif_duplex
 from .tapo import TapoTalk, probe as tapo_probe
 from .types import TalkError, TalkSource
 
 
 def discover(source):
     rtsp = None
+    negotiated = None
     reason = "backchannel_unsupported"
     try:
         rtsp = RtspTalk(source)
-        return rtsp.describe()
+        negotiated = rtsp.describe()
     except TalkError as error:
         reason = error.code
     except (OSError, ValueError):
@@ -22,6 +24,8 @@ def discover(source):
     finally:
         if rtsp:
             rtsp.close()
+    if negotiated is not None:
+        return replace(negotiated, duplex=onvif_duplex(source))
     try:
         candidate = tapo_probe(source)
     except (TalkError, OSError, ValueError):

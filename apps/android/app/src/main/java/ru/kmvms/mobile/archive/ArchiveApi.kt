@@ -11,7 +11,7 @@ data class ArchiveCamera(val id: Long, val name: String, val deleted: Boolean, v
 data class Recording(val id: Long, val root: String?, val reference: String?, val cameraId: Long,
                      val camera: String, val filename: String, val displayTime: String,
                      val startedSystem: String?, val endedSystem: String?, val mime: String?,
-                     val size: String, val canPlay: Boolean) {
+                     val size: String, val canPlay: Boolean, val canDownload: Boolean = canPlay) {
     val identityKey: String get() = reference ?: "${root.orEmpty()}:$id"
     fun identity() = JSONObject().apply {
         if (reference != null) put("recording_ref", reference)
@@ -25,7 +25,7 @@ data class Recording(val id: Long, val root: String?, val reference: String?, va
             value.optionalText("recording_ref"), value.getLong("camera_id"), value.getString("camera"),
             value.getString("filename"), value.optString("created_at"), value.optionalText("started_at_system"),
             value.optionalText("ended_at_system"), value.optionalText("mime_type"), value.optString("size_human"),
-            value.optBoolean("playback_available"))
+            value.optBoolean("playback_available"), value.optBoolean("download_available"))
     }
 }
 data class RecordingPage(val items: List<Recording>, val total: Int, val more: Boolean, val zone: ZoneId)
@@ -72,8 +72,12 @@ class ArchiveApi(val api: NasApi) {
         return RecordingPage((0 until items.length()).map { Recording.fromJson(items.getJSONObject(it)) }, value.getInt("total"),
             value.getJSONObject("pagination").optBoolean("has_more"), zone)
     }
-    suspend fun authorize(recording: Recording): MediaLease {
-        val value = api.json("api/recordings/media-token", "POST", recording.identity().put("action", "stream")) as JSONObject
+    suspend fun authorize(recording: Recording): MediaLease = authorizeRecording(recording, "stream")
+
+    suspend fun authorizeDownload(recording: Recording): MediaLease = authorizeRecording(recording, "download")
+
+    private suspend fun authorizeRecording(recording: Recording, action: String): MediaLease {
+        val value = api.json("api/recordings/media-token", "POST", recording.identity().put("action", action)) as JSONObject
         return MediaLease(value.getString("media_token"), value.getLong("expires_in"))
     }
     suspend fun deleteRecording(recording: Recording, operationId: String) {

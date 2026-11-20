@@ -54,7 +54,7 @@ open class AlertWidgetProvider : AppWidgetProvider() {
                     val signedIn = profile != null && runCatching { ProfileVault(context).signIn(profile.id) }.getOrNull() != null
                     val value = profile?.takeIf { signedIn }?.let { WidgetUnreadStore(context).get(it)?.count }
                     setTextViewText(R.id.alert_widget_count, value?.coerceAtMost(99)?.toString() ?: "—")
-                    setViewVisibility(R.id.alert_widget_count_plus, if (value != null && value > 99) android.view.View.VISIBLE else android.view.View.GONE)
+                    setViewVisibility(R.id.alert_widget_count_plus, if (value != null && value > 99) android.view.View.VISIBLE else android.view.View.INVISIBLE)
                     setContentDescription(R.id.alert_widget_count_area, if (value == null) localized.getString(R.string.widget_count_unavailable)
                         else localized.getString(R.string.widget_unread_count, value))
                     setContentDescription(R.id.alert_widget_live, localized.getString(R.string.live))

@@ -82,7 +82,9 @@ def probe(source):
         realm = parse_dict_header(challenge[7:]).get("realm", "").lower()
         if not any(x in realm for x in ("tp-link", "tapo")):
             raise TalkError("backchannel_unsupported")
-        return TalkCandidate("tapo", source)
+        # The authenticated native talk route and the Live listening stream are
+        # independent on this adapter. This does not classify other transports.
+        return TalkCandidate("tapo", source, duplex="full")
     finally:
         wire.close()
 

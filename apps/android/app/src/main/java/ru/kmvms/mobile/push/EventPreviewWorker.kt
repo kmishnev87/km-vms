@@ -1,56 +1,56 @@
 package ru.kmvms.mobile.push
 
 import android.content.Context
-import android.graphics.BitmapFactory
-import androidx.work.*
+import android.graphics.Bitmap
+import android.os.SystemClock
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
 import kotlinx.coroutines.CancellationException
-import ru.kmvms.mobile.core.ServerAddress
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import ru.kmvms.mobile.data.NasApi
+import ru.kmvms.mobile.data.NasException
 import ru.kmvms.mobile.data.ProfileVault
-import java.util.UUID
-import java.util.concurrent.TimeUnit
+import ru.kmvms.mobile.core.ServerAddress
+import ru.kmvms.mobile.data.ServerProfile
+import ru.kmvms.mobile.diagnostics.AppDiagnostics
+import ru.kmvms.mobile.diagnostics.DiagnosticArea
+import ru.kmvms.mobile.diagnostics.DiagnosticCode
+import ru.kmvms.mobile.events.EventFrameCache
 
-/** One optional download for an active notification. No periodic work/profile switch. */
+/** Drain work queued by older APKs without updating a notification after it was posted. */
 class EventPreviewWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
-    override suspend fun doWork(): Result {
-        val profileId = inputData.getString("profile") ?: return Result.success()
-        val id = inputData.getString("event") ?: return Result.success()
-        val queued = inputData.getLong("queued", 0)
-        if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false).not()
-            || System.currentTimeMillis() - queued !in 0L..90_000L) return Result.success()
-        val context = applicationContext
-        val tag = "$profileId:$id"
-        if (!MobileNotifications.active(context, tag)) return Result.success()
-        val vault = ProfileVault(context)
-        try {
-            val profile = vault.profiles().firstOrNull { it.id == profileId } ?: return Result.success()
-            val saved = vault.signIn(profileId) ?: return Result.success()
-            if (PushStore(context).binding(profileId)?.enabled != true) return Result.success()
+    override suspend fun doWork(): Result = Result.success()
+}
+
+internal suspend fun prepareEventPreview(context: Context, profile: ServerProfile, event: PushEnvelope): Bitmap? {
+    val started = SystemClock.elapsedRealtime()
+    val vault = ProfileVault(context)
+    val bitmap = try {
+        withTimeoutOrNull(2400L) {
+            val saved = vault.signIn(profile.id) ?: return@withTimeoutOrNull null
             val api = NasApi(ServerAddress.parse(profile.address)).apply {
                 useSession(saved.access)
                 sessionUser(profile.username)
-                allowSessionRenewal({ vault.signIn(profileId) }, { expected, value -> vault.renewAccess(profileId, expected, value) })
+                allowSessionRenewal({ vault.signIn(profile.id) }, { expected, value -> vault.renewAccess(profile.id, expected, value) })
             }
-            val jpeg = api.eventSnapshot(id)
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
-            if (bounds.outWidth in 1..800 && bounds.outHeight in 1..600 && vault.signIn(profileId) != null
-                && PushStore(context).binding(profileId)?.enabled == true) {
-                BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.let { MobileNotifications.addPreview(context, tag, it) }
+            val retry = listOf(240L, 400L, 600L, 400L)
+            var image: Bitmap? = null
+            for (attempt in 0..retry.size) {
+                try {
+                    image = EventFrameCache.load(context, profile.id, event.eventId) { api.eventSnapshot(event.eventId, quick = true) }
+                    break
+                } catch (error: NasException) {
+                    // An ONVIF image can still be arriving. Never retry permissions or a dead connection.
+                    if (error.httpStatus != 404 || attempt == retry.size) break
+                    delay(retry[attempt])
+                }
             }
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { /* No preview is a valid result; keep the text and both actions. */ }
-        return Result.success()
-    }
-
-    companion object {
-        internal fun enqueue(context: Context, profileId: String, event: PushEnvelope) {
-            val request = OneTimeWorkRequestBuilder<EventPreviewWorker>()
-                .setInputData(workDataOf("profile" to profileId, "event" to event.eventId, "queued" to System.currentTimeMillis()))
-                .setInitialDelay(if (event.aiCondition == null) 7L else 0L, TimeUnit.SECONDS)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .build()
-            WorkManager.getInstance(context).enqueueUniqueWork("push-preview:$profileId:${event.eventId}", ExistingWorkPolicy.KEEP, request)
+            image
         }
-    }
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { null }
+    AppDiagnostics.record(if (bitmap != null) DiagnosticCode.PUSH_PREVIEW_READY else DiagnosticCode.PUSH_PREVIEW_MISSING,
+        DiagnosticArea.PUSH, profile.id, event.eventId, event.cameraId, (SystemClock.elapsedRealtime() - started).toInt())
+    return bitmap
 }

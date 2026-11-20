@@ -3,7 +3,7 @@ from __future__ import annotations
 import mimetypes
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -487,6 +487,55 @@ def chronology_playback(
         "rel_path": None,
         "offset_sec": 0,
     }
+
+
+@router.get("/next-recording")
+def next_recording(
+    camera_ids: str = Query(..., max_length=4096),
+    after: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_timeline")),
+):
+    try:
+        ids = list(dict.fromkeys(int(value.strip()) for value in camera_ids.split(",") if value.strip()))
+    except ValueError:
+        raise HTTPException(400, "Invalid camera_ids") from None
+    if not ids or len(ids) > MAX_RANGE_CAMERAS or min(ids) < 1:
+        raise HTTPException(422, "Too many cameras or invalid camera id")
+    ctx = timezone_context(db)
+    target = _parse_ts(after, "after", ctx)
+    floor = min(target.storage_utc, target.compatibility_local or target.storage_utc)
+    deadline = time.monotonic() + MAX_RANGE_PROCESSING_SECONDS
+    best = None
+    stop_after = None
+    query = (_finalized_segments_query(db)
+             .filter(RecordingSegment.camera_id.in_(ids), RecordingSegment.started_at > floor)
+             .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+             .limit(MAX_RANGE_SEGMENTS + 1).yield_per(128))
+    for index, segment in enumerate(query):
+        if stop_after is not None and segment.started_at > stop_after:
+            break
+        if index >= MAX_RANGE_SEGMENTS or time.monotonic() > deadline:
+            raise HTTPException(422, "Archive lookup is too large; select fewer cameras")
+        local = target.compatibility_local is not None and _segment_uses_local_naive_display(segment)
+        start = segment.started_at
+        if local:
+            start = start.replace(tzinfo=ctx.zone).astimezone(timezone.utc).replace(tzinfo=None)
+        if start <= target.storage_utc or best is not None and start >= best or not _segment_interval(segment):
+            continue
+        try:
+            _resolve_segment_path(segment)
+        except HTTPException as exc:
+            if exc.status_code not in {404, 409}:
+                raise
+            continue
+        best = start
+        local_bound = best.replace(tzinfo=timezone.utc).astimezone(ctx.zone).replace(tzinfo=None)
+        stop_after = max(best, local_bound) if target.compatibility_local is not None else best
+    return {"next": None if best is None else {
+        "timestamp_utc": best.replace(tzinfo=timezone.utc).isoformat(),
+        "timestamp_system": format_system_iso(best, ctx),
+    }}
 
 
 @router.get("/ranges")

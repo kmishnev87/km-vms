@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="ai_rule_scene_objects">Также реагировать на объекты во всём кадре</string>
     <string name="ai_rule_edit">Настроить AI</string>
     <string name="ai_rule_done">Готово</string>
     <string name="ai_rule_count">Правил: %1$d</string>

@@ -1,5 +1,7 @@
 export const TEXT_TRANSLATIONS = {
   en: {
+    "К следующей записи": "Next recording",
+    "Дальше записей нет": "No later recording",
     "Ожидание других записей": "Waiting for other recordings",
     "Загрузка записи...": "Loading recording...",
     "Нет записи на это время": "No recording at this time",
@@ -249,6 +251,8 @@ export const TEXT_TRANSLATIONS = {
     "Скачать паспорт клипа": "Download clip manifest",
   },
   "zh-CN": {
+    "К следующей записи": "下一段录像",
+    "Дальше записей нет": "没有后续录像",
     "Ожидание других записей": "等待其他录像",
     "Загрузка записи...": "正在加载录像...",
     "Нет записи на это время": "此时没有录像",

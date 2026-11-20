@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="ai_rule_scene_objects">同时检测全画面中的对象</string>
     <string name="ai_rule_edit">设置 AI 规则</string>
     <string name="ai_rule_done">完成</string>
     <string name="ai_rule_count">规则：%1$d</string>

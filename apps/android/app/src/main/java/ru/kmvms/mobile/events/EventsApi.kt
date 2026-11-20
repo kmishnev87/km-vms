@@ -42,6 +42,7 @@ data class CameraEvent(
     val id: String, val cameraId: Long?, val camera: String, val kind: CameraEventKind,
     val objects: Set<CameraEventKind>, val occurred: Instant, val read: Boolean,
     val ambiguous: Boolean, val uncertainClock: Boolean, val ai: AiEvent? = null,
+    val snapshotAvailable: Boolean = ai?.snapshot == true,
 ) {
     companion object {
         fun from(value: JSONObject, zone: ZoneId): CameraEvent {
@@ -54,7 +55,8 @@ data class CameraEvent(
                     .filter { it in setOf(CameraEventKind.PERSON, CameraEventKind.VEHICLE, CameraEventKind.ANIMAL) }.toSet(),
                 parseTime(value.getString("occurred_at"), zone) ?: throw IllegalArgumentException("event_time_invalid"),
                 value.optBoolean("read"), value.optBoolean("source_ambiguous"), value.optBoolean("clock_uncertain"),
-                value.optJSONObject("ai")?.let(AiEvent::from))
+                value.optJSONObject("ai")?.let(AiEvent::from),
+                value.optBoolean("snapshot_available", value.optJSONObject("ai")?.optBoolean("snapshot_available") == true))
         }
     }
 }
@@ -221,6 +223,6 @@ class EventsApi(val api: NasApi) {
 private fun JSONArray.strings() = (0 until length()).map { validEventId(getString(it)) }.toSet()
 private fun EventSelection.action() = JSONObject().put("excluded_ids",JSONArray(excluded.map(::validEventId)))
 
-private fun validEventId(value: String) = value.also {
+internal fun validEventId(value: String) = value.also {
     require(it.length == 36 && UUID.fromString(it).toString() == it.lowercase())
 }

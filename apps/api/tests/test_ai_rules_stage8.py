@@ -46,6 +46,27 @@ def run(rule, samples, *, start=1_700_000_000):
     return [rule.process(result, start+i) for i, result in enumerate(samples)]
 
 
+def test_scene_optional_whole_frame_objects_accept_independent_causes():
+    from app.services.ai_event_history import _sensor_identity
+
+    person = object_at(.55)
+    settled = [sample(), sample(person), sample(person)]
+    assert not any(run(RuleEngine(config("scene"), "UTC"), settled))
+    options = config("scene", scene_objects=True, classes=["person"])
+    run_result = run(RuleEngine(options, "UTC"), [
+        *settled, sample(image=bytes(len(LUMA))),
+    ])
+    assert run_result[2][0].kind == "presence" and run_result[2][0].started
+    assert run_result[2][0].object_kinds == ("person",)
+    assert any(hit.kind == "scene" and hit.started for hit in run_result[3])
+    camera = SimpleNamespace(recording_policy={"ai_rules": options})
+    assert _sensor_identity(camera, {"rule_id": "fence", "condition": "presence", "objects": ["person"]})
+    assert not _sensor_identity(camera, {"rule_id": "fence", "condition": "presence", "objects": ["vehicle"]})
+    assert _sensor_identity(camera, {"rule_id": "fence", "condition": "scene", "objects": []})
+    with pytest.raises(ValidationError, match="ai_rule_classes_required"):
+        config("scene", scene_objects=True, classes=[])
+
+
 def test_strict_geometry_legacy_actions_and_camera_bound_reference():
     with pytest.raises(ValidationError, match="invalid_ai_polygon|self_intersecting_ai_polygon"):
         config("enter", points=[[200,200], [750,750], [750,200], [200,750]])

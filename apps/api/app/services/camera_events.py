@@ -123,7 +123,7 @@ def marked_read_ids(db, user_id, ids):
 
 
 def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread=False, user_id=None,
-             source=None, rule=None, condition=None):
+             source=None, rule=None, condition=None, rule_ref=None):
     if camera_id is not None:
         query = query.filter(AuditEvent.target_type == "camera", AuditEvent.target_id == str(camera_id))
     if kind:
@@ -134,12 +134,16 @@ def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread
                                  (AuditEvent.event_type == "camera.other") & AuditEvent.event_metadata["topic"].as_string().in_(
                                      [topic for topic, label in LEGACY_TOPIC_KINDS.items() if label == kind])))
     origin = AuditEvent.event_metadata["origin"].as_string()
-    if source == "ai" or rule or condition:
+    if source == "ai" or rule or condition or rule_ref:
         query = query.filter(origin == AI_ORIGIN)
     elif source == "camera":
         query = query.filter(or_(origin.is_(None), origin != AI_ORIGIN))
     if rule and (term := rule.strip()):
         query = query.filter(AuditEvent.event_metadata["ai_rule_name"].as_string().icontains(term, autoescape=True))
+    if rule_ref:
+        rule_camera, rule_id = rule_ref.split(":", 1)
+        query = query.filter(AuditEvent.target_type == "camera", AuditEvent.target_id == rule_camera,
+                             AuditEvent.event_metadata["ai_rule_id"].as_string() == rule_id)
     if condition:
         query = query.filter(AuditEvent.event_metadata["ai_condition"].as_string() == condition)
     # Device events retain their receipt-time semantics; NAS AI knows when it captured the frame.
@@ -156,6 +160,25 @@ def filtered(query, *, camera_id=None, kind=None, since=None, until=None, unread
     if unread:
         query = query.filter(~read_expression(user_id))
     return query
+
+
+def ai_rule_options(db, *, camera_id=None, since=None):
+    # Scope choices to retained history (including old rule names) without
+    # consulting camera configuration or loading a page of event objects.
+    rule_id = AuditEvent.event_metadata["ai_rule_id"].as_string()
+    ranked = filtered(event_query(db), camera_id=camera_id, since=since, source="ai").filter(
+        AuditEvent.target_type == "camera", AuditEvent.target_id.is_not(None),
+        rule_id.is_not(None), rule_id != "",
+    ).with_entities(
+        AuditEvent.target_id.label("camera_id"), AuditEvent.target_name.label("camera_name"),
+        rule_id.label("rule_id"), AuditEvent.event_metadata["ai_rule_name"].as_string().label("rule_name"),
+        func.row_number().over(partition_by=(AuditEvent.target_id, rule_id),
+            order_by=(AuditEvent.created_at.desc(), AuditEvent.id.desc())).label("position"),
+    ).subquery()
+    matches = db.query(ranked.c.camera_id, ranked.c.camera_name, ranked.c.rule_id, ranked.c.rule_name).filter(
+        ranked.c.position == 1).order_by(ranked.c.camera_name, ranked.c.rule_name, ranked.c.camera_id, ranked.c.rule_id).all()
+    return [{"ref": f"{row.camera_id}:{row.rule_id}", "camera_name": row.camera_name, "name": row.rule_name or ""}
+            for row in matches]
 
 
 def serialize(row, read=False, ctx=None):
@@ -175,7 +198,8 @@ def serialize(row, read=False, ctx=None):
             # This is an observation, not a promise that an old alarm is live now.
             "state_observed_at": data.get("last_seen_at") or format_storage_utc_iso(row.created_at),
             "initial_state": bool(data.get("initial_state")),
-            "source_ambiguous": bool(data.get("source_ambiguous")), "occurrences": int(data.get("occurrences", 1)),
+             "source_ambiguous": bool(data.get("source_ambiguous")), "occurrences": int(data.get("occurrences", 1)),
+             "snapshot_available": data.get("ai_snapshot" if ai else "camera_snapshot") is True,
             "read": bool(read or (ai and data.get("ai_notify") is False)), "state_unconfirmed": bool(data.get("state_unconfirmed")),
             "topic": str(data.get("topic") or "")[:512],
             "object_kind": data.get("object_kind") if data.get("object_kind") in {"person", "vehicle", "animal"} else None,

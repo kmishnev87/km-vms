@@ -59,6 +59,7 @@ class TalkCandidate:
     payload: int = 8
     control: str = ""
     aggregate: str = ""
+    duplex: str = "unknown"
 
     @property
     def output_key(self):
@@ -68,5 +69,5 @@ class TalkCandidate:
     def public(self):
         needs = self.adapter == "tapo" and not self.source.talk_password
         return {"status": "needs_credentials" if needs else "supported", "adapter": self.adapter,
-                "duplex": "full" if self.adapter == "tapo" else "push_to_talk", "codec": self.codec,
+                "duplex": self.duplex, "codec": self.codec,
                 "credential_required": self.adapter == "tapo", "credential_saved": bool(self.source.talk_password)}

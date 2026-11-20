@@ -1,5 +1,11 @@
 package ru.kmvms.mobile.push
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+
 import org.json.JSONObject
 import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.FailedReason
@@ -9,6 +15,10 @@ import ru.kmvms.mobile.data.ProfileVault
 import ru.kmvms.mobile.diagnostics.*
 
 class MobilePushService : PushService() {
+    // The connector keeps the bound service alive for delivery; this work is
+    // deliberately shorter than that window and does not block its binder.
+    private val previewScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val previewSlots = Semaphore(4)
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
         val keys = endpoint.pubKeySet ?: return failure(instance)
         // A distributor's temporary fallback uses the same encrypted protocol;
@@ -38,7 +48,22 @@ class MobilePushService : PushService() {
         val envelope = runCatching { PushEnvelope.parse(message.content) }.getOrNull()
         if (envelope == null) { log(DiagnosticCode.PUSH_PARSE_FAILED); return }
         AppDiagnostics.record(DiagnosticCode.PUSH_PARSED, DiagnosticArea.PUSH, profile.id, envelope.eventId, envelope.cameraId)
-        runCatching { MobileNotifications.show(this, profile, envelope) }.onFailure { log(DiagnosticCode.PUSH_POST_FAILED) }
+        val app = applicationContext
+        if (!envelope.preview || !MobileNotifications.allowed(app) || !previewSlots.tryAcquire()) {
+            runCatching { MobileNotifications.show(app, profile, envelope) }.onFailure { log(DiagnosticCode.PUSH_POST_FAILED) }
+            return
+        }
+        previewScope.launch {
+            try {
+                val image = prepareEventPreview(app, profile, envelope)
+                val current = PushStore(app).byInstance(instance)
+                if (current?.profileId == profile.id && current.enabled &&
+                    runCatching { ProfileVault(app).signIn(profile.id) }.getOrNull() != null) {
+                    runCatching { MobileNotifications.show(app, profile, envelope, image) }
+                        .onFailure { log(DiagnosticCode.PUSH_POST_FAILED) }
+                }
+            } finally { previewSlots.release() }
+        }
     }
     override fun onRegistrationFailed(reason: FailedReason, instance: String) {
         val state = when (reason) {

@@ -47,7 +47,7 @@ function Tool({icon,children,pressed,disabled,onClick,compact=false}) {
 function Properties({ rule, patch, t, r, locale }) {
   const typeId=useId();
   const helpId=useId();
-  const usesObjects=rule.kind!=="scene";
+  const usesObjects=rule.kind!=="scene"||Boolean(rule.scene_objects);
   const hasDirection=rule.kind==="crossing";
   const hasDwell=rule.kind==="dwell";
   const zoneTransition=rule.kind==="enter"||rule.kind==="exit";
@@ -64,7 +64,8 @@ function Properties({ rule, patch, t, r, locale }) {
       <select id={typeId} className="recCellChoice" aria-describedby={helpId} value={rule.kind} onChange={e=>{
         const kind=e.target.value;
         const polygon=![kind,rule.kind].some(k=>k==="crossing"||k==="scene");
-        patch({kind,points:polygon?rule.points:[],direction:kind===rule.kind?rule.direction:"both"});
+        patch({kind,points:polygon?rule.points:[],direction:kind===rule.kind?rule.direction:"both",
+          scene_objects:kind==="scene"&&Boolean(rule.scene_objects)});
       }}>{RULE_KINDS.map(kind=><option key={kind} value={kind}>{r(keyScheme(kind))}</option>)}</select>
       <p className="aiHintBox aiConditionHint" id={helpId}><span>{r("rule_hint_"+rule.kind)}</span></p>
     </div>
@@ -72,6 +73,10 @@ function Properties({ rule, patch, t, r, locale }) {
       <label className="aiRuleName">{r("rule_name")}<input className="recCellChoice" value={rule.name} maxLength={48}
         onChange={e=>patch({name:e.target.value})}/></label>
     </div>
+    {rule.kind==="scene" ? <label className="aiRuleCheck">
+      <input type="checkbox" checked={Boolean(rule.scene_objects)} onChange={e=>patch({scene_objects:e.target.checked})}/>
+      {r("rule_scene_objects")}
+    </label> : null}
     <div className="aiObjectChips" data-applicable={usesObjects} aria-hidden={!usesObjects || undefined}>
       {RULE_CLASSES.map(kind=><label key={kind}>
         <input type="checkbox" checked={rule.classes.includes(kind)} disabled={!usesObjects} onChange={e=>patch({classes:e.target.checked

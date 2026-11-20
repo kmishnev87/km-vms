@@ -1,15 +1,19 @@
 package ru.kmvms.mobile.ui.events
 
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -24,6 +28,7 @@ import ru.kmvms.mobile.events.*
 import ru.kmvms.mobile.ui.KMVMSTheme
 import java.time.Instant
 import java.time.ZoneOffset
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -73,6 +78,39 @@ class EventHistoryLayoutTest {
         }
         assertEquals(compose.onNodeWithTag("event-camera-${event.id}",useUnmergedTree=true).getUnclippedBoundsInRoot().left,
             compose.onNodeWithTag("event-camera-read",useUnmergedTree=true).getUnclippedBoundsInRoot().left)
+    }
+
+    @Test fun bothSourcesUseTheSamePhotoActionOutsideEventText() {
+        val other = event.copy(id = "ai-fixture", camera = "PTZ", ai = AiEvent(AiEventCondition.SCENE, "PTZ", true, false))
+        var opened = ""
+        compose.setContent {
+            val config = Configuration(LocalConfiguration.current).apply { setLocale(Locale.forLanguageTag("ru")) }
+            val local = LocalContext.current.createConfigurationContext(config)
+            CompositionLocalProvider(LocalContext provides local, LocalConfiguration provides config) {
+                KMVMSTheme { Column(Modifier.width(340.dp).testTag("combined-event-photo-preview")) {
+                    listOf(event, other).forEach { row ->
+                        EventRow(row, EventsState(page = page), true, false, {}, {}, { opened = row.id })
+                    }
+                } }
+            }
+        }
+        val columns = listOf(event, other).map { row ->
+            val endOfText = compose.onNodeWithTag("event-kind-${row.id}", useUnmergedTree = true).getUnclippedBoundsInRoot().right
+            val photo = compose.onNodeWithTag("event-photo-${row.id}")
+            val actions = listOf(photo.getUnclippedBoundsInRoot(), compose.onNodeWithTag("event-live-${row.id}").getUnclippedBoundsInRoot(),
+                compose.onNodeWithTag("event-archive-${row.id}").getUnclippedBoundsInRoot())
+            assertTrue(actions[0].left >= endOfText)
+            assertTrue(actions[0].right <= actions[1].left && actions[1].right <= actions[2].left)
+            photo.performClick()
+            compose.runOnIdle { assertEquals(row.id, opened) }
+            actions.map { it.left }
+        }
+        assertEquals(columns[0], columns[1])
+        if (InstrumentationRegistry.getArguments().getString("kmvmsCapture") == "true") {
+            val image = compose.onNodeWithTag("combined-event-photo-preview").captureToImage().asAndroidBitmap()
+            File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "six-event-photo-row.png")
+                .outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
     }
 
     @Test fun foundAndSelectAllStayVerticallyCenteredInOneFixedHeightRow() {
