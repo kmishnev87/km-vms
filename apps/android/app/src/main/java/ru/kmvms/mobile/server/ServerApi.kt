@@ -15,14 +15,15 @@ internal fun rows(value:Any?):List<JSONObject> = when(value){
 }
 private fun codes(value:JSONArray?):List<String> = if(value==null)emptyList()else(0 until value.length()).map{value.optString(it)}.filter{it.matches(Regex("[a-zA-Z0-9_.-]{1,96}"))}
 data class StorageCamera(val id:Long,val name:String,val deleted:Boolean,val bytes:Long,val count:Long)
-data class ArchiveRoot(val id:String,val label:String,val path:String?,val active:Boolean,val readable:Boolean,val bytes:Long,val requiresActivation:Boolean)
+data class ArchiveRoot(val id:String,val label:String,val path:String?,val active:Boolean,val readable:Boolean,val bytes:Long,val requiresActivation:Boolean,
+    val recordingAccess:String?=null)
 data class StorageView(val available:Boolean,val total:Long?,val free:Long?,val archiveBytes:Long,val cameras:List<StorageCamera>,val roots:List<ArchiveRoot>,val problems:Int) {
     companion object {fun from(value:JSONObject):StorageView {
         val capacity=value.optJSONObject("capacity")?:JSONObject()
         return StorageView(value.optBoolean("available"),capacity.number("total_bytes"),capacity.number("free_bytes"),
             value.optJSONObject("owned_archive")?.optLong("kmvms_owned_archive_bytes")?:0,
             rows(value.opt("camera_usage")).map{StorageCamera(it.optLong("camera_id"),it.optString("camera_name"),it.optBoolean("camera_deleted"),it.optLong("size_bytes"),it.optLong("recording_count"))},
-            rows(value.opt("archive_roots")).map{ArchiveRoot(it.getString("id"),it.text("label").orEmpty(),it.text("host_path"),it.optBoolean("is_active"),it.optString("read_access_state")=="available",it.optLong("size_bytes"),it.optBoolean("requires_activation"))},
+            rows(value.opt("archive_roots")).map{ArchiveRoot(it.getString("id"),it.text("label").orEmpty(),it.text("host_path"),it.optBoolean("is_active"),it.optString("read_access_state")=="available",it.optLong("size_bytes"),it.optBoolean("requires_activation"),it.text("recording_access"))},
             value.optJSONObject("reconciliation_summary")?.optInt("problem_file_count")?:0)
     }}
 }

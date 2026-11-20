@@ -21,6 +21,7 @@
     <string name="ai_event_forbidden">This account cannot access Timeline.</string>
     <string name="ai_event_ready">Recording available</string>
     <string name="ai_event_check">Check recording</string>
+    <string name="event_recording_check_failed">Could not check the recording. Try again.</string>
     <string name="ai_event_false">False positive</string>
     <string name="ai_event_mark_false">Mark as false positive</string>
     <string name="ai_event_clear_false">Clear label</string>

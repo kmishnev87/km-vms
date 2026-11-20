@@ -1,5 +1,6 @@
 package ru.kmvms.mobile.camera
 
+import org.json.JSONArray
 import org.json.JSONObject
 import ru.kmvms.mobile.data.NasApi
 
@@ -12,8 +13,26 @@ data class CameraCatalog(val profiles:List<CameraProfile>,val sources:List<Camer
             value.text("suggested_main_profile_token"),value.text("suggested_sub_profile_token"))
     } }
 }
+data class ArchiveTarget(val id:String,val path:String,val writable:Boolean)
+data class ArchiveTargets(val defaultId:String?,val items:List<ArchiveTarget>)
+data class CameraArchiveMoveOffer(val cameraId:Long,val cameraName:String,val targetId:String,val targetPath:String,val count:Int) {
+    companion object { fun from(value:JSONObject)=CameraArchiveMoveOffer(value.getLong("camera_id"),
+        value.getString("camera_name"),value.getString("target_root_id"),value.getString("target_path"),value.getInt("recording_count")) }
+}
+
 class CameraApi(private val api:NasApi) {
     suspend fun get(id:Long)=api.json("api/cameras/${validId(id)}") as JSONObject
+    suspend fun archiveTargets():ArchiveTargets {
+        val result=api.json("api/cameras/archive-targets") as JSONObject
+        val items=result.getJSONArray("items")
+        return ArchiveTargets(result.text("default_root_id"),(0 until items.length()).map {
+            val item=items.getJSONObject(it)
+            ArchiveTarget(item.getString("id"),item.getString("path"),item.optBoolean("writable"))
+        })
+    }
+    suspend fun moveArchive(offer:CameraArchiveMoveOffer,requestId:String):JSONObject =
+        api.json("api/cameras/archive-moves","POST",JSONObject().put("request_id",requestId).put("cameras",
+            JSONArray().put(JSONObject().put("camera_id",offer.cameraId).put("target_root_id",offer.targetId)))) as JSONObject
     suspend fun probe(draft:CameraDraft,id:Long?)=CameraCatalog.from(api.json("api/cameras/onvif/probe","POST",draft.payload(id).put("timeout_seconds",8)) as JSONObject)
     suspend fun test(draft:CameraDraft,id:Long?,role:String):JSONObject {
         require(role in setOf("main","sub"))

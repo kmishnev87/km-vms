@@ -171,6 +171,9 @@ export function recordingFailureMessage(reason, reasons = [], state = "") {
   if (codes.has("auth_failed")) return "Камера отклонила логин или пароль.";
   if (codes.has("recorder_heartbeat_stale")) return "Сервис записи не подтверждает работу.";
   if (codes.has("camera_unreachable")) return "Нет связи с камерой.";
+  if (codes.has("camera_archive_root_unavailable")) return "Папка записи камеры недоступна.";
+  if (codes.has("camera_archive_root_read_only")) return "В папку камеры нельзя записывать.";
+  if (codes.has("camera_archive_root_low_disk")) return "На диске с архивом камеры мало свободного места.";
   if (codes.has("recording_start_timeout")) return "Запись не началась за 30 секунд.";
   if (codes.has("recording_no_active_job")) return "Запись включена, но задача записи не запущена.";
   if (codes.has("recording_segment_not_rotating")) return "Файл записи не сменяется вовремя.";
@@ -317,7 +320,24 @@ function recorderWarnings(domain, items) {
 }
 
 function cameraWarnings(domain, items) {
+  const storageCameras = asArray(domain.items).filter(item => item.archive_route);
+  for (const blocked of [true, false]) {
+    const affected = storageCameras.filter(item => (item.archive_route.status === "blocked") === blocked);
+    if (!affected.length) continue;
+    pushBanner(items, {
+      id: blocked ? "camera-archive-blocked" : "camera-archive-failover", domain: "cameras",
+      severity: blocked ? "error" : "warning",
+      title: blocked ? "Камеры без доступной папки записи" : "Камеры переключены на другой том",
+      message: blocked ? "Проверьте доступ к папкам и свободное место." : "Откройте хранилище, чтобы проверить исходный том.",
+      affected_count: affected.length,
+      affected_cameras: affected.map(item => ({ camera_id: item.camera_id, camera_name: item.name,
+        reason: item.archive_route.reason, archive_route: item.archive_route, recording_state: item.recording_state })),
+      reason_codes: affected.flatMap(item => asArray(item.reason_codes)),
+      action_hint: "Откройте хранилище и проверьте подключение расположений архива.",
+    });
+  }
   const cameraItems = asArray(domain.items).filter((item) => {
+    if (item.archive_route && (item.archive_route.status === "blocked" || item.severity !== "error")) return false;
     const reasons = asArray(item.reason_codes);
     if (reasons.includes("disabled") || reasons.includes("not_applicable")) return false;
     // Live has its own named warning. Do not relabel it as a recording failure.

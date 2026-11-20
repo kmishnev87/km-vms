@@ -3,6 +3,7 @@ export const zhCNDictionary = {
   androidDownload: { checking: "正在加载 APK 信息…", available: "Android APK", failed: "无法获取 APK 信息，请刷新页面。", unpublished: "官方 APK 尚未发布。", subtitle: "Android 版 KM VMS", instructions: "将 APK 下载到手机，打开文件并在 Android 中确认安装。然后添加 NAS 地址并登录 KM VMS 账户。支持 HTTP 和 HTTPS。", version: "版本", download: "下载 APK", check: "检查版本", languages: "支持 Android 8 及以上版本，提供英文、中文和俄文。可在 Android 应用中获取更新。" },
   chronologyArchive: { retainedCameras: "仍有录像的已删除摄像机", deleted: "已删除", archiveOnly: "仅保留的录像" },
   cameraEvents: {
+    openPhoto: "打开快照", cameraEventDetails: "摄像机事件", loadingPhoto: "正在加载快照…",
     historyRule: { all: "所有规则", loading: "正在加载规则…", empty: "该时段内无规则触发", unavailable: "无法加载规则", unnamed: "未命名规则" },
     ai: {"unnamedZone":"未命名区域","unnamedLine":"未命名线","details":"AI 事件","source":"来源","both":"全部来源","fromAi":"NAS AI","fromCamera":"摄像机事件","condition":"条件","anyCondition":"全部条件","rule":"规则","conditions":{"presence":"画面或区域内出现目标","enter":"进入区域","exit":"离开区域","crossing":"越线","dwell":"区域内逗留","scene":"场景变化"},"frame":"检测画面","noFrame":"快照不可用","wholeFrame":"整个画面","pending":"仍在录制此片段，请在录制完成后查看。","unavailable":"事件发生时没有录像，或录像已不可用。","forbidden":"此帐户没有时间线访问权限。","ready":"录像可用","check":"检查录像","checkFailed":"无法检查录像，请重试。","falsePositive":"误报","markFalse":"标记为误报","unmarkFalse":"清除标记","reviewHelp":"标记会显示在历史记录中，不会训练 AI。","saveClip":"另存为片段","clipHelp":"完成的片段是独立副本，不会更改原录像的保留期限。","invalidRange":"请选择有效的片段时间范围。"},
     "title": "摄像机事件",
@@ -278,6 +279,10 @@ export const zhCNDictionary = {
     batchStates: { queued: "操作已接受", running: "正在处理录像", cancel_requested: "将在当前项目完成后停止", completed: "操作已完成", partial: "已完成但存在问题", blocked: "操作未完成", failed: "处理出错", cancelled: "处理已停止" },
     resultStates: { queued: "排队中", prepared: "排队中", running: "处理中", completed: "已完成", partial: "部分完成", blocked: "未完成", failed: "失败", cancelled: "已取消" },
     reasons: {
+      camera_archive_root_unavailable: "摄像机的录像文件夹不可用。",
+      camera_archive_root_read_only: "无法写入摄像机的录像文件夹。",
+      camera_archive_root_low_disk: "摄像机录像磁盘的可用空间不足。",
+      archive_root_assigned_to_cameras: "请先为这些摄像机指定其他录像文件夹。",
       integrity_review_selection_invalid: "请检查选中的录像和操作。刷新列表后重新选择。",
       archive_integrity_missing_not_finalized: "此录像的状态尚不允许移除目录引用。请在录像停止后重新检查。",
       integrity_review_selection_changed: "选择范围或录像状态已变化。请刷新并重新确认。",

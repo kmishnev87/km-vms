@@ -22,7 +22,7 @@ test("one bulk icon outside the list replaces disappearing per-row read actions"
   const hub = read("../components/CameraEventsHub.js");
   const actions = hub.slice(hub.indexOf("function rowActions"), hub.indexOf("const historyContent"));
   assert.doesNotMatch(actions, /readSelection|markRead|row\.read/);
-  assert.equal((actions.match(/className="cameraEventsIconButton"/g) || []).length, 2);
+  assert.equal((actions.match(/className="cameraEventsIconButton"/g) || []).length, 3);
   assert.match(hub, /selectedCount \? readSelection\(selection\) : readAll\(\)/);
   assert.match(hub, /apiFetch\("\/camera-events\/read-all"/);
   assert.match(hub, /JSON\.stringify\(\{ through \}\)/);

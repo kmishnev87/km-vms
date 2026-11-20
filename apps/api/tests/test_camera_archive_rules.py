@@ -41,7 +41,7 @@ def save(ctx, changes):
 def test_catalog_is_policy_only_and_includes_disabled_not_deleted(context):
     catalog = rules.list_archive_rules(context.db, context.actor)
     assert len(catalog["cameras"]) == 2
-    assert all(set(row) == {"camera_id", "name", "enabled", *rules.FIELDS} for row in catalog["cameras"])
+    assert all(set(row) == {"camera_id", "name", "enabled", rules.ROOT_FIELD, *rules.FIELDS} for row in catalog["cameras"])
     assert not any(row["enabled"] for row in catalog["cameras"])
 
 

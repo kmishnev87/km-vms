@@ -140,8 +140,9 @@ def test_materializer_ignores_injected_yaml_and_prunes_registry(host, tmp_path, 
     monkeypatch.setattr(policy, "docker_command", docker)
     target = policy.materialize(app, "fixture")
     text = target.read_text()
-    assert "privileged:" not in text and "untrusted" not in text and "schema-update:" in text
-    assert text.count("create_host_path: false") == 4
+    assert "privileged:" not in text and "untrusted" not in text
+    assert all(f"  {service}:\n" in text for service in ("api", "schema-update", "recorder"))
+    assert text.count("create_host_path: false") == 6
     assert target.stat().st_mode & 0o777 == 0o400
     assert "privileged: true" in injected.read_text()  # Not parsed or rewritten.
     (control / "archive-roots-runtime.json").write_text(json.dumps(intent("/Volume3/archive")))

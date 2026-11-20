@@ -1,5 +1,8 @@
 package ru.kmvms.mobile.widget
 
+import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.drawable.BitmapDrawable
 import android.view.View
 import android.widget.RemoteViews
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -16,6 +19,52 @@ import java.util.Locale
 
 @RunWith(AndroidJUnit4::class)
 class AlertWidgetLayoutTest {
+    // Exclude the transparent edges of the PNGs and the font's unused line height.
+    private fun visibleArtworkHeight(image: ImageView): Float {
+        val bitmap = (image.drawable as BitmapDrawable).bitmap
+        var top = bitmap.height
+        var bottom = -1
+        for (y in 0 until bitmap.height) {
+            if ((0 until bitmap.width).any { x -> bitmap.getPixel(x, y) ushr 24 > 64 }) {
+                top = minOf(top, y)
+                bottom = y
+            }
+        }
+        val transform = FloatArray(9)
+        image.imageMatrix.getValues(transform)
+        return (bottom - top + 1) * (image.drawable.intrinsicHeight.toFloat() / bitmap.height) * transform[Matrix.MSCALE_Y]
+    }
+
+    @Test fun actualNumeralHeightBalancesBothIconsWithoutDisplacingThePlus() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val base = instrumentation.targetContext
+            for (scale in listOf(1f, 2f)) for (width in listOf(150, 180, 203)) for (number in listOf("0", "17", "99")) {
+                val context = base.createConfigurationContext(Configuration(base.resources.configuration).apply { fontScale = scale })
+                val density = context.resources.displayMetrics.density
+                val root = RemoteViews(context.packageName, R.layout.alert_widget_count).apply {
+                    setTextViewText(R.id.alert_widget_count, number)
+                    setViewVisibility(R.id.alert_widget_count_plus, if (number == "99") View.VISIBLE else View.INVISIBLE)
+                }.apply(context, null)
+                val w = (width * density).toInt()
+                val h = (90 * density).toInt()
+                root.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
+                root.layout(0, 0, w, h)
+                val count = root.findViewById<TextView>(R.id.alert_widget_count)
+                val suffix = root.findViewById<TextView>(R.id.alert_widget_count_plus)
+                val bell = visibleArtworkHeight(root.findViewById<ImageView>(R.id.alert_widget_bell))
+                val live = visibleArtworkHeight(root.findViewById<ImageView>(R.id.alert_widget_live))
+                val bounds = Rect().apply { count.paint.getTextBounds(number, 0, number.length, this) }
+                val detail = "$number scale=$scale width=$width: glyph=${bounds.height() / density}dp, bell=${bell / density}dp, live=${live / density}dp"
+                assertTrue(detail, bounds.height() >= minOf(bell, live) - .75f * density)
+                assertTrue(detail, bounds.height() <= maxOf(bell, live) + 3f * density)
+                assertTrue(detail, count.paint.measureText(number) <= count.width + .5f)
+                assertEquals(detail, 0, count.layout.getEllipsisCount(0))
+                assertEquals(detail, count.right, suffix.left)
+            }
+        }
+    }
+
     @Test fun fullTitleFitsBothMinimumWidthsAndLargerSystemFontsInAllLanguages() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {

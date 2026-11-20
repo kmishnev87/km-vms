@@ -35,6 +35,9 @@ DISCOVERY_RESULT_FILE="$CONTROL_DIR/storage-discovery-result.json"
 DISCOVERY_CANDIDATES_CONTROL_FILE="$CONTROL_DIR/storage-discovery-candidates.control"
 ROOT_CLEANUP_REQUEST_CONTROL_FILE="$CONTROL_DIR/storage-root-cleanup-request.control"
 ROOT_CLEANUP_RESULT_FILE="$CONTROL_DIR/storage-root-cleanup-result.json"
+ROOT_PROVISION_REQUEST="$CONTROL_DIR/storage-root-provision-request.control"
+ROOT_PROVISION_RESULT="$CONTROL_DIR/storage-root-provision-result.json"
+ROOT_PROVISION_RECEIPT="$CONTROL_DIR/storage-root-provision-receipt.control"
 SETUP_COMPLETE_FILE="$CONTROL_DIR/setup-complete.json"
 SETUP_STATUS_URL="${KM_VMS_SETUP_STATUS_URL:-http://api:8000/system/status}"
 APPLY_OUT="/tmp/km-vms-storage-apply.out"
@@ -598,9 +601,85 @@ process_discovery_request() {
   write_discovery_request_status "$discovery_request_id" "$discovery_mode" "$discovery_candidate_id" "$discovery_expected_snapshot" "$discovery_expected_identity" "$discovery_folder" "completed"
 }
 
+process_root_provision_request() (
+  [ -f "$ROOT_PROVISION_REQUEST" ] && [ ! -L "$ROOT_PROVISION_REQUEST" ] || return 0
+  # Older, already initialized installations may not have the newer wizard
+  # receipt. Admin authorization is done by the API; restart still verifies
+  # canonical deployment authority before applying any binds.
+  [ -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/.km-vms-install.json" ] || return 0
+  provision_request=$(read_control_value "$ROOT_PROVISION_REQUEST" request_id || true)
+  provision_root=$(read_control_value "$ROOT_PROVISION_REQUEST" root_id || true)
+  printf '%s\n' "$provision_request" | grep -Eq '^[a-f0-9]{32}$' || return 0
+  printf '%s\n' "$provision_root" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,35}$' || return 0
+  [ "$(read_control_value "$ROOT_PROVISION_RECEIPT" request_id || true)" != "$provision_request" ] || return 0
+  provision_result() {
+    delivery=$(read_control_value "$ROOT_PROVISION_REQUEST" request_id || true)
+    [ "$delivery" = "$provision_request" ] || return 0
+    umask 077
+    printf '{"request_id":"%s","root_id":"%s","status":"%s","reason":"%s"}\n' "$provision_request" "$provision_root" "$1" "$2" > "$ROOT_PROVISION_RESULT.tmp.$$"
+    mv "$ROOT_PROVISION_RESULT.tmp.$$" "$ROOT_PROVISION_RESULT"
+    printf 'request_id=%s\n' "$provision_request" > "$ROOT_PROVISION_RECEIPT.tmp.$$"
+    mv "$ROOT_PROVISION_RECEIPT.tmp.$$" "$ROOT_PROVISION_RECEIPT"
+  }
+  valid_provision_request() {
+    [ "$(read_control_value "$ROOT_PROVISION_REQUEST" request_id || true)" = "$provision_request" ] &&
+      [ "$provision_deadline" -gt "$(date +%s)" ] 2>/dev/null
+  }
+  provision_deadline=$(read_control_value "$ROOT_PROVISION_REQUEST" expires_at || true)
+  if ! valid_provision_request; then
+    provision_result failed archive_attachment_timeout
+    return 0
+  fi
+  provision_mount=$(read_control_value "$ROOT_PROVISION_REQUEST" mount || true)
+  provision_folder=$(read_control_value "$ROOT_PROVISION_REQUEST" folder || true)
+  provision_identity=$(read_control_value "$ROOT_PROVISION_REQUEST" physical_identity || true)
+  case "$provision_mount" in
+    /|*','*|*':'*|*'"'*|*\\*) provision_result failed archive_attachment_target_invalid; return 0 ;;
+    /*) ;;
+    *) provision_result failed archive_attachment_target_invalid; return 0 ;;
+  esac
+  case "$provision_folder" in
+    ''|.*|*/*|*'"'*|*\\*) provision_result failed archive_attachment_target_invalid; return 0 ;;
+  esac
+  provision_image=docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c
+  if ! docker run --rm --network none \
+    -v "$APP_DIR:/host-app" -v "/:/host:ro,rslave" \
+    "$provision_image" sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
+    provision_result failed archive_attachment_discovery_failed
+    return 0
+  fi
+  provision_candidate=$(awk -F '\t' -v path="$provision_mount" '$2 == path && $4 == "true" && $5 == "allowed" {print $3; exit}' "$DISCOVERY_CANDIDATES_CONTROL_FILE")
+  if [ -z "$provision_identity" ] || [ "$provision_candidate" != "$provision_identity" ] || ! valid_provision_request; then
+    provision_result failed archive_attachment_volume_changed
+    return 0
+  fi
+  if ! docker run --rm --network none \
+    -v "$APP_DIR:/host-app:ro" --mount "type=bind,source=$provision_mount,target=/selected-root" \
+    "$provision_image" sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-candidate-validate.sh" \
+    --folder-name "$provision_folder" --prepare-archive "$provision_mount/$provision_folder" \
+    >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
+    provision_error=$(read_control_value "$DISCOVERY_VALIDATION_OUT" error || true)
+    case "$provision_error" in
+      target_*|archive_attachment_*|non_empty_unmarked_folder|storage_candidate_*)
+        printf '%s' "$provision_error" | grep -Eq '^[a-z0-9_]{1,72}$' || provision_error=archive_attachment_prepare_failed ;;
+      *) provision_error=archive_attachment_prepare_failed ;;
+    esac
+    provision_result failed "$provision_error"
+    return 0
+  fi
+  if ! valid_provision_request ||
+    ! sh "$OPERATOR_SCRIPTS_DIR/km-vms-restart.sh" --app-dir "$APP_DIR" \
+      --attach-archive-root "$(printf '%s' "$provision_root" | tr '[:upper:]' '[:lower:]' | sed 's/[.-]*$//')" >"$RESTART_OUT" 2>"$RESTART_ERR"; then
+    provision_result failed archive_attachment_runtime_failed
+    return 0
+  fi
+  provision_result completed ""
+)
+
 while :; do
   process_root_cleanup_request
   process_discovery_request
+  process_root_provision_request
   if [ ! -f "$REQUEST_CONTROL_FILE" ]; then
     sleep 2
     continue

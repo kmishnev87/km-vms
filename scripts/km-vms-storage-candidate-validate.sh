@@ -2,6 +2,7 @@
 set -eu
 
 FOLDER_NAME=""
+ARCHIVE_HOST_PATH=""
 SELECTED_ROOT="${KM_VMS_SELECTED_MOUNT_CONTAINER:-/selected-root}"
 
 fail() {
@@ -14,6 +15,11 @@ while [ "$#" -gt 0 ]; do
     --folder-name)
       [ "$#" -ge 2 ] || fail "folder_name_required"
       FOLDER_NAME="$2"
+      shift 2
+      ;;
+    --prepare-archive)
+      [ "$#" -ge 2 ] || fail "archive_attachment_target_invalid"
+      ARCHIVE_HOST_PATH="$2"
       shift 2
       ;;
     --help|-h)
@@ -36,7 +42,7 @@ printf '%s' "$FOLDER_NAME" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null 2>&1 && fail
 [ -x "$SELECTED_ROOT" ] || fail "storage_candidate_not_searchable"
 [ -w "$SELECTED_ROOT" ] || fail "storage_candidate_not_writable"
 
-probe="$SELECTED_ROOT/.km-vms-candidate-probe.$$"
+probe=$(mktemp "$SELECTED_ROOT/.km-vms-candidate-probe.XXXXXX") || fail "storage_candidate_not_writable"
 printf 'km-vms-candidate-probe\n' > "$probe" || fail "storage_candidate_not_writable"
 readback=$(cat "$probe" 2>/dev/null || true)
 rm -f "$probe" || fail "storage_candidate_probe_cleanup_failed"
@@ -44,6 +50,7 @@ rm -f "$probe" || fail "storage_candidate_probe_cleanup_failed"
 [ "$readback" = "km-vms-candidate-probe" ] || fail "storage_candidate_probe_readback_failed"
 
 target="$SELECTED_ROOT/$FOLDER_NAME"
+[ ! -L "$target" ] || fail "target_is_symlink"
 exists=false
 is_empty=false
 has_marker=false
@@ -60,6 +67,32 @@ if [ -e "$target" ]; then
     is_empty=true
   elif [ "$has_marker" != "true" ] && [ ! -d "$target/kmvms/recordings" ]; then
     fail "non_empty_unmarked_folder"
+  fi
+fi
+
+if [ -n "$ARCHIVE_HOST_PATH" ]; then
+  case "$ARCHIVE_HOST_PATH" in
+    /*/"$FOLDER_NAME") ;;
+    *) fail "archive_attachment_target_invalid" ;;
+  esac
+  printf '%s' "$ARCHIVE_HOST_PATH" | LC_ALL=C grep '[[:cntrl:]"\\]' >/dev/null 2>&1 && fail "archive_attachment_target_invalid"
+  umask 027
+  [ "$exists" = "true" ] || mkdir -- "$target" || fail "archive_attachment_folder_create_failed"
+  [ -d "$target" ] && [ ! -L "$target" ] || fail "archive_attachment_target_invalid"
+  for part in "$target/kmvms" "$target/kmvms/recordings" "$target/.km-vms-storage-root.json"; do
+    [ ! -L "$part" ] || fail "target_is_symlink"
+  done
+  [ ! -e "$target/.km-vms-storage-root.json" ] || [ "$has_marker" = "true" ] || fail "archive_attachment_target_invalid"
+  mkdir -p -- "$target/kmvms/recordings" || fail "archive_attachment_namespace_create_failed"
+  probe=$(mktemp "$target/kmvms/recordings/.km-vms-probe.XXXXXX") || fail "target_not_writable"
+  if ! printf 'km-vms\n' > "$probe"; then
+    rm -f -- "$probe"
+    fail "target_not_writable"
+  fi
+  rm -f -- "$probe" || fail "storage_candidate_probe_cleanup_failed"
+  if [ "$has_marker" != "true" ]; then
+    (set -C; printf '{\n  "schema_version": 1,\n  "product": "KM VMS",\n  "selected_host_path": "%s",\n  "container_archive_path": "/storage/archive"\n}\n' "$ARCHIVE_HOST_PATH" > "$target/.km-vms-storage-root.json") ||
+      fail "archive_attachment_marker_write_failed"
   fi
 fi
 

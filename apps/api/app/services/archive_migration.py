@@ -21,10 +21,12 @@ from app.core.permissions import user_has_permission
 from app.db.session import SessionLocal
 from app.models.archive_migration import ArchiveMigrationItem, ArchiveMigrationPlan
 from app.models.audit_event import AuditEvent
+from app.models.camera import Camera
 from app.models.recording import ArchiveRoot, RecordingJob, RecordingSegment
 from app.models.storage_operation import StorageOperation
 from app.models.user import User
 from app.services.audit_log import create_event
+from app.services.camera_archive_placement import can_move_camera_archive, current_default_id
 from app.services.recording_storage import KMVMS_RECORDINGS_NAMESPACE
 from app.services.storage_filesystem import (
     StorageFilesystemError,
@@ -189,6 +191,7 @@ def _plan_identity(plan: ArchiveMigrationPlan) -> dict[str, Any]:
         "source_root_id": str(plan.source_root_id),
         "target_root_id": str(plan.target_root_id),
         "schema_version": int(plan.schema_version),
+        **({"camera_id": plan.selected_camera_id} if plan.selected_camera_id is not None else {}),
     }
 
 
@@ -198,6 +201,17 @@ def _operation_domain_ref(plan_id: str) -> str:
 
 def _operation_identity(plan: ArchiveMigrationPlan) -> dict[str, Any]:
     return {"migration": _plan_identity(plan)}
+
+
+def _plan_scope(plan: ArchiveMigrationPlan) -> dict[str, Any]:
+    return {"root_ids": [str(plan.source_root_id), str(plan.target_root_id)],
+            **({"camera_ids": [plan.selected_camera_id]} if plan.selected_camera_id is not None else {})}
+
+
+def _selected_camera_still_targets(db: Session, plan: ArchiveMigrationPlan) -> bool:
+    camera = db.get(Camera, plan.selected_camera_id)
+    return bool(camera and camera.deleted_at is None
+                and (camera.recording_archive_root_id or current_default_id(db)) == plan.target_root_id)
 
 
 def _safe_label(root: ArchiveRoot | None) -> str | None:
@@ -826,7 +840,7 @@ def _operation_matches_migration_lineage(
     scope_matches_plan = bool(
         not scope.get("global")
         and set(scope.get("root_ids") or []) == expected_root_ids
-        and not scope.get("camera_ids")
+        and set(scope.get("camera_ids") or []) == set(_plan_scope(plan).get("camera_ids") or [])
         and not scope.get("segment_ids")
     )
     return bool(
@@ -1115,8 +1129,11 @@ def request_migration_plan(
     source_root_id: str,
     target_root_id: str,
     idempotency_key: str,
+    selected_camera_id: int | None = None,
 ) -> dict[str, Any]:
     if not _has_required_permissions(actor, "manage_settings"):
+        raise ArchiveMigrationBlocked("migration_prepare_permission_required", retry_mode=None)
+    if selected_camera_id is not None and not can_move_camera_archive(actor):
         raise ArchiveMigrationBlocked("migration_prepare_permission_required", retry_mode=None)
     source_id = str(source_root_id or "").strip()
     target_id = str(target_root_id or "").strip()
@@ -1144,6 +1161,7 @@ def request_migration_plan(
         "source_root_id": source_id,
         "target_root_id": target_id,
         "actor_key": actor_key,
+        **({"camera_id": selected_camera_id} if selected_camera_id is not None else {}),
     }
     fingerprint = request_fingerprint(request_identity)
     normalized_idempotency = str(idempotency_key or fingerprint).strip().lower()
@@ -1177,6 +1195,7 @@ def request_migration_plan(
         request_fingerprint=fingerprint,
         source_root_id=source_id,
         target_root_id=target_id,
+        selected_camera_id=selected_camera_id,
         source_label_snapshot=_safe_label(source) or "Archive",
         target_label_snapshot=_safe_label(target) or "Archive",
         source_physical_identity=source_fields["physical_identity"],
@@ -1195,7 +1214,7 @@ def request_migration_plan(
         capacity_free_bytes=int(target_snapshot["free_bytes"]),
         reserve_bytes=migration_reserve_bytes(int(target_snapshot["total_bytes"])),
         status="building",
-        phase="inventory",
+        phase="awaiting_recording" if selected_camera_id is not None else "inventory",
         required_read_permission="manage_settings",
         required_prepare_permission="manage_settings",
         required_apply_permissions="manage_settings,delete_recordings",
@@ -1263,13 +1282,17 @@ def _prepare_one_plan(leader=None) -> bool:
     with SessionLocal() as db:
         plan = (
             db.query(ArchiveMigrationPlan)
-            .filter(ArchiveMigrationPlan.status == "building")
+            .filter(ArchiveMigrationPlan.status == "building",
+                    or_(ArchiveMigrationPlan.phase != "awaiting_recording",
+                        ArchiveMigrationPlan.updated_at < database_now(db) - timedelta(seconds=10)))
             .order_by(ArchiveMigrationPlan.created_at.asc(), ArchiveMigrationPlan.id.asc())
             .first()
         )
         if plan is None:
             return False
         try:
+            if plan.phase == "awaiting_recording" and not _open_scoped_inventory(db, plan):
+                return False
             while _materialize_plan_batch(db, plan):
                 if leader is not None:
                     leader.assert_owned()
@@ -1301,6 +1324,79 @@ def _prepare_one_plan(leader=None) -> bool:
                 except _MigrationAuditPersistenceFailed:
                     db.rollback()
         return True
+
+
+def _open_scoped_inventory(db: Session, plan: ArchiveMigrationPlan) -> bool:
+    """Wait for the old writer and the normal migration quiet period, then freeze a scope."""
+    actor = _require_prepare_authority(db, plan)
+    if not can_move_camera_archive(actor) or not _selected_camera_still_targets(db, plan):
+        raise ArchiveMigrationBlocked("camera_archive_target_changed", retry_mode=None)
+    now = database_now(db)
+    if plan.expires_at and now >= plan.expires_at:
+        raise ArchiveMigrationBlocked("migration_plan_expired", retry_mode=None)
+    scope = db.query(RecordingSegment).filter(
+        RecordingSegment.camera_id == plan.selected_camera_id,
+        RecordingSegment.archive_root_id == plan.source_root_id,
+        RecordingSegment.deleted_at.is_(None), RecordingSegment.source == "recorder",
+        RecordingSegment.ownership == "KM VMS")
+    old_writer = scope.join(RecordingJob, RecordingJob.id == RecordingSegment.job_id).filter(
+        RecordingJob.state.in_(tuple(ACTIVE_JOB_STATES))).limit(1).first()
+    # A process that already owned this camera before consent may not have
+    # written its first metadata row yet. New target writers have new jobs.
+    unknown_writer = db.query(RecordingJob.id).filter(
+        RecordingJob.camera_id == plan.selected_camera_id,
+        RecordingJob.started_at <= plan.created_at,
+        RecordingJob.state.in_(tuple(ACTIVE_JOB_STATES)),
+        ~db.query(RecordingSegment.id).filter(RecordingSegment.job_id == RecordingJob.id).exists(),
+    ).limit(1).first()
+    recent = scope.filter(RecordingSegment.status.in_(tuple(ELIGIBLE_SEGMENT_STATUSES)),
+                         func.coalesce(RecordingSegment.updated_at, RecordingSegment.finalized_at,
+                                       RecordingSegment.created_at, RecordingSegment.started_at) > now - RECENT_WRITE_WINDOW).limit(1).first()
+    plan.updated_at = now
+    if old_writer or unknown_writer or recent:
+        db.commit()
+        return False
+    plan.segment_high_watermark = int(scope.with_entities(func.max(RecordingSegment.id)).scalar() or 0)
+    plan.phase = "inventory"
+    db.commit()
+    return True
+
+
+def _queue_one_camera_move() -> bool:
+    """Only plans created by the explicit camera-move confirmation auto-apply."""
+    with SessionLocal() as db:
+        plan = db.query(ArchiveMigrationPlan).filter(
+            ArchiveMigrationPlan.selected_camera_id.is_not(None),
+            ArchiveMigrationPlan.status.in_(tuple(PLAN_READY_STATUSES)),
+        ).order_by(ArchiveMigrationPlan.updated_at, ArchiveMigrationPlan.id).first()
+        if plan is None:
+            return False
+        plan_id = str(plan.id)
+        try:
+            actor = _require_prepare_authority(db, plan)
+            if not can_move_camera_archive(actor) or not _selected_camera_still_targets(db, plan):
+                raise ArchiveMigrationBlocked("camera_archive_target_changed", retry_mode=None)
+            queue_migration_apply(db, actor=actor, plan_id=plan_id, expected_hash=plan.canonical_hash,
+                                  idempotency_key=f"camera-move-{plan_id}")
+            return True
+        except StorageOperationConflict:
+            db.rollback()
+            plan = db.get(ArchiveMigrationPlan, plan_id)
+            if plan is not None:
+                plan.updated_at = database_now(db)
+                db.commit()
+            return False
+        except ArchiveMigrationBlocked as exc:
+            db.rollback()
+            plan = db.get(ArchiveMigrationPlan, plan_id)
+            if plan is not None and plan.status in PLAN_READY_STATUSES:
+                plan.status = plan.phase = "blocked"
+                plan.reason_code = exc.reason_code
+                plan.finished_at = database_now(db)
+                _audit(db, event_type="archive_migration.plan_blocked", plan=plan, severity="warning",
+                       metadata={"reason_code": plan.reason_code})
+                db.commit()
+            return True
 
 
 def _refresh_plan_expiry(db: Session, plan: ArchiveMigrationPlan) -> None:
@@ -1347,6 +1443,7 @@ def public_migration_plan(plan: ArchiveMigrationPlan, *, replayed: bool = False)
         "source_root_id": str(plan.source_root_id),
         "source_label": str(plan.source_label_snapshot),
         "target_root_id": str(plan.target_root_id),
+        **({"camera_id": plan.selected_camera_id} if plan.selected_camera_id is not None else {}),
         "target_label": str(plan.target_label_snapshot),
         "same_physical_volume": bool(plan.same_physical_volume),
         "item_count": int(plan.item_count or 0),
@@ -1493,7 +1590,7 @@ def queue_migration_apply(
         claimed = claim_operation_with_conflicts(
             db,
             operation_type=MIGRATION_OPERATION_TYPE,
-            scope={"root_ids": [str(plan.source_root_id), str(plan.target_root_id)]},
+            scope=_plan_scope(plan),
             request_identity=_operation_identity(plan),
             actor=actor,
             idempotency_key=str(idempotency_key),
@@ -1597,7 +1694,7 @@ def _runtime_item_guard(
     item: ArchiveMigrationItem,
 ) -> tuple[ArchiveRoot, ArchiveRoot, RecordingSegment]:
     _require_runtime_authority(db, plan)
-    if not _item_manifest_valid(item):
+    if not _item_manifest_valid(item) or (plan.selected_camera_id is not None and item.camera_id != plan.selected_camera_id):
         raise ArchiveMigrationBlocked("migration_manifest_item_tampered", retry_mode=None)
     source = _root_by_id(db, item.source_root_id)
     target = _root_by_id(db, item.target_root_id)
@@ -1606,6 +1703,8 @@ def _runtime_item_guard(
     segment = db.get(RecordingSegment, int(item.segment_id))
     if segment is None:
         raise ArchiveMigrationBlocked("migration_segment_missing", retry_mode=None)
+    if plan.selected_camera_id is not None and segment.camera_id != plan.selected_camera_id:
+        raise ArchiveMigrationBlocked("migration_segment_changed_after_plan", retry_mode=None)
     if item.phase in {
         "planned",
         "target_temp_create_pending",
@@ -1833,11 +1932,14 @@ def _recount_plan(
 
 
 def _final_counts(db: Session, plan: ArchiveMigrationPlan) -> None:
+    camera_scope = ((RecordingSegment.camera_id == plan.selected_camera_id,)
+                    if plan.selected_camera_id is not None else ())
     plan.new_after_high_watermark_count = int(
         db.query(func.count(RecordingSegment.id))
         .filter(
             RecordingSegment.archive_root_id == plan.source_root_id,
             RecordingSegment.id > int(plan.segment_high_watermark),
+            *camera_scope,
             RecordingSegment.deleted_at.is_(None),
             RecordingSegment.status != "deleted",
         )
@@ -1850,6 +1952,7 @@ def _final_counts(db: Session, plan: ArchiveMigrationPlan) -> None:
             RecordingSegment.archive_root_id == plan.source_root_id,
             RecordingSegment.deleted_at.is_(None),
             RecordingSegment.status != "deleted",
+            *camera_scope,
         )
         .scalar()
         or 0
@@ -2590,7 +2693,7 @@ def _expected_initial_operation_scope(
     return canonical_operation_scope(
         scope_with_physical_volumes(
             db,
-            {"root_ids": [str(plan.source_root_id), str(plan.target_root_id)]},
+            _plan_scope(plan),
         )
     )
 
@@ -2727,7 +2830,7 @@ def _bind_exact_initial_migration_child(
     seed_plan = db.get(ArchiveMigrationPlan, str(plan_id))
     if seed_plan is None:
         raise ArchiveMigrationBlocked("migration_plan_not_found", retry_mode=None)
-    scope = {"root_ids": [str(seed_plan.source_root_id), str(seed_plan.target_root_id)]}
+    scope = _plan_scope(seed_plan)
 
     def transition(normalized_scope: dict[str, Any]) -> tuple[ArchiveMigrationPlan, StorageOperation, bool]:
         locked_plan = (
@@ -3136,7 +3239,7 @@ def retry_migration_operation(
     claimed = claim_operation_with_conflicts(
         db,
         operation_type=MIGRATION_OPERATION_TYPE,
-        scope={"root_ids": [str(plan.source_root_id), str(plan.target_root_id)]},
+        scope=_plan_scope(plan),
         request_identity=_operation_identity(plan),
         actor=actor,
         idempotency_key=str(idempotency_key),
@@ -3519,7 +3622,7 @@ def _continue_same_cleanup_operation(
     return run_coordinated_operation_transition(
         db,
         operation_type=MIGRATION_OPERATION_TYPE,
-        scope={"root_ids": [str(plan.source_root_id), str(plan.target_root_id)]},
+        scope=_plan_scope(plan),
         domain_ref=_operation_domain_ref(str(plan.id)),
         current_operation_id=str(previous.id),
         transition=transition,
@@ -3842,7 +3945,7 @@ def takeover_migration_cleanup(
     claimed = claim_operation_with_conflicts(
         db,
         operation_type=MIGRATION_OPERATION_TYPE,
-        scope={"root_ids": [str(plan.source_root_id), str(plan.target_root_id)]},
+        scope=_plan_scope(plan),
         request_identity=_operation_identity(plan),
         actor=actor,
         idempotency_key=str(idempotency_key),
@@ -4049,8 +4152,12 @@ class _WorkerLeaseHeartbeat:
 
 
 def _worker_loop() -> None:
+    from app.services.archive_root_removal import process_one_removal
+
     failures = 0
     delay = WORKER_POLL_SECONDS
+    next_camera_move_check = 0.0
+    next_root_removal_check = 0.0
     while not _worker_stop.wait(delay):
         handle = None
         leader = None
@@ -4074,7 +4181,16 @@ def _worker_loop() -> None:
             leader.assert_owned()
             did_work = _prepare_one_plan(leader) or did_work
             leader.assert_owned()
+            if time.monotonic() >= next_camera_move_check:
+                queued = _queue_one_camera_move()
+                next_camera_move_check = time.monotonic() + (1 if queued else 10)
+                did_work = queued or did_work
+            leader.assert_owned()
             did_work = _run_one_operation() or did_work
+            leader.assert_owned()
+            if time.monotonic() >= next_root_removal_check:
+                did_work = process_one_removal(leader.assert_owned) or did_work
+                next_root_removal_check = time.monotonic() + 10
             failures = 0
             delay = WORKER_POLL_SECONDS
             if not did_work:

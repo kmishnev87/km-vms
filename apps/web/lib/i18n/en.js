@@ -3,6 +3,7 @@ export const enDictionary = {
   androidDownload: { checking: "Loading APK information…", available: "Android APK", failed: "APK information is unavailable. Reload the page.", unpublished: "The official APK has not been published yet.", subtitle: "KM VMS for Android", instructions: "Download the APK to your phone, open it and confirm installation in Android. Then add your NAS address and sign in with your KM VMS account. HTTP and HTTPS connections are supported.", version: "Version", download: "Download APK", check: "Check release", languages: "Android 8 or newer. English, Chinese and Russian. Updates are offered inside the Android app." },
   chronologyArchive: { retainedCameras: "Deleted cameras with recordings", deleted: "deleted", archiveOnly: "Retained recordings only" },
   cameraEvents: {
+    openPhoto: "Open snapshot", cameraEventDetails: "Camera event", loadingPhoto: "Loading snapshot…",
     historyRule: { all: "All rules", loading: "Loading rules…", empty: "No matching rules", unavailable: "Rules unavailable", unnamed: "Unnamed rule" },
     ai: {"unnamedZone":"Unnamed zone","unnamedLine":"Unnamed line","details":"AI event","source":"Source","both":"All sources","fromAi":"NAS AI","fromCamera":"Camera events","condition":"Condition","anyCondition":"All conditions","rule":"Rule","conditions":{"presence":"Object in frame or zone","enter":"Zone entry","exit":"Zone exit","crossing":"Line crossing","dwell":"Loitering in zone","scene":"Scene change"},"frame":"Detection frame","noFrame":"Snapshot unavailable","wholeFrame":"Whole frame","pending":"The segment is still being recorded. Check again after it finishes.","unavailable":"The event was not recorded, or the recording is no longer available.","forbidden":"This account cannot access Timeline.","ready":"Recording available","check":"Check recording","checkFailed":"Could not check the recording. Try again.","falsePositive":"False positive","markFalse":"Mark as false positive","unmarkFalse":"Clear label","reviewHelp":"This label appears in history and does not train the AI.","saveClip":"Save a separate clip","clipHelp":"The finished clip is a separate copy. The original recording keeps its normal retention.","invalidRange":"Choose a valid time range for the clip."},
     "title": "Camera events",
@@ -278,6 +279,10 @@ export const enDictionary = {
     batchStates: { queued: "Action accepted", running: "Processing recordings", cancel_requested: "Stopping after the current item", completed: "Action completed", partial: "Completed with issues", blocked: "Action not completed", failed: "Processing error", cancelled: "Processing stopped" },
     resultStates: { queued: "Queued", prepared: "Queued", running: "Running", completed: "Completed", partial: "Partial", blocked: "Not completed", failed: "Failed", cancelled: "Cancelled" },
     reasons: {
+      camera_archive_root_unavailable: "The camera’s recording folder is unavailable.",
+      camera_archive_root_read_only: "The camera’s recording folder is read-only.",
+      camera_archive_root_low_disk: "The camera’s recording disk is low on free space.",
+      archive_root_assigned_to_cameras: "Assign these cameras to another recording folder first.",
       integrity_review_selection_invalid: "Check the selected recordings and actions. Refresh the list and select again.",
       archive_integrity_missing_not_finalized: "This recording's state does not yet allow its catalog entry to be removed. Recheck after recording has stopped.",
       integrity_review_selection_changed: "The selection or recording state changed. Refresh and confirm again.",

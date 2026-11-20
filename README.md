@@ -4,9 +4,9 @@
 
 Bring cameras from different manufacturers into one system on your NAS or Linux server. Watch live in the browser or the native Android app, and use a shared timeline to see what happened from more than one angle. Your footage stays on the storage you choose. Local recording, viewing, and AI don't require a camera manufacturer's cloud service.
 
-[Install on your NAS](#quick-start) · [Download the Android APK](https://github.com/kmishnev87/km-vms/releases/download/v1.0.5/km-vms-android-0.8.17.apk) · [Why KM VMS](#why-km-vms) · [Compatibility](#compatibility) · [Complete feature map](#complete-feature-map)
+[Install on your NAS](#quick-start) · [Download the Android APK](https://github.com/kmishnev87/km-vms/releases/download/v1.0.6/km-vms-android-0.8.18.apk) · [Why KM VMS](#why-km-vms) · [Compatibility](#compatibility) · [Complete feature map](#complete-feature-map)
 
-![KM VMS web dashboard with Cameras, Recordings, Chronology, Live, and AI & Recording](https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/docs/images/dashboard-en.png)
+![KM VMS web dashboard with Cameras, Recordings, Chronology, Live, and AI & Recording](https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.6/docs/images/dashboard-en.png)
 
 ## Why KM VMS
 
@@ -48,27 +48,29 @@ Use supported PTZ controls and camera presets from Live. When you're at the door
 
 ### Know what is recording, what needs attention, and where the video goes
 
-Set retention and archive size per camera or edit several cameras' rules together. System Health shows whether a camera is recording, waiting for an event, paused, or having a problem. For event-based recording, you can opt into continuous recording when a camera event feed or local AI is confirmed to have failed and video is still available. An ordinary quiet period isn't treated as a failure.
+Record to several folders or disks at once. Choose where each camera writes and set its retention limits in the same table. Changing a destination doesn't hide older footage: **Recordings** and **Chronology** still show it alongside the new video. When retiring an archive folder, move its recordings to another one or explicitly confirm deletion. While the NAS is running, optional storage failover can keep writing on the healthy volume with the most free space. It is not a backup.
+
+System Health shows whether a camera is recording, waiting for an event, paused, or having a problem. For event-based recording, you can opt into continuous recording when a camera event feed or local AI is confirmed to have failed and video is still available. An ordinary quiet period isn't treated as a failure.
 
 KM VMS can recover usable unfinished recordings after an interruption. Give other users the access they need with server-enforced roles. Manual configuration and database backups get an automatic trial restore; video files are backed up separately. Apply NAS updates from Settings with preflight checks, post-update verification, and rollback support.
 
 ## Native Android app
 
-[**Download the signed APK**](https://github.com/kmishnev87/km-vms/releases/download/v1.0.5/km-vms-android-0.8.17.apk) for **Android 8.0 or later**, or get it on your NAS under **Settings → Download APK**. Save more than one NAS connection and switch between them. Choose which cameras to watch, swipe between them in fullscreen, or pinch to zoom. In Chronology, changing the fullscreen camera doesn't pause shared playback. Save an original recording straight to Android Downloads without making a clip first. Manage supported NAS settings within your account's permissions.
+[**Download the signed APK**](https://github.com/kmishnev87/km-vms/releases/download/v1.0.6/km-vms-android-0.8.18.apk) for **Android 8.0 or later**, or get it on your NAS under **Settings → Download APK**. Save more than one NAS connection and switch between them. Choose which cameras to watch, swipe between them in fullscreen, or pinch to zoom. In Chronology, changing the fullscreen camera doesn't pause shared playback. Save an original recording straight to Android Downloads without making a clip first. Manage supported NAS settings within your account's permissions.
 
 From the home screen, use the **2×1 widget** to change alert settings by camera, or the **3×1 widget** to also open Live or jump to events from the unread count. Expand an Android alert to see the event image when ready and choose Live or Recording. In the app's event history, the same camera icon opens the available frame for both camera detections and NAS AI. Background alerts use a compatible UnifiedPush provider without continuous polling by the app.
 
-<img width="300" src="https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/docs/images/android-home-en.jpg" alt="Native KM VMS Android home screen with access to live video, recordings, and camera events">
+<img width="300" src="https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.6/docs/images/android-home-en.jpg" alt="Native KM VMS Android home screen with access to live video, recordings, and camera events">
 
 ## Quick start
 
-Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose **2.20.2+** (or compatible `healthcheck.start_interval` support), and the [required host utilities and permissions](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md#before-you-start). You do not need Node.js, npm, or Git on the host for a normal installation.
+Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose **2.20.2+** (or compatible `healthcheck.start_interval` support), and the [required host utilities and permissions](https://github.com/kmishnev87/km-vms/blob/v1.0.6/docs/INSTALL.md#before-you-start). You do not need Node.js, npm, or Git on the host for a normal installation.
 
 1. **Install the published release** on the server:
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/scripts/install.sh -o km-vms-install.sh
-   sh km-vms-install.sh --branch v1.0.5
+   curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.6/scripts/install.sh -o km-vms-install.sh
+   sh km-vms-install.sh --branch v1.0.6
    ```
 
 2. **Open `http://<NAS-IP>:8088/setup`** on a trusted network. Choose where to keep the archive and create your owner account. There is no default administrator password.
@@ -76,7 +78,7 @@ Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose 
 
 **Already installed?** Use **Settings → Maintenance** to update. Do not run the new installation command over your existing directory.
 
-[Installation and maintenance guide](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md) · [All releases](https://github.com/kmishnev87/km-vms/releases)
+[Installation and maintenance guide](https://github.com/kmishnev87/km-vms/blob/v1.0.6/docs/INSTALL.md) · [All releases](https://github.com/kmishnev87/km-vms/releases)
 
 ## Compatibility
 
@@ -85,21 +87,21 @@ Use a compatible NAS or Linux host with Docker Engine **25.0+**, Docker Compose 
 - **Network.** Use HTTP on a trusted local network. For remote access, use a VPN or HTTPS through a secured reverse proxy. Android accepts a local `IP:port` address, warns before connecting over unencrypted HTTP, and verifies HTTPS certificates. The installer doesn't open your NAS to the internet or issue a certificate.
 - **Languages.** The web and Android interfaces are available in English, Russian, and Simplified Chinese.
 
-[Camera setup and compatibility notes](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md#4-add-cameras-and-choose-your-language)
+[Camera setup and compatibility notes](https://github.com/kmishnev87/km-vms/blob/v1.0.6/docs/INSTALL.md#4-add-cameras-and-choose-your-language)
 
 ## Documentation and support
 
-- [Install, update, and troubleshoot](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/INSTALL.md)
-- [Set up recording profiles and local AI rules](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/AI-RECORDING.md)
+- [Install, update, and troubleshoot](https://github.com/kmishnev87/km-vms/blob/v1.0.6/docs/INSTALL.md)
+- [Set up recording profiles and local AI rules](https://github.com/kmishnev87/km-vms/blob/v1.0.6/docs/AI-RECORDING.md)
 - [Report a bug or suggest an improvement](https://github.com/kmishnev87/km-vms/issues)
 
 Diagnostic reports are sent only at your request. Server reports don't contain video recordings; the Android app sends its own diagnostics separately. Keep credentials and private diagnostic archives out of public issues.
 
-KM VMS code is [MIT licensed](https://github.com/kmishnev87/km-vms/blob/v1.0.5/LICENSE). [Third-party components retain their own licenses](https://github.com/kmishnev87/km-vms/blob/v1.0.5/docs/DEPENDENCIES.md).
+KM VMS code is [MIT licensed](https://github.com/kmishnev87/km-vms/blob/v1.0.6/LICENSE). [Third-party components retain their own licenses](https://github.com/kmishnev87/km-vms/blob/v1.0.6/docs/DEPENDENCIES.md).
 
 ## Complete feature map
 
-Reference for [NAS 1.0.5 and Android 0.8.17](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.5): 520 entries in 21 tables. Each row describes an action, setting, or visible behavior. Some actions are available in more than one workspace. Availability can depend on your role, client, and camera capabilities.
+Reference for [NAS 1.0.6 and Android 0.8.18](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.6): 534 entries in 21 tables. Each row describes an action, setting, or visible behavior. Some actions are available in more than one workspace. Availability can depend on your role, client, and camera capabilities.
 
 ### Installation and first launch
 
@@ -491,17 +493,17 @@ Reference for [NAS 1.0.5 and Android 0.8.17](https://github.com/kmishnev87/km-vm
 
 <details>
 
-<summary>Show 17 functions</summary>
+<summary>Show 30 functions</summary>
 
 | No. | Function |
 |---:|---|
 | 1 | View the archive roots and their status. |
-| 2 | See which root is active for new recordings. |
+| 2 | See whether a folder is ready, connecting, read-only, unavailable, or low on space. |
 | 3 | Find available archive locations. |
-| 4 | Add a location after validating its path. |
-| 5 | Switch new recordings to a different active root. |
+| 4 | Prepare and connect a new archive folder on an eligible volume without switching other cameras. |
+| 5 | Choose the archive folder when adding or editing an individual camera. |
 | 6 | Keep access to recordings stored in the previous location. |
-| 7 | Remove an unused root from the configuration when it is safe to do so. |
+| 7 | Retire an archive folder even when it is assigned to cameras. |
 | 8 | Choose the source and destination for an archive migration. |
 | 9 | Prepare a plan to move finalized recordings before any files are moved. |
 | 10 | Review the size, contents, and exclusions in the plan. |
@@ -512,6 +514,19 @@ Reference for [NAS 1.0.5 and Android 0.8.17](https://github.com/kmishnev87/km-vm
 | 15 | Retry an eligible stage of an unfinished migration. |
 | 16 | Complete remaining cleanup separately from the finished migration. |
 | 17 | Return to an in-progress migration from its operation indicator. |
+| 18 | Set archive folders for several cameras in the storage rules table. |
+| 19 | Write to multiple ready folders, including folders on different disks, at once. |
+| 20 | See the archive folder's NAS path instead of its container path. |
+| 21 | Choose whether to move existing footage when changing a camera's archive folder. |
+| 22 | Select which cameras' old recordings to move in one confirmation after a batch change. |
+| 23 | Pick a replacement folder for cameras assigned to a folder being retired. |
+| 24 | Move recordings to the selected replacement before retiring the old folder. |
+| 25 | Review and explicitly confirm the recording count when retiring a folder without moving its recordings. |
+| 26 | Get a brief completion message after a camera's background archive move finishes. |
+| 27 | Opt into recording on another healthy volume if the assigned storage stops accepting writes. |
+| 28 | Fail over to the healthy volume with the most free space without changing the camera's saved assignment. |
+| 29 | Return to the assigned folder at a segment boundary when that volume is consistently writable again. |
+| 30 | Retire a folder without removing its physical volume or files outside the selected archive recordings. |
 
 </details>
 
@@ -553,7 +568,7 @@ Reference for [NAS 1.0.5 and Android 0.8.17](https://github.com/kmishnev87/km-vm
 
 <details>
 
-<summary>Show 55 functions</summary>
+<summary>Show 56 functions</summary>
 
 | No. | Function |
 |---:|---|
@@ -612,6 +627,7 @@ Reference for [NAS 1.0.5 and Android 0.8.17](https://github.com/kmishnev87/km-vm
 | 53 | Open Live or Recording from separate buttons on the notification. |
 | 54 | Tap a notification to open Live for an event under an hour old, or check archive availability for an older one. |
 | 55 | Update the widget's unread count without posting a separate visible notification. |
+| 56 | Give a PTZ camera time to turn before taking the snapshot when a NAS AI scene change opens the episode. |
 
 </details>
 

@@ -30,9 +30,10 @@
             android:orientation="horizontal" android:layout_height="44dp">
             <TextView android:id="@+id/alert_widget_count" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent"
                 android:gravity="center" android:importantForAccessibility="no"
-                android:text="0" android:textColor="#475569" android:textSize="24sp" android:fontFamily="sans-serif-medium"
+                android:text="0" android:textColor="#475569" android:textSize="34dp" android:fontFamily="sans-serif-condensed-medium"
+                android:textScaleX="0.86" android:includeFontPadding="false"
                 android:fontFeatureSettings="tnum" android:maxLines="1" android:autoSizeTextType="uniform"
-                android:autoSizeMinTextSize="8dp" android:autoSizeMaxTextSize="24sp" android:autoSizeStepGranularity="1dp" />
+                android:autoSizeMinTextSize="8dp" android:autoSizeMaxTextSize="34dp" android:autoSizeStepGranularity="0.5dp" />
             <TextView android:id="@+id/alert_widget_count_plus" android:layout_width="9dp" android:layout_height="match_parent"
                 android:gravity="center_vertical|start" android:text="+"
                 android:textColor="#475569" android:textSize="11sp" android:visibility="invisible" android:importantForAccessibility="no" />

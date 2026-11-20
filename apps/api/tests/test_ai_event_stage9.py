@@ -301,6 +301,64 @@ def test_outbox_coalesces_sustained_positives_and_preserves_first_rule(api, monk
     assert packets[2]["rule_id"] == "quiet"
 
 
+def test_ptz_scene_opener_waits_one_second_and_keeps_the_trigger_time(tmp_path, monkeypatch):
+    from recorder_core import ai_event_outbox as module
+
+    clock = [10.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    outbox = module.AiEventOutbox(tmp_path)
+    outbox.thread = object()  # Drive only the synchronous admission and deadline paths.
+
+    def frame(at, generation="current", camera=7):
+        return SimpleNamespace(camera=camera, generation=generation, arrival=at, captured=1000 + at)
+
+    scene = ("ptz", "scene", ())
+    person = ("person", "presence", ("person",))
+    trigger = frame(9.9)
+    outbox.offer(trigger, 2, [scene], ptz=True)
+    assert outbox.queue.empty()
+    outbox.follow_frame(frame(10.99), 2)
+    outbox.follow_frame(frame(11.0, generation="old"), 2)
+    outbox.follow_frame(frame(11.0), 3)
+    assert outbox.queue.empty()
+    accepted = frame(11.0)
+    outbox.follow_frame(accepted, 2)
+    outbox.offer(accepted, 2, [person], ptz=True)
+    outbox.follow_frame(frame(11.5), 2)
+    item = outbox.queue.get_nowait()
+    assert item == ((7, 2), trigger.captured, *scene, accepted)
+    assert outbox.queue.empty()
+
+
+def test_person_opener_and_stationary_scene_are_unchanged_and_missing_ptz_frame_has_a_deadline(tmp_path, monkeypatch):
+    from recorder_core import ai_event_outbox as module
+
+    clock = [10.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    outbox = module.AiEventOutbox(tmp_path)
+    outbox.thread = object()
+    person = ("person", "presence", ("person",))
+    scene = ("ptz", "scene", ())
+    ptz = SimpleNamespace(camera=7, generation="current", captured=1010, arrival=10)
+    fixed = SimpleNamespace(camera=8, generation="current", captured=1010, arrival=10)
+    later = SimpleNamespace(camera=7, generation="current", captured=1011, arrival=11)
+    missing = SimpleNamespace(camera=9, generation="current", captured=1010, arrival=10)
+    outbox.offer(ptz, 2, [person], ptz=True)
+    outbox.offer(later, 2, [scene], ptz=True)
+    outbox.offer(fixed, 2, [scene], ptz=False)
+    outbox.offer(missing, 2, [scene], ptz=True)
+    assert outbox.queue.get_nowait() == ((7, 2), 1010, *person, ptz)
+    assert outbox.queue.get_nowait() == ((8, 2), 1010, *scene, fixed)
+    clock[0] = 13.99
+    outbox._flush_photo_deadlines()
+    assert outbox.queue.empty()
+    clock[0] = 14.0
+    outbox._flush_photo_deadlines()
+    outbox._flush_photo_deadlines()
+    assert outbox.queue.get_nowait() == ((9, 2), 1010, *scene, None)
+    assert outbox.queue.empty()
+
+
 def test_old_snapshot_is_linked_if_long_segment_finalizes_late_or_is_already_deleted(api, jpeg):
     client, factory, _ = api
     with factory() as db:

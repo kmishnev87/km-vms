@@ -21,6 +21,7 @@
     <string name="ai_event_forbidden">此帐户没有时间线访问权限。</string>
     <string name="ai_event_ready">录像可用</string>
     <string name="ai_event_check">检查录像</string>
+    <string name="event_recording_check_failed">无法检查录像，请重试。</string>
     <string name="ai_event_false">误报</string>
     <string name="ai_event_mark_false">标记为误报</string>
     <string name="ai_event_clear_false">清除标记</string>

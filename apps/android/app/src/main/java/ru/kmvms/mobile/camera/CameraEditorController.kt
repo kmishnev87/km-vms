@@ -7,10 +7,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
+import java.util.UUID
 
 data class CameraEditorState(val draft:CameraDraft=CameraDraft.empty(),val phase:Int=0,val busy:Boolean=false,
     val catalog:CameraCatalog?=null,val source:String?=null,
-    val configurations:Map<String,JSONObject> = emptyMap(),val verified:Boolean=false,val saved:Boolean=false,val failures:Int=0)
+    val configurations:Map<String,JSONObject> = emptyMap(),val verified:Boolean=false,val saved:Boolean=false,val failures:Int=0,
+    val archiveTargets:ArchiveTargets?=null,val archiveMoveOffer:CameraArchiveMoveOffer?=null,val archiveMoveResult:String?=null)
 
 class CameraEditorController(private val api:CameraApi,private val id:Long?) {
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
@@ -21,12 +23,31 @@ class CameraEditorController(private val api:CameraApi,private val id:Long?) {
     private var request:Job?=null
     private val proofs=mutableMapOf<String,String>()
     private var proofAt=0L
+    private var archiveTargetsRequested=false
+    private var archiveMoveRequestId:String?=null
     init { if(id!=null) request=scope.launch {
         try { baseline=CameraDraft.from(api.get(id));mutable.update{it.copy(draft=baseline)} }
         catch(cancelled:CancellationException){throw cancelled}
         catch(_:Exception){error()}
         finally{mutable.update{it.copy(busy=false)}}
     } }
+    fun loadArchiveTargets() {
+        if(archiveTargetsRequested)return
+        archiveTargetsRequested=true
+        scope.launch {
+            try {
+                val targets=api.archiveTargets()
+                mutable.update{ current ->
+                    val only=targets.items.filter{it.writable}.singleOrNull()
+                    val draft=if(id==null&&only!=null&&current.draft["recording_archive_root_id"].isBlank())
+                        current.draft.change("recording_archive_root_id",only.id) else current.draft
+                    current.copy(archiveTargets=targets,draft=draft)
+                }
+            }
+            catch(cancelled:CancellationException){throw cancelled}
+            catch(_:Exception){ /* Older NAS builds do not offer camera placement. */ }
+        }
+    }
     fun change(key:String,value:String) {
         if(mutable.value.busy)return
         val draft=mutable.value.draft.change(key,value)
@@ -148,7 +169,21 @@ class CameraEditorController(private val api:CameraApi,private val id:Long?) {
         val current=mutable.value.draft
         val payload=current.payload(baseline=if(id==null)null else baseline)
         proofs.forEach{(key,value)->payload.put(key,value)}
-        api.save(id,payload);ensureCurrent(own);mutable.update{it.copy(saved=true)}
+        val result=api.save(id,payload)
+        ensureCurrent(own)
+        val offer=result.optJSONObject("archive_move_offer")?.let(CameraArchiveMoveOffer::from)
+        mutable.update{it.copy(saved=offer==null,archiveMoveOffer=offer,archiveMoveResult=null)}
+    }
+    fun moveSavedArchive()=operation { own ->
+        val offer=mutable.value.archiveMoveOffer ?: return@operation
+        val requestId=archiveMoveRequestId?:UUID.randomUUID().toString().also{archiveMoveRequestId=it}
+        try {
+            val result=api.moveArchive(offer,requestId)
+            ensureCurrent(own)
+            val status=if((result.optJSONArray("skipped")?.length()?:0)>0)"partial" else "queued"
+            mutable.update{it.copy(archiveMoveResult=status)}
+        } catch(cancelled:CancellationException){throw cancelled}
+        catch(_:Exception){ensureCurrent(own);mutable.update{it.copy(archiveMoveResult="failed")}}
     }
     fun applyConfiguration(token:String,diff:JSONObject)=operation { own ->
         require(diff.length()>0&&mutable.value.catalog?.profiles?.any{it.token==token}==true)

@@ -3,6 +3,7 @@
 from datetime import timezone
 
 from app.services.ai_recording import SOURCE_FAULTS, ai_policy_supported, ai_retry_candidate, event_policy_supported
+from app.services.camera_archive_placement import ARCHIVE_TARGET_FAILURES, storage_route_evidence
 from app.services.camera_event_settings import camera_event_reception_selected
 from app.services.camera_events_worker import receiver_fault_snapshots
 
@@ -10,7 +11,8 @@ from app.services.camera_events_worker import receiver_fault_snapshots
 def _recording_state(camera, proof, storage_suspended):
     if not camera.enabled:
         return "paused"
-    if storage_suspended:
+    route = storage_route_evidence(camera, proof)
+    if (storage_suspended and route is None) or (route and route["status"] == "blocked") or proof.get("camera_last_error") in ARCHIVE_TARGET_FAILURES:
         return "storage_suspended"
     if proof.get("confirmed_recording"):
         control = proof.get("event_control") or {}
@@ -24,7 +26,7 @@ def _recording_state(camera, proof, storage_suspended):
     return "stopped"
 
 
-def build_source_issues(cameras, recorder_states, now, *, storage_suspended=False):
+def build_source_issues(cameras, recorder_states, now, *, storage_suspended=False, default_archive_root_id=None):
     cameras = {camera.id: camera for camera in cameras if camera.deleted_at is None and camera.status != "deleting"}
     receiver = receiver_fault_snapshots(cameras.values())
     if now.tzinfo is None:
@@ -36,7 +38,8 @@ def build_source_issues(cameras, recorder_states, now, *, storage_suspended=Fals
             return
         issue["cameras"].append({
             "camera_id": camera.id, "name": camera.name,
-            "recording_state": _recording_state(camera, recorder_states.get(camera.id, {}), storage_suspended),
+            "recording_state": _recording_state(camera, recorder_states.get(camera.id, {}), storage_suspended and
+                                                getattr(camera, "recording_archive_root_id", None) in (None, default_archive_root_id)),
         })
 
     def register(camera, kind, *, phase, group=None, next_attempt_at=None, retry_available=False):

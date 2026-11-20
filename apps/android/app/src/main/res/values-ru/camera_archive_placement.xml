@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_record_to">Куда записывать</string>
+    <string name="camera_archive_unavailable">Папка недоступна</string>
+    <string name="camera_archive_move_title">Перенести старые записи?</string>
+    <string name="camera_archive_move_count">Записей: %1$d</string>
+    <string name="camera_archive_move_help">Новое место сохранено. Перенос архива можно запустить в фоне.</string>
+    <string name="camera_archive_move_action">Перенести записи</string>
+    <string name="camera_archive_keep">Оставить на месте</string>
+    <string name="camera_archive_move_queued">Перенос поставлен в очередь. Ход работы виден в «Хранилище».</string>
+    <string name="camera_archive_move_partial">Не все записи поставлены в очередь. Проверьте «Хранилище».</string>
+    <string name="camera_archive_move_failed">Не удалось поставить перенос в очередь. Повторите попытку.</string>
+    <string name="camera_archive_ready">Готова к записи</string>
+    <string name="camera_archive_removing">Отключается</string>
+    <string name="camera_archive_connecting">Подключается</string>
+    <string name="camera_archive_read_only">Только чтение</string>
+    <string name="camera_archive_low_space">Мало места</string>
+</resources>

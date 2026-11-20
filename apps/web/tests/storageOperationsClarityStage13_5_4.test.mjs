@@ -45,7 +45,7 @@ assert.match(storagePage, /<ArchiveManagementCenter/, "archive scenarios are com
 assert.match(storagePage, /<OperationDialog dialog=\{historyDialog\}/, "bounded operation history is opened in a modal");
 assert.match(storagePage, /healthReasonText\(topHealth, recording, copy\)/, "health explanation is reason-prioritized");
 assert.match(storagePage, /<p>\{refreshWarning \|\| healthReason\}<\/p>/, "the existing health explanation slot also owns stale-status feedback");
-assert.match(storagePage, /recordingState\(operations, pathHealth, policy, copy\)/, "read/write access is combined into the current archive-access state");
+assert.match(storagePage, /recordingState\(operations, pathHealth, policy, copy, readyElsewhere\)/, "archive-access overview also accounts for an independently healthy destination");
 assert.match(storagePage, /label=\{copy\.archiveAccess\}\s+value=\{recording\.label\}/, "combined archive-access state is rendered in the overview");
 assert.match(storagePage, /archiveRootPath\(root, archivePathText\)/, "archive root paths are mapped before display");
 assert.match(storagePage, /\/storage\/archive-roots\/discovery/, "archive root flow discovers NAS roots before selection");

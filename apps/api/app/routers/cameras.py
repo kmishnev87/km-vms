@@ -75,7 +75,7 @@ from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.archive_root_activation import preserve_manual_camera_disable
 from app.services.camera_previews import purge_expired_test_previews
 from app.services.live_engine import manager as live_manager
-from app.services.storage import build_unique_folder_name, ensure_camera_folder
+from app.services.storage import build_unique_folder_name
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
 from app.services.retention_automation import advance_retention_signal
 from app.services.storage_operation_conflicts import (
@@ -90,6 +90,7 @@ from app.services.storage_operation_conflicts import (
 )
 from app.services.storage_operations_foundation import StorageOperationContractError, claim_operation, safe_reason_code
 from app.services.recording_storage import resolve_segment_file_path
+from app.services.camera_archive_placement import archive_move_offer, current_default_id, validate_target
 from app.services.camera_stream_dimensions import read_dimensions
 from app.services.camera_event_settings import camera_event_reception_selected
 from app.services.camera_events_worker import camera_receiving_revision, wake_camera_events
@@ -320,12 +321,14 @@ def create_camera(
     if existing:
         raise HTTPException(status_code=400, detail="Камера с таким именем уже существует")
 
+    from app.services.camera_archive_placement import initial_camera_target
+    configured_root = initial_camera_target(db, payload.recording_archive_root_id)
     final_connection_payload = resolve_camera_connection_payload(payload.model_dump())
     rtsp_host, rtsp_port = final_connection_payload["rtsp_host"], final_connection_payload["rtsp_port"]
     rtsp_main_url, rtsp_sub_url = final_connection_payload["rtsp_main_url"], final_connection_payload["rtsp_sub_url"]
     manual_unverified = require_save_gate(final_connection_payload, connection_sensitive_change=True)
     folder_name = build_unique_folder_name(db, payload.name)
-    ensure_camera_folder(folder_name)
+    # The Recorder alone creates media directories on its verified target.
 
     camera = Camera(
         name=payload.name,
@@ -352,6 +355,7 @@ def create_camera(
         segment_minutes=payload.segment_minutes,
         retention_days=payload.retention_days,
         storage_quota_gb=payload.storage_quota_gb,
+        recording_archive_root_id=configured_root,
         status="manual_unverified" if manual_unverified else "created",
         last_error="created_unverified" if manual_unverified else None,
     )
@@ -378,6 +382,7 @@ def create_camera(
             "events_enabled": bool(camera.events_enabled),
             "default_live_stream": camera.default_live_stream,
             "default_record_stream": camera.default_record_stream,
+            "recording_archive_root_id": camera.recording_archive_root_id,
             "validation_state": "manual_unverified" if manual_unverified else "verified",
         },
         ip_address=request_ip(request),
@@ -784,13 +789,15 @@ def update_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).with_for_update().first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     receiving_revision = camera_receiving_revision(camera)
     raw_payload = payload.model_dump(exclude_unset=True)
     data = dict(raw_payload)
+    previous_root = (camera.recording_archive_root_id or current_default_id(db)) if "recording_archive_root_id" in data else None
+    target_root = validate_target(db, data["recording_archive_root_id"], existing=camera.recording_archive_root_id) if "recording_archive_root_id" in data else None
     # Older clients may still send the retired switch with a normal camera edit.
     # Accept their payload without letting it change the recording source.
     data.pop("events_enabled", None)
@@ -844,6 +851,7 @@ def update_camera(
         "segment_minutes": camera.segment_minutes,
         "retention_days": camera.retention_days,
         "storage_quota_gb": camera.storage_quota_gb,
+        "recording_archive_root_id": camera.recording_archive_root_id,
     }
     proposed_values = {
         **old_values,
@@ -921,7 +929,8 @@ def update_camera(
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
     )
-    return camera
+    offer = archive_move_offer(db, camera, target_root, current_user) if target_root and previous_root != target_root else None
+    return CameraResponse.model_validate(camera).model_copy(update={"archive_move_offer": offer})
 
 
 @router.post("/{camera_id}/enable", response_model=CameraResponse)

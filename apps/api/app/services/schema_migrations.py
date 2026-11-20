@@ -2303,6 +2303,108 @@ AI_RECORDING_MIGRATION = MigrationDefinition(
 )
 
 
+ARCHIVE_PLACEMENT_COLUMNS = {
+    "cameras": {"recording_archive_root_id": "VARCHAR(36) NULL"},
+    "archive_migration_plans": {"selected_camera_id": "INTEGER NULL"},
+}
+
+
+def _archive_placement_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.schema_version != 14 or state.baseline_id != CURRENT_BASELINE_ID or state.status not in SAFE_STATUSES:
+        raise RuntimeError("archive_placement_source_schema_invalid")
+    # The updater verifies the exact approved source fingerprint separately.
+    # Do not reapply older exact table inventories (v8) to a later schema.
+    inspector = inspect(db.connection())
+    required = {"cameras": {"id", *AI_RECORDING_COLUMNS["cameras"]},
+                "archive_roots": {"id", "root_path"},
+                "archive_migration_plans": {"id", "source_root_id", "target_root_id"}}
+    if any(not inspector.has_table(table) or not names.issubset(
+        {column["name"] for column in inspector.get_columns(table)}
+    ) for table, names in required.items()):
+        raise RuntimeError("archive_placement_source_schema_invalid")
+    return {"source_schema_version": 14}
+
+
+def _archive_placement_apply(db: Session) -> dict[str, Any]:
+    added = []
+    for table, declarations in ARCHIVE_PLACEMENT_COLUMNS.items():
+        columns = {item["name"] for item in inspect(db.connection()).get_columns(table)}
+        for name, ddl in declarations.items():
+            if name not in columns:
+                db.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                added.append(f"{table}.{name}")
+    return {"added_columns": added}
+
+
+def _archive_placement_verify(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    for table, declarations in ARCHIVE_PLACEMENT_COLUMNS.items():
+        columns = {item["name"]: item for item in inspector.get_columns(table)}
+        for name, ddl in declarations.items():
+            column = columns.get(name)
+            if column is None or str(column["type"]).upper() != ddl.split()[0] or not column["nullable"]:
+                raise RuntimeError("archive_placement_column_invalid")
+    return {"schema_version": 15, "archive_placement": "ready"}
+
+
+ARCHIVE_PLACEMENT_MIGRATION = MigrationDefinition(
+    migration_id="camera_archive_placement_schema_v15", from_version=14, to_version=15,
+    description="Add optional camera destinations and camera-scoped archive moves.",
+    risk=RISK_ADDITIVE_SAFE, transaction_mode="session_transaction",
+    preflight=_archive_placement_preflight, apply=_archive_placement_apply, verify=_archive_placement_verify,
+    safe_failure_summary="Camera archive placement migration failed safely.",
+    rollback_note="Nullable additions; no existing camera, archive path or media file is changed.",
+    runtime_compatibility_floor=14,
+    definition_material={"source_schema_version": 14, "target_schema_version": 15,
+                         "columns": ARCHIVE_PLACEMENT_COLUMNS, "existing_rows_preserved": True},
+)
+
+ARCHIVE_RESILIENCE_COLUMNS = {
+    "cameras": {"recording_storage_state": "JSON NULL"},
+    "system_settings": {"archive_failover_enabled": "BOOLEAN NULL"},
+}
+
+
+def _archive_resilience_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.schema_version != 15 or state.baseline_id != CURRENT_BASELINE_ID or state.status not in SAFE_STATUSES:
+        raise RuntimeError("archive_resilience_source_schema_invalid")
+    return _archive_placement_verify(db)
+
+
+def _archive_resilience_apply(db: Session) -> dict[str, Any]:
+    for table, declarations in ARCHIVE_RESILIENCE_COLUMNS.items():
+        existing = {column["name"] for column in inspect(db.connection()).get_columns(table)}
+        for name, ddl in declarations.items():
+            if name not in existing:
+                db.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+    return {"added": True}
+
+
+def _archive_resilience_verify(db: Session) -> dict[str, Any]:
+    for table, declarations in ARCHIVE_RESILIENCE_COLUMNS.items():
+        columns = {column["name"]: column for column in inspect(db.connection()).get_columns(table)}
+        for name, ddl in declarations.items():
+            column = columns.get(name)
+            if not column or str(column["type"]).upper() != ddl.split()[0] or not column["nullable"] or column.get("default"):
+                raise RuntimeError("archive_resilience_column_invalid")
+    return {"schema_version": 16, "archive_resilience": "available"}
+
+
+ARCHIVE_RESILIENCE_MIGRATION = MigrationDefinition(
+    migration_id="archive_recording_resilience_schema_v16", from_version=15, to_version=16,
+    description="Persist the default-off archive fallback preference and Recorder route evidence.",
+    risk=RISK_ADDITIVE_SAFE, transaction_mode="session_transaction",
+    preflight=_archive_resilience_preflight, apply=_archive_resilience_apply, verify=_archive_resilience_verify,
+    safe_failure_summary="Archive resilience migration failed safely.",
+    rollback_note="Only nullable additions; existing folders, assignments and recordings are unchanged.",
+    runtime_compatibility_floor=14,
+    definition_material={"source_schema_version": 15, "target_schema_version": 16,
+                         "columns": ARCHIVE_RESILIENCE_COLUMNS, "existing_rows_preserved": True},
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -2318,6 +2420,8 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         ONLINE_MODE_MIGRATION,
         CAMERA_TALK_MIGRATION,
         AI_RECORDING_MIGRATION,
+        ARCHIVE_PLACEMENT_MIGRATION,
+        ARCHIVE_RESILIENCE_MIGRATION,
     ),
     published_variants=(
         STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,

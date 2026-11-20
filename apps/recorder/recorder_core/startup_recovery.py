@@ -13,9 +13,10 @@ from .segment_repair import JOURNAL_DIRECTORY, file_identity, read_publication, 
 
 
 class StartupSegmentRecovery:
-    def __init__(self, engine, instance_id, accounting, repairs, log_event):
+    def __init__(self, engine, instance_id, accounting, repairs, log_event, *, root_mapper=None):
         self.engine, self.instance_id, self.accounting = engine, instance_id, accounting
         self.repairs, self.log_event = repairs, log_event
+        self.root_mapper = root_mapper
         self._stop = threading.Event()
         self.thread = None
 
@@ -32,7 +33,7 @@ class StartupSegmentRecovery:
         with self.engine.connect() as connection:
             return connection.execute(text("""
                 SELECT s.id, s.camera_id, s.camera_name_snapshot, s.job_id, s.relative_path,
-                       s.file_path, s.archive_root_id, a.root_path, r.inode, r.device_id, r.object_identity
+                       s.file_path, s.archive_root_id, a.root_path, a.is_active, r.inode, r.device_id, r.object_identity
                 FROM recording_segments s
                 JOIN recorder_file_receipts r ON r.segment_id=s.id
                 JOIN archive_roots a ON a.id=s.archive_root_id
@@ -62,9 +63,12 @@ class StartupSegmentRecovery:
         self.log_event("warning", "startup_segment_recovery_unconfirmed", camera_id=row["camera_id"], segment_id=row["id"], reason=reason)
 
     def _submit(self, row):
-        source, root = Path(row["file_path"]), Path(row["root_path"])
         relative = Path(row["relative_path"])
-        if relative.is_absolute() or ".." in relative.parts or source.is_symlink():
+        if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError("segment_recovery_path_mismatch")
+        root = self.root_mapper(row["archive_root_id"], row["is_active"]) if self.root_mapper else Path(row["root_path"])
+        source = root / relative if self.root_mapper else Path(row["file_path"])
+        if source.is_symlink():
             raise RuntimeError("segment_recovery_path_mismatch")
         if source.resolve(strict=True) != (root / relative).resolve(strict=True) or not source.resolve().is_relative_to(root.resolve()):
             raise RuntimeError("segment_recovery_path_mismatch")
@@ -108,9 +112,12 @@ class StartupSegmentRecovery:
     def _recover_publications(self):
         # Only our tiny known journal directories, never a walk over video files.
         with self.engine.connect() as connection:
-            roots = connection.execute(text("SELECT root_path FROM archive_roots")).scalars().all()
-        for root_name in roots:
-            root = Path(root_name)
+            roots = connection.execute(text("SELECT id, root_path, is_active FROM archive_roots WHERE retired_at IS NULL")).all()
+        for root_id, root_name, active in roots:
+            try:
+                root = self.root_mapper(root_id, active) if self.root_mapper else Path(root_name)
+            except (OSError, RuntimeError):
+                continue
             directory = root / JOURNAL_DIRECTORY
             if directory.is_symlink() or not directory.is_dir():
                 continue
@@ -127,7 +134,8 @@ class StartupSegmentRecovery:
                             JOIN recorder_file_receipts r ON r.segment_id=s.id
                             JOIN archive_roots a ON a.id=s.archive_root_id
                             JOIN recording_jobs j ON j.id=s.job_id
-                            WHERE s.file_path=:path AND s.relative_path=:relative AND a.root_path=:root
+                            WHERE a.id=:root_id AND s.relative_path=:relative
+                              AND (:mapped OR s.file_path=:path)
                               AND s.deleted_at IS NULL AND s.ownership=:ownership AND s.source=:source
                               AND j.recorder_instance_id IS DISTINCT FROM :instance
                               AND j.state IN ('stopped','error','disabled')
@@ -135,7 +143,8 @@ class StartupSegmentRecovery:
                               AND r.root_id=s.archive_root_id
                               AND r.physical_identity IS NOT DISTINCT FROM a.physical_identity
                             FOR UPDATE OF s,r,a
-                        """), {"path": str(source), "relative": payload["relative_path"], "root": root_name,
+                        """), {"path": str(source), "relative": payload["relative_path"], "root_id": root_id,
+                               "mapped": self.root_mapper is not None,
                                "ownership": OWNERSHIP_KM_VMS, "source": METADATA_SOURCE_RECORDER,
                                "instance": self.instance_id, "contract": RECORDER_RECEIPT_CONTRACT_VERSION}).mappings().one_or_none()
                         if row is None:

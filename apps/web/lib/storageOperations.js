@@ -925,6 +925,41 @@ export function humanBlockerReason(reason, language = "ru") {
       en: "Archive roots overlap. Choose a separate archive folder.",
       "zh-CN": "归档根目录重叠。请选择独立的归档文件夹。",
     },
+    archive_root_removal_changed: {
+      ru: "Состав архива изменился. Откройте удаление заново и проверьте новое количество записей.",
+      en: "The archive changed. Open removal again and review the new number of recordings.",
+      "zh-CN": "归档内容已更改。请重新打开移除窗口并核对录像数量。",
+    },
+    archive_root_removal_move_incomplete: {
+      ru: "Не все записи удалось перенести. Исходная папка осталась подключена.",
+      en: "Not all recordings could be moved. The source folder remains connected.",
+      "zh-CN": "未能迁移全部录像。源文件夹仍保持连接。",
+    },
+    archive_root_removal_target_in_use: {
+      ru: "Эта папка нужна для другого переноса. Дождитесь его завершения.",
+      en: "Another transfer uses this folder. Wait for it to finish.",
+      "zh-CN": "其他迁移正在使用此文件夹。请等待迁移结束。",
+    },
+    archive_root_removal_in_progress: {
+      ru: "Отключение этой папки уже запущено.",
+      en: "Removal of this folder is already in progress.",
+      "zh-CN": "正在移除此文件夹。",
+    },
+    archive_root_removal_target_required: {
+      ru: "Выберите другую папку, готовую к записи.",
+      en: "Choose another folder that is ready for recording.",
+      "zh-CN": "请选择另一个可录像的文件夹。",
+    },
+    archive_root_removal_permission_lost: {
+      ru: "Операция остановлена: больше нет необходимых прав.",
+      en: "The operation stopped because the required permissions changed.",
+      "zh-CN": "所需权限已更改，操作已停止。",
+    },
+    archive_root_removal_expired: {
+      ru: "Папку не удалось отключить. Проверьте, завершились ли записи, и повторите.",
+      en: "The folder could not be removed. Check that recordings have finished and try again.",
+      "zh-CN": "无法移除文件夹。请确认录像已结束，然后重试。",
+    },
     archive_root_missing: {
       ru: "Корень архива не найден",
       en: "Archive root is missing",

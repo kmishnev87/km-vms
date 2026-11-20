@@ -52,6 +52,7 @@ class MigrationPlanBuilder:
                 RecordingSegment.archive_root_id == plan.source_root_id,
                 RecordingSegment.id > int(plan.inventory_cursor or 0),
                 RecordingSegment.id <= int(plan.segment_high_watermark or 0),
+                *((RecordingSegment.camera_id == plan.selected_camera_id,) if plan.selected_camera_id is not None else ()),
             )
             .order_by(RecordingSegment.id.asc())
             .limit(PLAN_BATCH_SIZE)
@@ -176,6 +177,7 @@ class MigrationPlanBuilder:
                     "actor_key": str(plan.actor_key),
                     "source_root_id": str(plan.source_root_id),
                     "target_root_id": str(plan.target_root_id),
+                    **({"camera_id": plan.selected_camera_id} if plan.selected_camera_id is not None else {}),
                     "source_physical_identity": str(plan.source_physical_identity),
                     "target_physical_identity": str(plan.target_physical_identity),
                     "source_snapshot_key": str(plan.source_snapshot_key),
@@ -224,7 +226,8 @@ class MigrationPlanBuilder:
             )
             if not rows:
                 break
-            if any(not _item_manifest_valid(item) for item in rows):
+            if any(not _item_manifest_valid(item) or
+                   (plan.selected_camera_id is not None and item.camera_id != plan.selected_camera_id) for item in rows):
                 return False
             cursor = int(rows[-1].item_index)
         return bool(plan.canonical_hash and plan.canonical_hash == self._canonical_manifest_hash(db, plan))

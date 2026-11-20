@@ -92,6 +92,7 @@ def serialize_settings(row: SystemSettings) -> dict:
         "recording_format_contract": format_contract,
         "hardware_preferred_backend": row.hardware_preferred_backend,
         "auto_free_space_cleanup_enabled": bool(getattr(row, "auto_free_space_cleanup_enabled", False)),
+        "archive_failover_enabled": bool(getattr(row, "archive_failover_enabled", False)),
         "auto_free_space_cleanup_effective": bool(
             getattr(row, "auto_free_space_cleanup_enabled", False)
             and getattr(row, "auto_free_space_acknowledged_terms_version", None) == AUTO_FREE_SPACE_TERMS_VERSION
@@ -180,6 +181,10 @@ def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
 
     if "auto_free_space_cleanup_enabled" in payload:
         data["auto_free_space_cleanup_enabled"] = bool(payload.get("auto_free_space_cleanup_enabled"))
+    if "archive_failover_enabled" in payload:
+        if not isinstance(payload["archive_failover_enabled"], bool):
+            raise ValueError("archive_failover_enabled must be true or false")
+        data["archive_failover_enabled"] = payload["archive_failover_enabled"]
 
     return data
 

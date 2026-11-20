@@ -94,7 +94,7 @@ SENSITIVE_RE = re.compile(
 )
 RELEASE_NOTE_LOCALES = {"en", "ru", "zh-CN"}
 MAX_PATCH_VERSION = 29
-CURRENT_PRODUCT_DB_SCHEMA_VERSION = 14
+CURRENT_PRODUCT_DB_SCHEMA_VERSION = 16
 VERSION_FILES = [
     Path("apps/api/app/core/version.py"),
     Path("apps/web/package.json"),

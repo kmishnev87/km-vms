@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "1.0.5",
-  "tag": "v1.0.5",
-  "title": "KM VMS 1.0.5 — Faster event review and archive navigation",
-  "summary": "Filter web events by source and AI rule, skip empty intervals in Chronology, and save original recordings on Android. The signed Android 0.8.17 app also improves event photos, camera calls and the 3×1 widget.",
+  "version": "1.0.6",
+  "tag": "v1.0.6",
+  "title": "KM VMS 1.0.6 — Multi-disk recording and safer archive moves",
+  "summary": "Assign cameras to different archive folders or disks and browse all footage in one timeline. This release adds optional storage failover, safer folder removal, and better event images on Android 0.8.18.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v1.0.5",
+  "source_ref": "v1.0.6",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -17,54 +17,54 @@
   "requires_migration": false,
   "schema_update": {
     "mode": "managed",
-    "target_version": 14
+    "target_version": 16
   },
   "changelog": [
-    "Web event history puts Source in the main filter row. For NAS AI, choose a rule from the camera and period or filter by condition.",
-    "Chronology keeps the shared clock moving through gaps when footage lies ahead. Next recording jumps to the nearest selected-camera recording in web and Android.",
-    "Android 0.8.17 saves original recording files to Downloads without creating a clip.",
-    "One Android camera icon opens snapshots of camera or AI events. The first and only push includes the picture if ready; otherwise it contains text.",
-    "Android camera calls select full duplex when the adapter confirms it. Hold-to-speak remains available for other cameras, with a per-camera mode override.",
-    "A major scene-change rule can optionally trigger on selected people, vehicles or supported animals even without a major change to the view.",
-    "The 3×1 Android widget uses its space better, retains its three independent actions and shows 99+ for larger unread counts."
+    "Record to multiple archive folders at once. Set destinations in Cameras or Storage and view all footage together in Recordings and Chronology.",
+    "When a camera changes folders, choose whether to move its existing footage in the background. Completion appears as a brief notification without shifting the Storage page.",
+    "Retire an archive folder from a single dialog. Choose a replacement for assigned cameras, then move the recordings or separately confirm exactly how many will be deleted.",
+    "Optional failover records to the healthy volume with the most free space, then returns after recovery. It is off by default and doesn't move old footage.",
+    "If a NAS AI scene change opens a PTZ episode, the photo waits at least one second, but recording doesn't. An opening object detection still takes the normal snapshot.",
+    "Android 0.8.18 allows more time to load a photo before posting one alert, retains text fallback, and gives the 3×1 widget counter the same visual height as its icons.",
+    "The web event snapshot button works for both sources without closing event history. Storage controls and the Next recording button are aligned."
   ],
   "title_i18n": {
-    "en": "KM VMS 1.0.5 — Faster event review and archive navigation",
-    "ru": "KM VMS 1.0.5 — История событий и навигация по архиву",
-    "zh-CN": "KM VMS 1.0.5 — 改进事件查看与录像导航"
+    "en": "KM VMS 1.0.6 — Multi-disk recording and safer archive moves",
+    "ru": "KM VMS 1.0.6 — Запись на несколько дисков и безопасный перенос архива",
+    "zh-CN": "KM VMS 1.0.6 — 多盘录像与更安全的存档迁移"
   },
   "summary_i18n": {
-    "en": "Filter web events by source and AI rule, skip empty intervals in Chronology, and save original recordings on Android. The signed Android 0.8.17 app also improves event photos, camera calls and the 3×1 widget.",
-    "ru": "Фильтруйте события в вебе по источнику и правилам AI, переходите к следующей записи в хронологии и сохраняйте оригиналы на Android. Подписанный Android 0.8.17 также улучшает снимки событий, звонки и виджет 3×1.",
-    "zh-CN": "网页可按来源和 AI 规则筛选事件，时间线可跳过录像空白，Android 可保存原始录像。签名版 Android 0.8.17 还改进了事件图片、摄像机通话和 3×1 小组件。"
+    "en": "Assign cameras to different archive folders or disks and browse all footage in one timeline. This release adds optional storage failover, safer folder removal, and better event images on Android 0.8.18.",
+    "ru": "Назначайте камерам разные папки или диски архива и смотрите все записи на одной шкале. Добавлены опциональная аварийная запись, безопасное отключение папок и улучшения снимков в Android 0.8.18.",
+    "zh-CN": "可为摄像机分配不同的存档文件夹或磁盘，并在同一时间线上查看录像。本版新增可选的存储故障转移、更安全的文件夹移除，并改进 Android 0.8.18 的事件图片。"
   },
   "changelog_i18n": {
     "en": [
-      "Web event history puts Source in the main filter row. For NAS AI, choose a rule from the camera and period or filter by condition.",
-      "Chronology keeps the shared clock moving through gaps when footage lies ahead. Next recording jumps to the nearest selected-camera recording in web and Android.",
-      "Android 0.8.17 saves original recording files to Downloads without creating a clip.",
-      "One Android camera icon opens snapshots of camera or AI events. The first and only push includes the picture if ready; otherwise it contains text.",
-      "Android camera calls select full duplex when the adapter confirms it. Hold-to-speak remains available for other cameras, with a per-camera mode override.",
-      "A major scene-change rule can optionally trigger on selected people, vehicles or supported animals even without a major change to the view.",
-      "The 3×1 Android widget uses its space better, retains its three independent actions and shows 99+ for larger unread counts."
+      "Record to multiple archive folders at once. Set destinations in Cameras or Storage and view all footage together in Recordings and Chronology.",
+      "When a camera changes folders, choose whether to move its existing footage in the background. Completion appears as a brief notification without shifting the Storage page.",
+      "Retire an archive folder from a single dialog. Choose a replacement for assigned cameras, then move the recordings or separately confirm exactly how many will be deleted.",
+      "Optional failover records to the healthy volume with the most free space, then returns after recovery. It is off by default and doesn't move old footage.",
+      "If a NAS AI scene change opens a PTZ episode, the photo waits at least one second, but recording doesn't. An opening object detection still takes the normal snapshot.",
+      "Android 0.8.18 allows more time to load a photo before posting one alert, retains text fallback, and gives the 3×1 widget counter the same visual height as its icons.",
+      "The web event snapshot button works for both sources without closing event history. Storage controls and the Next recording button are aligned."
     ],
     "ru": [
-      "В веб-истории «Источник» виден сразу. Для AI на NAS можно выбрать правило по камере и периоду или уточнить условие.",
-      "Общее время хронологии идёт через пустые участки, если впереди есть видео. «Следующая запись» переносит к ближайшему видео выбранных камер в вебе и Android.",
-      "Android 0.8.17 сохраняет оригиналы записей в «Загрузки» без создания клипа.",
-      "В истории Android один значок фотоаппарата открывает доступные снимки событий камер и AI. Кадр приходит в первом пуше, если готов; иначе приходит одно текстовое оповещение.",
-      "Android включает двусторонний разговор при подтверждённой поддержке. Для остальных камер доступно удержание микрофона; режим можно выбрать для камеры вручную.",
-      "Правило крупной смены сцены можно дополнить распознаванием людей, транспорта или животных без обязательной смены картинки.",
-      "Виджет Android 3×1 компактнее распределяет место, сохраняет три отдельные зоны нажатия и показывает 99+ при большом числе непросмотренных."
+      "Несколько папок архива готовы к записи одновременно. Назначайте их покамерно или общей таблицей; старые и новые файлы видны вместе в «Записях» и «Хронологии».",
+      "При смене папки можно перенести старые записи в фоне. О завершении сообщает короткое всплывающее сообщение без сдвига блоков «Хранилища».",
+      "При отключении папки с камерами можно сразу выбрать ей замену. Старые записи переносятся по выбору; их удаление требует отдельного подтверждения с точным количеством.",
+      "Аварийная запись выбирает исправный том с наибольшим свободным местом и возвращается после восстановления. По умолчанию она выключена; старые записи не переносит.",
+      "Если эпизод PTZ открыло событие «Крупная смена сцены» от AI на NAS, снимок ждёт не менее секунды, но запись не задерживается. Для первого обнаружения объекта задержки нет.",
+      "Android 0.8.18 чуть дольше ждёт загрузки снимка перед единственным оповещением. Без кадра приходит текст. Высота цифр счётчика виджета 3×1 согласована с иконками.",
+      "Кнопка снимка в вебе работает для обоих источников и не закрывает историю событий. Элементы «Хранилища» и значок перехода к следующей записи выровнены."
     ],
     "zh-CN": [
-      "网页事件历史将来源筛选放在主行。选择 NAS AI 后可按所选摄像机和时段的规则或按条件筛选。",
-      "后续存在录像时，共享时间线可继续走过空白。网页和 Android 均可跳到所选摄像机的下一段录像。",
-      "Android 0.8.17 可直接将原始录像保存到下载目录，无需创建片段。",
-      "Android 使用同一个相机图标查看摄像机或 NAS AI 事件图片。图片就绪时随首条推送发送，否则只发一条文字通知。",
-      "在确认支持时，Android 摄像机通话启用全双工。其他摄像机可按住发言，并可为单台摄像机选择通话模式。",
-      "重大场景变化规则可选检测人员、车辆或受支持的动物，即使画面没有明显变化。",
-      "3×1 Android 小组件改进布局，保留三个独立操作区域，未读数量超过 99 时显示 99+。"
+      "多个存档文件夹可同时录制。可按摄像机分配，也可在存储页面批量修改。新旧录像仍可在录像列表和时间线中一起查看。",
+      "更换摄像机的存档文件夹时可选择后台迁移现有录像。完成时短暂提示，不改变存储页面布局。",
+      "可在同一对话框移除存档文件夹并为关联摄像机选择替代文件夹。可选择迁移录像，或单独确认要删除的准确数量。",
+      "可选存储故障转移启用后，新录像写入剩余空间最多的健康存储卷，原位置恢复后自动返回。默认关闭，不迁移已有录像。",
+      "如果 NAS AI 检测到的重大场景变化开启 PTZ 事件，至少等待一秒再取图，录像不延迟。若事件由对象检测开启，则按正常方式取图。",
+      "Android 0.8.18 在发布一条通知前给图片更多加载时间，图片不可用时仍发送文字通知。3×1 小组件的数字与图标视觉高度一致。",
+      "网页的事件图片按钮适用于两种来源，打开图片时不会关闭事件历史。存储控件和下一段录像图标已对齐。"
     ]
   }
 }

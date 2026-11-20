@@ -695,6 +695,15 @@
   min-width: 34px;
 }
 
+.chronologyNextRecordingButton {
+  display: inline-grid;
+  place-items: center;
+}
+
+.chronologyNextRecordingButton > svg {
+  display: block;
+}
+
 .chronologyPrimaryButton:hover:not(:disabled),
 .chronologySecondaryButton:hover:not(:disabled),
 .chronologyIconButton:hover:not(:disabled),

@@ -558,6 +558,9 @@ def write_archive_roots_runtime_files(
                 "  api:",
                 "    volumes:",
                 *volume_lines,
+                "  recorder:",
+                "    volumes:",
+                *volume_lines,
                 "  schema-update:",
                 "    volumes:",
                 *volume_lines,
@@ -957,6 +960,20 @@ def safe_resolve_relative_for_root(relative_path: str, root_row) -> Path:
     except ValueError as exc:
         raise ValueError("path_outside_archive_root") from exc
     return target
+
+
+def read_root_matches(db: Session, segment, reference_root: str, present_root: str) -> bool:
+    """Keep media references for the same segment valid after a verified move."""
+    if reference_root == present_root:
+        return True
+    from app.models.archive_migration import ArchiveMigrationItem
+
+    return db.query(ArchiveMigrationItem.id).filter(
+        ArchiveMigrationItem.segment_id == segment.id,
+        ArchiveMigrationItem.camera_id == segment.camera_id,
+        ArchiveMigrationItem.source_root_id == reference_root,
+        ArchiveMigrationItem.metadata_switched_at.is_not(None),
+    ).limit(1).first() is not None
 
 
 def resolve_segment_file_path(db: Session, segment, *, require_exists: bool = False) -> Path:

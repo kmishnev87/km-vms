@@ -22,7 +22,7 @@ export function cameraEditorDraft(camera = null) {
     rtsp_host: "", rtsp_port: 554, rtsp_transport: "tcp", onvif_path: "",
     onvif_profile_token: "", onvif_sub_profile_token: "", onvif_channel_id: "",
     recording_mode: "always", default_live_stream: "main", default_record_stream: "main",
-    segment_minutes: 5, retention_days: 30, storage_quota_gb: 50,
+    segment_minutes: 5, retention_days: 30, storage_quota_gb: 50, recording_archive_root_id: null,
     preview_token: null, validation_token: null, main_validation_token: null,
     sub_validation_token: null, onvif_probe_token: null, manual_confirm_unverified: false,
   };

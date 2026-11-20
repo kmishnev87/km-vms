@@ -19,6 +19,12 @@ export function ArchivePolicySwitch({ checked, busy = false, disabled = false, l
 }
 
 function ArchiveManagementRow({ row }) {
+  if (row.policyControls) return <article className="archiveManagementPolicy">
+    {row.policyControls.map(control => <div className="archiveManagementPolicyLine" key={control.title}>
+      <div><h4>{control.title}</h4><p>{control.description}</p></div>
+      {control.action}
+    </div>)}
+  </article>;
   return (
     <article className={`archiveManagementRow archiveManagementRow-${row.tone || "neutral"}`}>
       <div className="archiveManagementRowBody">

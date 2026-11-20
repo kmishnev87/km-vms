@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.session import Base
+from app.models.camera import Camera
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 from app.services.schema_migrations import (
     RISK_MANUAL_ONLY,
@@ -135,6 +136,31 @@ def test_postgres_fresh_runner_current_and_managed_idempotency(pg_session):
     assert first["status"] == "current"
     assert second["executed_migrations"] == []
     assert db.query(SchemaMigrationHistory).count() == 1
+
+
+def test_postgres_v14_placement_upgrade_preserves_existing_camera(pg_session):
+    engine, db = pg_session
+    Base.metadata.create_all(bind=engine)
+    saved = Camera(name="Original Camera", storage_folder_name="original", protocol="rtsp",
+                   host="example.invalid", port=554, enabled=False, segment_minutes=10, retention_days=90,
+                   storage_quota_gb=50)
+    db.add(saved); db.commit()
+    camera_id = saved.id
+    db.execute(text("ALTER TABLE cameras DROP COLUMN recording_archive_root_id"))
+    db.execute(text("ALTER TABLE archive_migration_plans DROP COLUMN selected_camera_id"))
+    db.execute(text("ALTER TABLE cameras DROP COLUMN recording_storage_state"))
+    db.execute(text("ALTER TABLE system_settings DROP COLUMN archive_failover_enabled"))
+    db.commit()
+    seed_state(db, version=14)
+    first = execute_migration_plan(db)
+    assert first["executed_migrations"] == ["camera_archive_placement_schema_v15", "archive_recording_resilience_schema_v16"]
+    second = execute_migration_plan(db)
+    assert second["executed_migrations"] == []
+    row = db.execute(text("SELECT name, enabled, segment_minutes, retention_days, recording_archive_root_id FROM cameras WHERE id=:id"),
+                     {"id": camera_id}).one()
+    assert tuple(row) == ("Original Camera", False, 10, 90, None)
+    assert "selected_camera_id" in {value["name"] for value in inspect(engine).get_columns("archive_migration_plans")}
+    assert "archive_failover_enabled" in {value["name"] for value in inspect(engine).get_columns("system_settings")}
 
 
 def test_postgres_lower_safe_migration_executes_once(pg_session):

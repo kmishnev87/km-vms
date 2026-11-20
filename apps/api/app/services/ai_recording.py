@@ -17,6 +17,7 @@ from app.services.ai_camera_view import spatial_ai, view_kind, wake as wake_ai_v
 from app.services.ai_rule_frame import matching_references, read_editor_image, reference_is_fresh, verified_reference
 from app.services.audit_log import create_event
 from app.services.camera_alert_episodes import MEMBERS as ALERT_MEMBERS, settings_from as alert_minutes
+from app.services.camera_archive_placement import ARCHIVE_TARGET_FAILURES, current_default_id, storage_route_evidence
 from app.services.camera_event_settings import camera_event_reception_selected
 from app.services.onvif_events import EVENT_KINDS
 
@@ -127,7 +128,11 @@ def camera_rows(db, cameras):
         runtime = {row["camera_id"]: row for row in list_camera_recording_states(
             db, camera_ids=ids, include_finalized_history=False)}
     active = db.query(SystemSettings.recording_suspended_by_low_disk).order_by(SystemSettings.id).first() if ids else None
-    rows = [camera_row(camera, runtime.get(camera.id), storage_suspended=bool(active and active[0]))
+    suspended = bool(active and active[0])
+    default_id = current_default_id(db) if suspended else None
+    rows = [camera_row(camera, runtime.get(camera.id), storage_suspended=suspended and
+                       getattr(camera, "recording_archive_root_id", None) in (None, default_id) and
+                       not storage_route_evidence(camera, runtime.get(camera.id) or {}))
             for camera in cameras]
     # In a linked chain the incident and any permitted retry belong to
     # the actual event source, never to the dependent camera's own receiver.
@@ -171,7 +176,7 @@ def attach_ai(runtime, camera, ai):
 def actual_status(camera, runtime, evidence, *, storage_suspended):
     if not camera.enabled:
         return "paused"
-    if storage_suspended:
+    if storage_suspended or evidence.get("camera_last_error") in ARCHIVE_TARGET_FAILURES:
         return "storage_suspended"
     managed = runtime["event_recording_available"] or runtime["linked_recording_available"] or runtime["ai_managed"]
     if managed:

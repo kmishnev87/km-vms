@@ -21,6 +21,7 @@
     <string name="ai_event_forbidden">У этой учётной записи нет доступа к хронологии.</string>
     <string name="ai_event_ready">Запись доступна</string>
     <string name="ai_event_check">Проверить запись</string>
+    <string name="event_recording_check_failed">Не удалось проверить запись. Повторите попытку.</string>
     <string name="ai_event_false">Ложное срабатывание</string>
     <string name="ai_event_mark_false">Отметить как ложное</string>
     <string name="ai_event_clear_false">Снять отметку</string>

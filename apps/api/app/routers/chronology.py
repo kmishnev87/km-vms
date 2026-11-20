@@ -9,7 +9,6 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import and_, case, func, literal_column, or_
 from sqlalchemy.orm import Session
-from starlette.responses import FileResponse
 
 from app.core.permissions import PERMISSION_VIEW_TIMELINE, user_has_permission
 from app.models.camera import Camera
@@ -18,10 +17,12 @@ from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.camera_stream_dimensions import read_dimensions
+from app.utils.video_stream import stream_archive_file
 from app.schemas.camera import DELETED_CAMERA_MARKER_RE
 from app.services.recording_storage import (
     archive_root_for_segment,
     archive_root_runtime_access_state,
+    read_root_matches,
     resolve_segment_file_path,
     segment_archive_root_resolution,
     segment_has_resolved_archive_root,
@@ -34,7 +35,6 @@ from app.services.timezone_contract import (
     timestamp_matches_filename,
     timezone_context,
 )
-from app.utils.video_stream import stream_video
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 MAX_RANGE_CAMERAS = 64
@@ -314,7 +314,7 @@ def _segment_by_identity(
         if not segment:
             raise HTTPException(status_code=404, detail="Recording metadata not found")
         segment_root_id = _segment_root_id(segment)
-        if archive_root_id and segment_root_id != str(archive_root_id):
+        if archive_root_id and not read_root_matches(db, segment, archive_root_id, segment_root_id):
             raise HTTPException(status_code=404, detail="Recording root mismatch")
         if camera_id is not None and int(segment.camera_id) != int(camera_id):
             raise HTTPException(status_code=404, detail="Recording camera mismatch")
@@ -691,17 +691,15 @@ def chronology_download_current_recording(
         media_area="chronology-download",
     )
     try:
-        file_path = _resolve_segment_path(segment)
+        return stream_archive_file(
+            db, request, segment, resolve_path=_resolve_segment_path,
+            media_type=lambda item, path: _segment_media_metadata(item, path)["mime_type"],
+            get_filename=lambda item, path: _safe_download_filename(camera, item, path),
+        )
     except HTTPException as exc:
         if exc.status_code == 404:
             raise HTTPException(status_code=409, detail="Recording source is unavailable") from exc
         raise
-    media_metadata = _segment_media_metadata(segment, file_path)
-    return FileResponse(
-        file_path,
-        media_type=media_metadata["mime_type"] or "application/octet-stream",
-        filename=_safe_download_filename(camera, segment, file_path),
-    )
 
 
 @router.post("/download-token")
@@ -745,10 +743,10 @@ def issue_chronology_download_token(
     return response
 
 
-def _chronology_media_resource(segment: RecordingSegment, action: str = "stream") -> dict:
+def _chronology_media_resource(segment: RecordingSegment, action: str = "stream", *, reference_root=None) -> dict:
     return {
         "segment_id": int(segment.id),
-        "archive_root_id": _segment_root_id(segment),
+        "archive_root_id": reference_root or _segment_root_id(segment),
         "action": action,
     }
 
@@ -784,9 +782,18 @@ def issue_chronology_media_token(
     token, expires_at = create_media_token(
         user=current_user,
         scope="chronology",
-        resource=_chronology_media_resource(segment, "stream"),
+        resource=_chronology_media_resource(segment, "stream", reference_root=_media_reference_root(
+            playback_ref, segment_id, archive_root_id)),
     )
     return media_token_response(token, expires_at)
+
+
+def _media_reference_root(reference, segment_id, root_id):
+    if isinstance(reference, str) and reference:
+        return reference.rsplit(":root:", 1)[1]
+    if isinstance(segment_id, int) and not isinstance(segment_id, bool) and isinstance(root_id, str):
+        return root_id or None
+    return None
 
 
 @router.get("/file")
@@ -812,16 +819,12 @@ def chronology_file(
         db,
         token=media_token,
         scope="chronology",
-        resource=_chronology_media_resource(segment, "stream"),
+        resource=_chronology_media_resource(segment, "stream", reference_root=_media_reference_root(
+            playback_ref, segment_id, archive_root_id)),
         permission=PERMISSION_VIEW_TIMELINE,
         request=request,
         media_area="chronology",
     )
 
-    file_path = _resolve_segment_path(segment)
-    media_metadata = _segment_media_metadata(segment, file_path)
-    return stream_video(
-        request,
-        file_path,
-        media_type=media_metadata["mime_type"] or "application/octet-stream",
-    )
+    return stream_archive_file(db, request, segment, resolve_path=_resolve_segment_path,
+                               media_type=lambda item, path: _segment_media_metadata(item, path)["mime_type"])

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_record_to">录像保存位置</string>
+    <string name="camera_archive_unavailable">文件夹不可用</string>
+    <string name="camera_archive_move_title">移动旧录像？</string>
+    <string name="camera_archive_move_count">录像：%1$d</string>
+    <string name="camera_archive_move_help">新的保存位置已保存。可在后台迁移录像。</string>
+    <string name="camera_archive_move_action">移动录像</string>
+    <string name="camera_archive_keep">保留原位置</string>
+    <string name="camera_archive_move_queued">迁移已排队，请在存储页面查看。</string>
+    <string name="camera_archive_move_partial">部分录像未加入队列，请查看存储。</string>
+    <string name="camera_archive_move_failed">无法将迁移加入队列，请重试。</string>
+    <string name="camera_archive_ready">可录像</string>
+    <string name="camera_archive_removing">正在移除</string>
+    <string name="camera_archive_connecting">正在连接</string>
+    <string name="camera_archive_read_only">只读</string>
+    <string name="camera_archive_low_space">空间不足</string>
+</resources>

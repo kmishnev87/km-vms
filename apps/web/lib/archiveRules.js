@@ -1,8 +1,12 @@
 export const ARCHIVE_RULE_FIELDS = ["segment_minutes", "retention_days", "storage_quota_gb"];
+export const ARCHIVE_TARGET_FIELD = "recording_archive_root_id";
 export const ARCHIVE_RULE_LIMITS = { segment_minutes: 2147483647, retention_days: 36500, storage_quota_gb: 2147483647 };
 
 export function archiveRuleDraft(rows) {
-  return Object.fromEntries(rows.map(row => [row.camera_id, Object.fromEntries(ARCHIVE_RULE_FIELDS.map(key => [key, String(row[key])]))]));
+  return Object.fromEntries(rows.map(row => [row.camera_id, {
+    ...Object.fromEntries(ARCHIVE_RULE_FIELDS.map(key => [key, String(row[key])])),
+    ...(ARCHIVE_TARGET_FIELD in row ? { [ARCHIVE_TARGET_FIELD]: row[ARCHIVE_TARGET_FIELD] } : {}),
+  }]));
 }
 
 export function archiveRuleProblems(rows, draft) {
@@ -21,8 +25,12 @@ export function archiveRuleChanges(rows, draft) {
   return rows.flatMap(row => {
     const values = Object.fromEntries(ARCHIVE_RULE_FIELDS.filter(key => Number(draft[row.camera_id]?.[key]) !== row[key])
       .map(key => [key, Number(draft[row.camera_id]?.[key])]));
+    const previousRoot = row[ARCHIVE_TARGET_FIELD];
+    const nextRoot = draft[row.camera_id]?.[ARCHIVE_TARGET_FIELD];
+    if (nextRoot !== undefined && nextRoot !== previousRoot) values[ARCHIVE_TARGET_FIELD] = nextRoot;
     return Object.keys(values).length ? [{ camera_id: row.camera_id,
-      expected: Object.fromEntries(ARCHIVE_RULE_FIELDS.map(key => [key, row[key]])), values }] : [];
+      expected: { ...Object.fromEntries(ARCHIVE_RULE_FIELDS.map(key => [key, row[key]])),
+        ...(ARCHIVE_TARGET_FIELD in values ? { [ARCHIVE_TARGET_FIELD]: previousRoot ?? null } : {}) }, values }] : [];
   });
 }
 

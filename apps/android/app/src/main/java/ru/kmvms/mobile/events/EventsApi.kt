@@ -119,7 +119,8 @@ class EventsApi(val api: NasApi) {
     suspend fun evidence(event: CameraEvent, zone: ZoneId): EventEvidence {
         val body = api.json("api/camera-events/${validEventId(event.id)}/evidence") as JSONObject
         val updated = CameraEvent.from(body.getJSONObject("event"), zone)
-        require(updated.id == event.id && updated.cameraId == event.cameraId && updated.ai != null)
+        require(updated.id == event.id && updated.cameraId == event.cameraId &&
+            (updated.ai != null) == (event.ai != null))
         val archive = body.getJSONObject("archive")
         val state = EventArchiveState.entries.find { it.name.equals(archive.optString("state"), ignoreCase = true) } ?: EventArchiveState.UNAVAILABLE
         if (state != EventArchiveState.READY) return EventEvidence(updated, state, null, null)

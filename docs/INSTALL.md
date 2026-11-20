@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[1.0.5](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.5)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[1.0.6](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.6)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.5/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.5
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.6/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.6
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.5 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v1.0.6 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.5 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v1.0.6 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -97,7 +97,7 @@ http://<NAS-IP>:8088/
 
 ## 4. Add cameras and choose your language
 
-In **Cameras**, add a camera using its RTSP or ONVIF connection details. Verify the connection, choose the appropriate lens/video source and streams where available, set recording options, and save.
+In **Cameras**, add a camera using its RTSP or ONVIF connection details. Verify the connection, choose the appropriate lens/video source and streams where available, select an archive folder in the storage rules, and save. Use **AI & Recording** to change how recording is triggered.
 
 ONVIF Media1/Media2 configuration is available when the camera exposes the required services and options. RTSP, H.265/browser playback, and hardware acceleration are not universal across all devices and clients.
 
@@ -107,13 +107,21 @@ For a routed LAN or VPN, select a detected route or enter specific private IPv4 
 
 Discovery does not configure a VPN, forward multicast through routers, guess camera passwords, or prove that every device in a subnet is reachable. A device must answer ONVIF discovery, the anonymous ONVIF device request, or RTSP OPTIONS on a tested port. Some cameras require a different port, manual address/path, or a protocol enabled in their own settings. RTSP-only discovery identifies a server, not its authenticated stream path; the normal connection check still applies. IPv6-only discovery is not included.
 
-In **Storage → Recording and retention → Configure cameras**, edit segment minutes, retention days, and archive limits without leaving Storage. Use shared values for selected cameras or edit rows individually. Saving validates and commits the changed rules together; conflicting external edits require a reload. Lowering retention or limits can make older footage eligible for the existing automatic cleanup. Connection details, event reception and recording enablement are not changed by this editor.
+In **Storage → Configure cameras**, edit the archive folder, segment duration, retention days, and archive limit for multiple cameras without leaving Storage. Saving validates the changed rules together; conflicting external edits require a reload. A lower retention or size limit can make older recordings eligible for cleanup. These rules don't change connection settings, analytics, or whether a camera is paused.
+
+### Use more than one archive folder
+
+Add a folder in **Storage → Archive roots** and wait until it is ready before assigning cameras to it. Multiple ready folders can accept recordings at the same time; choose them by their NAS path. Changing a camera's folder affects new recording segments. Earlier footage remains available in **Recordings** and **Chronology**, and you can optionally move it in the background. A batch change offers a single selection of which cameras' recordings to move.
+
+To retire an archive folder with cameras or recordings on it, select another ready folder. You can transfer old recordings to that folder, or explicitly confirm how many recordings you are deleting. KM VMS rechecks the selection before deletion and does not delete the physical volume or unrelated files. Recent recordings may have to finish or pass the safety window before a move can finish. A regular manual archive move is still available separately.
+
+Optional **Emergency recording** in Storage is off by default. If the selected volume becomes unwritable while KM VMS is running, future segments can be recorded on the healthy eligible volume with the most free space. The camera's saved assignment and recording rules stay unchanged. Recording returns at a segment boundary once the original location is consistently writable again. Starting the application with a configured volume already missing is not covered by this feature. Emergency recording does not protect footage on a failed disk.
 
 Use **Settings → Language** to choose **English**, **简体中文**, or **Русский**.
 
 ## Camera events
 
-History and personal notification selection support eleven useful types: motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame. Only reported camera semantics are used. A rule can retain several object classes, and the same event can match either its rule or class filter. Clock synchronization, known service messages, and excluded abandoned/removed-object messages do not enter history. Unfamiliar signals are bounded receiver diagnostics, not generic detection spam. The camera's NTP and detection settings are not changed by these filters.
+History and camera event conditions support eleven useful types: motion, person, vehicle, animal, zone intrusion, line crossing, loitering, tampering, sound, wrong direction, and smoke/flame. Only reported camera semantics are used. A rule can retain several object classes, and the event can match either its rule or class filter. Clock synchronization, known service messages, and excluded abandoned/removed-object messages do not enter history. Unfamiliar signals are bounded receiver diagnostics, not generic detection spam. These conditions don't change the camera's NTP or detection settings.
 
 Use the bell to open camera events. To receive ONVIF detections, choose **Camera events** as the source in **AI & Recording**. Select all or specific types under **Conditions**, for continuous or event-based recording. One managed subscription serves an opted-in physical device; reported source identifiers distinguish lenses where available. Changing the camera's source preserves its history and does not change the device's own detection settings.
 
@@ -160,7 +168,7 @@ Calls temporarily use the low-latency video path and preserve the saved sound/PT
 
 KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up.
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.17.apk** from the [1.0.5 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.5). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.18.apk** from the [1.0.6 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.6). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.
@@ -168,7 +176,7 @@ KM VMS verifies a new call password before saving it. Rejected sign-ins allow an
 
 The app checks the official APK metadata on the first foreground opening in a new day and on manual request. It checks size, hash, package/version and signing certificate before offering the system installer. Download and Android installation confirmation are explicit; the update keeps app data and NAS profiles. The NAS and mobile version numbers are independent. Use only the official signed asset for subsequent updates.
 
-In **Recordings**, download an available original to Android's **Downloads** without creating a clip. Use the camera icon in **Events** to open an available event frame from either source. An expanded push notification includes the frame if ready; otherwise the app posts one text notification with the same Live and Recording actions.
+In **Recordings**, download an available original to Android's **Downloads** without creating a clip. Use the camera icon in **Events** to open an available event frame from either source. Android allows a short time to fetch the image before posting a single alert. Expand it to see the picture if available and choose Live or Recording; an unavailable image still gives you the same actions in a text notification.
 
 To add an optional home-screen notification widget, open **Settings → Notification widget**, choose **2×1 without a counter** or **3×1 with a counter**, select a saved NAS, and confirm Android's add-widget prompt. Nothing is added automatically during installation. Launcher cell sizes vary; both variants also support standard launcher configuration.
 

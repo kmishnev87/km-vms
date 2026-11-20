@@ -10,7 +10,7 @@
 .cameraEventsTabs { display: flex; gap: 8px; padding: 12px 18px; border-bottom: 1px solid #dce5ee; flex-shrink: 0; }
 .cameraEventsTabs button { border: 1px solid transparent; border-radius: 7px; background: transparent; padding: 8px 12px; color: #64748b; font: inherit; cursor: pointer; }
 .cameraEventsTabs button.isActive { border-color: #c5d8e8; background: #eaf3fb; color: #315c80; }
-.cameraEventsWorkbench { --camera-events-row-padding: 14px; --camera-events-columns: 18px 8px minmax(0, 1fr) 160px 80px; --camera-events-gap: 12px; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px 18px 12px; gap: 10px; }
+.cameraEventsWorkbench { --camera-events-row-padding: 14px; --camera-events-columns: 18px 8px minmax(0, 1fr) 160px 124px; --camera-events-gap: 12px; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px 18px 12px; gap: 10px; }
 .cameraEventsFilters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; align-items: end; gap: 12px; padding: 0 calc(var(--camera-events-row-padding) + 1px + var(--camera-events-scrollbar, 0px)) 0 0; flex-shrink: 0; }
 .cameraEventsFilterActions { display: grid; grid-template-columns: minmax(84px, max-content) 36px; align-items: center; justify-content: end; gap: 12px; height: 36px; }
 .cameraEventsFilterActions .cameraEventsCheck { white-space: nowrap; height: 36px; min-height: 36px; line-height: 16px; }
@@ -27,7 +27,7 @@
 .cameraEventsIconButton:disabled { opacity: .42; cursor: default; }
 .cameraEventsHistory { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dce5ee; border-radius: 8px; }
 .cameraEventsSelection { display: grid; grid-template-columns: var(--camera-events-columns); align-items: center; gap: var(--camera-events-gap); min-height: 54px; padding: 8px calc(var(--camera-events-row-padding) + var(--camera-events-scrollbar, 0px)) 8px var(--camera-events-row-padding); border-bottom: 1px solid #dce5ee; font-size: 12px; color: #64748b; flex-shrink: 0; }
-.cameraEventsBulkActions { grid-column: 5; display: grid; grid-template-columns: 36px 36px; gap: 8px; }
+.cameraEventsBulkActions { grid-column: 5; justify-self: end; display: grid; grid-template-columns: 36px 36px; gap: 8px; }
 .cameraEventsSelectionSummary { grid-column: 3; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; font-variant-numeric: tabular-nums; }
 .cameraEventsSelectFiltered { min-width: 0; justify-self: start; max-width: 100%; padding: 0; border: 0; background: transparent; color: #3d688f; font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cameraEventsSelectFiltered:focus-visible { outline: 2px solid #456f94; outline-offset: 3px; border-radius: 2px; }
@@ -44,9 +44,8 @@
 .cameraEventsRow time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .cameraEventsDescription small { font-size: 11px; color: #64748b; }
 .cameraEventsKindLine { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.cameraEventsAiTag { flex: 0 0 auto; border: 1px solid #cfdeea; border-radius: 5px; padding: 1px 5px; background: #f3f8fc; color: #315c80; font-family: inherit; font-size: 10px; font-weight: 600; line-height: 1.4; cursor: pointer; }
-.cameraEventsAiTag:is(:hover, [aria-expanded="true"], [data-active="true"]) { background: #e1eef8; border-color: #9bb9d2; }
-.cameraEventsAiTag:focus-visible { outline: 2px solid #456f94; outline-offset: 2px; }
+.cameraEventsDescription .cameraEventsAiTag { flex: 0 0 auto; border: 1px solid #cfdeea; border-radius: 5px; padding: 1px 5px; background: #f3f8fc; color: #315c80; font-size: 10px; font-weight: 600; line-height: 1.4; }
+.operationFeedbackOverlay.cameraEventsDetailOverlay { background: rgba(15, 23, 42, .2); }
 .cameraEventsAiFilters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; padding: 5px 10px; border: 1px solid #dce5ee; border-radius: 7px; background: #f7fafd; flex-shrink: 0; }
 .cameraEventsAiFilters label { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; color: #526377; font-size: 12px; }
 .cameraEventsAiFilters select { height: 30px; padding: 3px 7px; }
@@ -65,6 +64,7 @@
 .cameraAiEvidenceButtons, .cameraAiEvidenceReview { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
 .cameraAiEvidenceReview { justify-content: space-between; border-top: 1px solid #dce5ee; padding-top: 8px; color: #526377; font-size: 12px; }
 .cameraEventsRowActions { display: grid; grid-template-columns: 36px 36px; gap: 8px; align-items: center; }
+.cameraEventsRowActions.withPhoto { grid-template-columns: repeat(3, 36px); }
 .cameraEventsPager { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .cameraEventsPager > span { margin-right: auto; color: #64748b; font-size: 11px; }
 .cameraEventsEmpty { display: grid; place-items: center; min-height: 160px; padding: 24px; color: #64748b; text-align: center; font-size: 13px; }
@@ -145,7 +145,7 @@
   .cameraEventsPreferenceScroll { padding: 14px; }
   .cameraEventsPreferenceFooter { padding: 12px 14px; }
   .cameraEventsDialog .operationFeedbackHead { padding: 12px 14px; }
-  .cameraEventsWorkbench { --camera-events-columns: 18px 8px minmax(0, 1fr) 80px; --camera-events-gap: 10px; --camera-events-row-padding: 10px; padding: 12px; }
+  .cameraEventsWorkbench { --camera-events-columns: 18px 8px minmax(0, 1fr) 124px; --camera-events-gap: 10px; --camera-events-row-padding: 10px; padding: 12px; }
   .cameraEventsFilters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cameraEventsFilterActions { grid-column: 1 / -1; grid-template-columns: auto 36px; }
   .cameraEventsTabs { padding: 10px; gap: 4px; }

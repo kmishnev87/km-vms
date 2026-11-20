@@ -2,6 +2,7 @@
 
 import { Fragment, useRef } from "react";
 import { useAuthSession } from "../lib/useAuthSession";
+import ArchiveOperationNotices from "./storage/ArchiveOperationNotices";
 
 export default function AuthSessionBoundary({ children }) {
   const session = useAuthSession();
@@ -11,5 +12,5 @@ export default function AuthSessionBoundary({ children }) {
   }
   // Remount pages, not merely their DOM wrapper: old drafts/dialogs belong to
   // the previous session. No token is rendered as a DOM attribute or key.
-  return <Fragment key={owner.current.generation}>{children}</Fragment>;
+  return <Fragment key={owner.current.generation}><ArchiveOperationNotices>{children}</ArchiveOperationNotices></Fragment>;
 }

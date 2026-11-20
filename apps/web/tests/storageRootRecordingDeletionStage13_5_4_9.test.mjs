@@ -30,7 +30,7 @@ assert.match(recordingsPage, /<OperationToast toast=\{operationToast\}/);
 
 for (const contract of [
   /role="dialog"/,
-  /aria-modal="true"/,
+  /aria-modal=\{backgrounded \? undefined : true\}/,
   /aria-labelledby=\{titleId\}/,
   /aria-describedby=\{descriptionId\}/,
   /aria-busy=/,

@@ -18,6 +18,8 @@ MAX_PENDING = 256
 MAX_JPEG = 128 * 1024
 PROGRESS_INTERVAL = 5
 SOURCE_LIMIT = 64
+PTZ_PHOTO_DELAY = 1.0
+PTZ_PHOTO_DEADLINE = 4.0
 
 
 def thumbnail(packet):
@@ -83,8 +85,17 @@ class AiEventOutbox:
         self.recent = OrderedDict()
         self.progress = {}
         self.pending_starts = set()
+        self.delayed_photos = {}
 
-    def offer(self, frame, revision, starts, window_seconds=60):
+    def _queue_start(self, key, captured, rule_id, condition, kinds, frame):
+        try:
+            self.queue.put_nowait((key, captured, rule_id, condition, kinds,
+                                   frame if self.queue.qsize() < 4 else None))
+            return True
+        except queue.Full:
+            return False
+
+    def offer(self, frame, revision, starts, window_seconds=60, *, ptz=False):
         if self.root is None or self.closed.is_set() or not revision:
             return
         key = (frame.camera, revision)
@@ -94,15 +105,15 @@ class AiEventOutbox:
                 return
             opening = previous is None or frame.captured >= previous + window_seconds
             if opening:
-                if not starts or key in self.pending_starts:
+                if not starts or key in self.pending_starts or len(self.pending_starts) >= SOURCE_LIMIT:
                     return
                 rule_id, condition, kinds = starts[0]
-                try:
-                    # Optional JPEG packets keep the original four-frame
-                    # memory budget. Captions can queue independently of that.
-                    self.queue.put_nowait((key, frame.captured, rule_id, condition, kinds,
-                                           frame if self.queue.qsize() < 4 else None))
-                except queue.Full:
+                start = (key, frame.captured, rule_id, condition, kinds)
+                if ptz and condition == "scene":
+                    detected = time.monotonic()
+                    # Keep the trigger timestamp, not the blurred trigger frame.
+                    self.delayed_photos[key] = (detected, frame.generation, start)
+                elif not self._queue_start(*start, frame):
                     return
                 self.pending_starts.add(key)
             else:
@@ -118,6 +129,29 @@ class AiEventOutbox:
             if self.thread is None:
                 self.thread = threading.Thread(target=self._run, name="ai-event-evidence", daemon=True)
                 self.thread.start()
+
+    def follow_frame(self, frame, revision):
+        """Use a fresh captured keyframe; the media receiver never waits for evidence."""
+        if not self.delayed_photos or self.closed.is_set() or not self.guard.acquire(blocking=False):
+            return
+        try:
+            key = (frame.camera, revision)
+            pending = self.delayed_photos.get(key)
+            if pending is None:
+                return
+            detected, generation, start = pending
+            if (generation == frame.generation and PTZ_PHOTO_DELAY <= frame.arrival - detected <= PTZ_PHOTO_DEADLINE
+                    and self.queue.qsize() < 4 and self._queue_start(*start, frame)):
+                del self.delayed_photos[key]
+        finally:
+            self.guard.release()
+
+    def _flush_photo_deadlines(self):
+        now = time.monotonic()
+        with self.guard:
+            for key, (detected, _generation, start) in tuple(self.delayed_photos.items()):
+                if (self.closed.is_set() or now - detected >= PTZ_PHOTO_DEADLINE) and self._queue_start(*start, None):
+                    del self.delayed_photos[key]
 
     def _write(self, header, jpeg=b""):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -153,8 +187,11 @@ class AiEventOutbox:
                 continue
 
     def _run(self):
-        while not self.closed.is_set() or not self.queue.empty():
+        while True:
+            self._flush_photo_deadlines()
             self._flush_progress()
+            if self.closed.is_set() and self.queue.empty():
+                break
             try:
                 key, captured, rule_id, condition, kinds, frame = self.queue.get(timeout=.5)
             except queue.Empty:

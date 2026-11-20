@@ -9,11 +9,12 @@ import useArchiveExport from "../lib/useArchiveExport";
 import ArchiveExportDialog from "./ArchiveExportDialog";
 import { OperationDialog } from "./OperationFeedback";
 
-export default function AiEventDetails({ event, timezone, canReview, onClose, onChanged, busy, onOpen }) {
+export default function EventDetails({ event, timezone, canReview, onClose, onChanged, busy, onOpen }) {
   const { t, locale } = useI18n();
   const copy = key => t(`cameraEvents.ai.${key}`);
   const [evidence, setEvidence] = useState(null);
   const [image, setImage] = useState(null);
+  const [photoState, setPhotoState] = useState("loading");
   const [revision, setRevision] = useState(0);
   const [reviewing, setReviewing] = useState(false);
   const [changed, setChanged] = useState(null);
@@ -22,6 +23,8 @@ export default function AiEventDetails({ event, timezone, canReview, onClose, on
   const controller = useArchiveExport();
   const path = `/camera-events/${encodeURIComponent(event.id)}`;
   const row = changed || evidence?.event || event;
+  const hasPhoto = row.snapshot_available ?? Boolean(row.ai?.snapshot_available);
+  const title = row.ai ? copy("details") : t("cameraEvents.cameraEventDetails");
   const state = evidence?.archive?.state;
 
   useEffect(() => {
@@ -33,17 +36,19 @@ export default function AiEventDetails({ event, timezone, canReview, onClose, on
   }, [path, revision]);
 
   useEffect(() => {
-    if (!row.ai?.snapshot_available) return undefined;
+    if (!hasPhoto) return undefined;
     const request = new AbortController(), current = captureAuthSession();
+    setPhotoState("loading");
     let url;
     apiFetchBlob(`${path}/snapshot`, { signal: request.signal }).then(({ blob }) => {
-      if (!request.signal.aborted && current() && blob.type === "image/jpeg" && blob.size <= 128 * 1024) {
+      if (request.signal.aborted || !current()) return;
+      if (blob.type === "image/jpeg" && blob.size <= 128 * 1024) {
         url = URL.createObjectURL(blob);
         setImage(url);
-      }
-    }).catch(() => {});
+      } else setPhotoState("unavailable");
+    }).catch(() => { if (!request.signal.aborted && current()) setPhotoState("unavailable"); });
     return () => { request.abort(); if (url) URL.revokeObjectURL(url); };
-  }, [path, row.ai?.snapshot_available]);
+  }, [path, hasPhoto]);
 
   async function review() {
     const current = captureAuthSession();
@@ -72,14 +77,14 @@ export default function AiEventDetails({ event, timezone, canReview, onClose, on
     }}/>;
 
   return <OperationDialog dialog={{
-    id: "ai-event-evidence", title: copy("details"), tone: "neutral", className: "cameraAiEvidenceDialog",
+    id: "camera-event-evidence", title, tone: "neutral", className: "cameraAiEvidenceDialog", overlayClassName: "cameraEventsDetailOverlay",
     closeLabel: t("cameraEvents.close"), showFooterClose: false,
     content: <div className="cameraAiEvidence">
-      <div className="cameraAiEvidenceFrame">{image && row.ai.snapshot_available ? <img src={image} alt={copy("frame")}/> : <span>{copy("noFrame")}</span>}</div>
+      <div className="cameraAiEvidenceFrame">{image && hasPhoto ? <img src={image} alt={copy("frame")}/> : <span>{hasPhoto && photoState === "loading" ? t("cameraEvents.loadingPhoto") : copy("noFrame")}</span>}</div>
       <div className="cameraAiEvidenceSummary"><strong>{row.camera_name}</strong><time dateTime={row.occurred_at}>{formatProductDateTime(row.occurred_at, timezone, locale)}</time></div>
       <dl>
         <div><dt>{t("cameraEvents.type")}</dt><dd>{t(eventLabelKey(row))}{eventObjectLabelKeys(row).map(key => ` · ${t(key)}`).join("")}</dd></div>
-        <div><dt>{copy("rule")}</dt><dd>{row.ai.rule_name || copy(row.ai.scope === "zone" ? "unnamedZone" : row.ai.scope === "line" ? "unnamedLine" : "wholeFrame")}</dd></div>
+        {row.ai ? <div><dt>{copy("rule")}</dt><dd>{row.ai.rule_name || copy(row.ai.scope === "zone" ? "unnamedZone" : row.ai.scope === "line" ? "unnamedLine" : "wholeFrame")}</dd></div> : null}
       </dl>
       <p className="cameraAiEvidenceState" role="status">{error
         ? (error === "reviewHelp" ? t("cameraEvents.errors.request_failed") : copy(error))
@@ -90,7 +95,7 @@ export default function AiEventDetails({ event, timezone, canReview, onClose, on
           : state !== "forbidden" ? <button className="button secondary small" type="button" onClick={() => setRevision(value => value + 1)}>{copy("check")}</button> : null}
         {evidence?.archive?.clip ? <button className="button secondary small" type="button" title={copy("clipHelp")} onClick={openClip}>{copy("saveClip")}</button> : null}
       </div>
-      {(canReview || row.ai.false_positive) ? <div className="cameraAiEvidenceReview">
+      {row.ai && (canReview || row.ai.false_positive) ? <div className="cameraAiEvidenceReview">
         <span>{row.ai.false_positive ? copy("falsePositive") : copy("reviewHelp")}</span>
         {canReview ? <button className="button secondary small" type="button" disabled={reviewing} onClick={review}>{copy(row.ai.false_positive ? "unmarkFalse" : "markFalse")}</button> : null}
       </div> : null}

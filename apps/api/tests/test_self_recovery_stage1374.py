@@ -2,6 +2,7 @@
 import contextlib
 import importlib
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -70,6 +71,8 @@ def worker(monkeypatch, tmp_path):
     module = types.ModuleType("recorder_stage1374")
     monkeypatch.setitem(sys.modules, module.__name__, module)
     exec(compile(source, "recorder_stage1374", "exec"), module.__dict__)
+    # Emulate the already provisioned archive namespace from the installer.
+    (module.STORAGE_ROOT / module.STORAGE_NAMESPACE).mkdir(parents=True, exist_ok=True)
     module.events = []
     monkeypatch.setattr(module, "log_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "write_audit_event", lambda **kw: module.events.append(kw))
@@ -88,6 +91,74 @@ def worker_job(worker, now):
     job.state = worker.RecorderState.RECORDING
     worker.jobs[job.camera_id] = job
     return job
+
+
+def test_secondary_archive_writer_isolated_from_default_and_other_secondary_disks(worker, tmp_path, monkeypatch):
+    from recorder_core import archive_destination
+
+    root = tmp_path / "separate"
+    (root / worker.STORAGE_NAMESPACE).mkdir(parents=True)
+    saved = camera()
+    saved.recording_archive_root_id = "separate"
+    other = camera()
+    other.recording_archive_root_id = "unplugged"
+    states = {}
+
+    def selected(row):
+        if row.recording_archive_root_id == "separate":
+            return "separate", root
+        raise RuntimeError("camera_archive_root_unavailable")
+
+    monkeypatch.setattr(worker, "selected_archive_root", selected)
+    assert worker.write_target_problem(saved, True, states) is None
+    assert worker.write_target_problem(other, False, states) == "camera_archive_root_unavailable"
+    assert worker.write_target_problem(camera(), False, states) is None
+    disk = types.SimpleNamespace(f_flag=0, f_blocks=1000, f_bavail=5)
+    monkeypatch.setattr(archive_destination.os, "statvfs", lambda path: disk)
+    assert worker.write_target_problem(saved, False, {}) == "camera_archive_root_low_disk"
+    disk.f_bavail = 80
+    assert worker.write_target_problem(saved, False, {}) == "camera_archive_root_low_disk"
+    disk.f_bavail = 100
+    assert worker.write_target_problem(saved, False, {}) is None
+
+
+def test_real_segment_writer_switches_between_two_folders_without_touching_old_video(worker, tmp_path, monkeypatch):
+    from app.db.session import Base
+    from app.models.recording import ArchiveRoot
+    from sqlalchemy.orm import Session
+
+    video = tmp_path / "source.mkv"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=8",
+                    "-t", "2", "-threads", "1", "-c:v", "mpeg4", str(video)], check=True, timeout=20)
+    a, b = worker.STORAGE_ROOT, tmp_path / "second"
+    for root in (a, b):
+        (root / worker.STORAGE_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(worker.engine)
+    with Session(worker.engine) as db:
+        db.add_all([ArchiveRoot(id="primary", label="Primary", root_path=str(a), is_active=True),
+                    ArchiveRoot(id="secondary", label="Secondary", root_path=str(b), is_active=False)])
+        db.commit()
+    # Kernel bind authorization is verified separately. Here the two paths
+    # are disposable directories and the commands are the real segment mux.
+    monkeypatch.setattr(worker, "mounted_secondary_root", lambda root_id: b if root_id == "secondary" else pytest.fail("wrong root"))
+    row = camera()
+    row.rtsp_main_url = str(video)
+    row.default_record_stream = "main"
+    job = worker.RecordingJob(row.id, row.name, row.storage_folder_name, "always", True, db_job_id="test-first")
+    for selection, target in ((None, a), ("secondary", b)):
+        row.recording_archive_root_id = selection
+        cmd, path = worker.ffmpeg_cmd(row, job)
+        transport = cmd.index("-rtsp_transport")
+        del cmd[transport:transport + 2]  # Demux a local fixture, not a network camera.
+        assert Path(path).is_relative_to(target)
+        subprocess.run(cmd, check=True, capture_output=True, timeout=20)
+        job.db_job_id = "test-second"
+    for root in (a, b):
+        files = [file for file in root.rglob("*") if file.is_file() and file.suffix in {".mp4", ".mkv"}]
+        assert len(files) == 1
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                                 "-of", "csv=p=0", str(files[0])], check=True, capture_output=True, text=True, timeout=20)
+        assert result.stdout.strip() == "video"
 
 
 def test_future_timestamp_is_not_fresh_evidence():

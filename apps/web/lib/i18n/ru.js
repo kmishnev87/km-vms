@@ -3,6 +3,7 @@ export const ruDictionary = {
   androidDownload: { checking: "Загружаем сведения об APK…", available: "APK для Android", failed: "Сведения об APK недоступны. Обновите страницу.", unpublished: "Официальный APK ещё не опубликован.", subtitle: "KM VMS для Android", instructions: "Скачайте APK на телефон, откройте файл и подтвердите установку в Android. Затем добавьте адрес NAS и войдите под своей учётной записью KM VMS. Поддерживаются HTTP и HTTPS.", version: "Версия", download: "Скачать APK", check: "Проверить выпуск", languages: "Android 8 и новее. Английский, китайский и русский языки. Обновления предлагаются в самом Android-приложении." },
   chronologyArchive: { retainedCameras: "Удалённые камеры с записями", deleted: "удалена", archiveOnly: "Только сохранённый архив" },
   cameraEvents: {
+    openPhoto: "Открыть снимок", cameraEventDetails: "Событие камеры", loadingPhoto: "Загрузка снимка…",
     historyRule: { all: "Все правила", loading: "Загрузка правил…", empty: "Нет срабатываний", unavailable: "Правила недоступны", unnamed: "Правило без названия" },
     ai: {"unnamedZone":"Зона без названия","unnamedLine":"Линия без названия","details":"Событие AI","source":"Источник","both":"Все источники","fromAi":"AI на NAS","fromCamera":"События камеры","condition":"Условие","anyCondition":"Все условия","rule":"Правило","conditions":{"presence":"Объект в кадре или зоне","enter":"Вход в зону","exit":"Выход из зоны","crossing":"Пересечение линии","dwell":"Пребывание в зоне","scene":"Смена сцены"},"frame":"Кадр срабатывания","noFrame":"Снимок недоступен","wholeFrame":"Весь кадр","pending":"Сегмент ещё записывается. Проверьте после его завершения.","unavailable":"Записи в момент события нет или она больше недоступна.","forbidden":"У этой учётной записи нет доступа к хронологии.","ready":"Запись доступна","check":"Проверить запись","checkFailed":"Не удалось проверить запись. Повторите попытку.","falsePositive":"Ложное срабатывание","markFalse":"Отметить как ложное","unmarkFalse":"Снять отметку","reviewHelp":"Отметка видна в истории и не меняет обучение AI.","saveClip":"Сохранить отдельный клип","clipHelp":"Готовый клип — отдельная копия. Срок хранения исходной записи не меняется.","invalidRange":"Укажите корректный диапазон клипа."},
     "title": "События камер",
@@ -278,6 +279,10 @@ export const ruDictionary = {
     batchStates: { queued: "Действие принято", running: "Обработка записей", cancel_requested: "Останавливаем после текущего объекта", completed: "Действие завершено", partial: "Завершено с замечаниями", blocked: "Действие не выполнено", failed: "Ошибка обработки", cancelled: "Обработка остановлена" },
     resultStates: { queued: "В очереди", prepared: "В очереди", running: "Выполняется", completed: "Выполнено", partial: "Частично", blocked: "Не выполнено", failed: "Ошибка", cancelled: "Отменено" },
     reasons: {
+      camera_archive_root_unavailable: "Папка записи камеры недоступна.",
+      camera_archive_root_read_only: "В папку камеры нельзя записывать.",
+      camera_archive_root_low_disk: "На диске с записями камеры мало свободного места.",
+      archive_root_assigned_to_cameras: "Сначала назначьте этим камерам другую папку записи.",
       integrity_review_selection_invalid: "Проверьте выбранные записи и действия. Обновите список и повторите выбор.",
       archive_integrity_missing_not_finalized: "Состояние этой записи ещё не позволяет убрать ссылку из каталога. Перепроверьте её после остановки записи.",
       integrity_review_selection_changed: "Список или состояние записей изменились. Обновите его и подтвердите действие заново.",

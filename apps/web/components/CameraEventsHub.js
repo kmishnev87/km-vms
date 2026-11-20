@@ -24,6 +24,7 @@ function EventBell() {
 function EventActionIcon({ action }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-event-action={action}>
     {action === "live" ? <g strokeWidth="1.7"><rect x="2.5" y="3" width="19" height="13" rx="1.5"/><path d="M12 16V20M7.5 20h9"/></g>
+      : action === "photo" ? <><path d="M3 7.5h4l1.5-2.5h7L17 7.5h4v11H3z"/><circle cx="12" cy="12.8" r="3.5"/></>
       : action === "archive" ? <g transform="translate(-.75 -.71875) scale(1.0625)"><circle cx="10.5" cy="11.5" r="8"/><path d="M10.5 7v4.5l3.5 2M17 5.5h4M18.5 9h3M18.5 12.5h3M17.5 16h4"/></g>
       : action === "refresh" ? <><path d="M19.5 10A8 8 0 1 0 19 17M20 3v7h-7"/></>
       : action === "delete" ? <><path d="M4.2 6.8h15.6M8.9 6.8V4.5h6.2v2.3M6.7 7.2 7.6 19c.1 1.05 1 1.9 2.05 1.9h4.7c1.05 0 1.95-.85 2.05-1.9l.9-11.8M10.1 10.7v6.6M13.9 10.7v6.6"/></>
@@ -307,8 +308,10 @@ export default function CameraEventsHub({ currentUser }) {
     observer.observe(node);
     return () => observer.disconnect();
   }, [open, tab]);
-  function rowActions(row) {
-    return <div className="cameraEventsRowActions"><button type="button" className="cameraEventsIconButton" title={t("cameraEvents.watchNow")} aria-label={`${t("cameraEvents.watchNow")}: ${row.camera_name}`} disabled={busy || !row.camera_id} onClick={() => openEvent(row, "live")}><EventActionIcon action="live"/></button>
+  function rowActions(row, allowPhoto = false) {
+    return <div className={`cameraEventsRowActions${allowPhoto ? " withPhoto" : ""}`}>
+      {allowPhoto ? <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.openPhoto")} aria-label={`${t("cameraEvents.openPhoto")}: ${row.camera_name}`} disabled={busy} onClick={() => setDetail(row)}><EventActionIcon action="photo"/></button> : null}
+      <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.watchNow")} aria-label={`${t("cameraEvents.watchNow")}: ${row.camera_name}`} disabled={busy || !row.camera_id} onClick={() => openEvent(row, "live")}><EventActionIcon action="live"/></button>
       {archive ? <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.watchEvent")} aria-label={`${t("cameraEvents.watchEvent")}: ${row.camera_name}`} disabled={busy || !row.camera_id} onClick={() => openEvent(row, "archive")}><EventActionIcon action="archive"/></button> : null}</div>;
   }
 
@@ -356,9 +359,9 @@ export default function CameraEventsHub({ currentUser }) {
       {loading && !history ? <div className="cameraEventsEmpty">{t("cameraEvents.loading")}</div> : !rows.length ? <div className="cameraEventsEmpty">{t("cameraEvents.empty")}</div> : rows.map(row => <article className={`cameraEventsRow ${row.read ? "isRead" : "isUnread"}`} key={row.id}>
         <input aria-label={t("cameraEvents.selectEvent", { camera: row.camera_name })} type="checkbox" checked={selectedHere(row.id)} disabled={busy || loading || Boolean(selectionSnapshot && !selectionSnapshot.visible_ids.includes(row.id))} title={selectionSnapshot && !selectionSnapshot.visible_ids.includes(row.id) ? t("cameraEvents.selectionFrozen") : undefined} onChange={e => toggleRow(row.id, e.target.checked)}/>
         <span className="cameraEventsReadIndicator" role="img" aria-label={t(row.read ? "cameraEvents.viewed" : "cameraEvents.newEvent")} title={t(row.read ? "cameraEvents.viewed" : "cameraEvents.newEvent")}/>
-        <div className="cameraEventsDescription"><strong>{row.camera_name}</strong><div className="cameraEventsKindLine"><span>{t(eventLabelKey(row))}{eventObjectLabelKeys(row).map(key => ` · ${t(key)}`).join("")}</span>{row.ai ? <button className="cameraEventsAiTag" type="button" disabled={busy} onClick={() => setDetail(row)} title={t("cameraEvents.ai.details")} aria-label={t("cameraEvents.ai.details")}>AI</button> : null}</div>{row.ai?.rule_name ? <small>{row.ai.rule_name}{row.ai.false_positive ? ` · ${t("cameraEvents.ai.falsePositive")}` : ""}</small> : row.ai?.false_positive ? <small>{t("cameraEvents.ai.falsePositive")}</small> : null}{row.state_unconfirmed ? <small>{t("cameraEvents.stateUnconfirmed")}</small> : null}{row.source_ambiguous ? <small>{t("cameraEvents.ambiguous")}</small> : null}{row.clock_uncertain ? <small>{t("cameraEvents.clockUncertain")}</small> : null}</div>
+        <div className="cameraEventsDescription"><strong>{row.camera_name}</strong><div className="cameraEventsKindLine"><span>{t(eventLabelKey(row))}{eventObjectLabelKeys(row).map(key => ` · ${t(key)}`).join("")}</span>{row.ai ? <span className="cameraEventsAiTag">AI</span> : null}</div>{row.ai?.rule_name ? <small>{row.ai.rule_name}{row.ai.false_positive ? ` · ${t("cameraEvents.ai.falsePositive")}` : ""}</small> : row.ai?.false_positive ? <small>{t("cameraEvents.ai.falsePositive")}</small> : null}{row.state_unconfirmed ? <small>{t("cameraEvents.stateUnconfirmed")}</small> : null}{row.source_ambiguous ? <small>{t("cameraEvents.ambiguous")}</small> : null}{row.clock_uncertain ? <small>{t("cameraEvents.clockUncertain")}</small> : null}</div>
         <time dateTime={row.occurred_at}>{formatProductDateTime(row.occurred_at, history?.timezone, locale)}</time>
-        {rowActions(row)}
+        {rowActions(row, true)}
       </article>)}
     </div>
     </div>
@@ -377,10 +380,10 @@ export default function CameraEventsHub({ currentUser }) {
     {typeof document !== "undefined" ? createPortal(<>
     <OperationToast toast={errorToast} onClose={() => setErrorToast(null)}/>
     {eventToast ? <aside className="cameraEventArrival" role="status"><button className="cameraEventArrivalClose" type="button" aria-label={t("cameraEvents.close")} onClick={() => setEventToast(null)}>×</button><strong>{eventToast.camera_name}</strong><span>{t(eventLabelKey(eventToast))}{eventObjectLabelKeys(eventToast).map(key => ` · ${t(key)}`).join("")}</span><time dateTime={eventToast.occurred_at}>{formatProductDateTime(eventToast.occurred_at, eventToast.timezone, locale)}</time>{rowActions(eventToast)}</aside> : null}
-    <OperationDialog dialog={open && !detail ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
+    <OperationDialog backgrounded={Boolean(detail || deleteTarget)} dialog={open ? { id: "camera-events", title: `${t("cameraEvents.title")}${unread ? ` · ${unread}` : ""}`, tone: "neutral", className: "cameraEventsDialog", closeLabel: t("cameraEvents.close"), showFooterClose: false,
       content: <div className="cameraEventsPanel"><div className="cameraEventsTabs" role="tablist" aria-label={t("cameraEvents.title")}>{["history", "notifications"].map(key => <button role="tab" aria-selected={tab === key} type="button" className={tab === key ? "isActive" : ""} key={key} onClick={() => setTab(key)}>{t(`cameraEvents.${key}`)}</button>)}</div>{tab === "history" ? historyContent : preferenceContent}</div>
     } : null} onClose={() => setOpen(false)}/>
-    {open && detail ? <AiEventDetails event={detail} timezone={history?.timezone || "UTC"} canReview={manage}
+    {open && detail ? <AiEventDetails key={detail.id} event={detail} timezone={history?.timezone || "UTC"} canReview={manage}
       onClose={() => setDetail(null)} onChanged={() => setRefresh(n => n + 1)} busy={busy}
       onOpen={mode => openEvent(detail, mode)} /> : null}
     <OperationDialog dialog={deleteTarget ? {

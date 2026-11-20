@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
 import AuthenticatedPreviewImage from "../../components/AuthenticatedPreviewImage";
 import CameraEditor from "../../components/cameras/CameraEditor";
+import { ArchiveMoveDialog } from "../../components/storage/CameraArchivePlacement";
 import { CameraPtzBadge, CameraPtzDialog } from "../../components/cameras/CameraPtz";
 import { invalidateCameraPtz, usePtzCapabilities } from "../../lib/useCameraPtz";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
@@ -161,6 +162,7 @@ export default function CamerasPage() {
   const [secondaryStatusState, setSecondaryStatusState] = useState("idle");
   const [showEditor, setShowEditor] = useState(false);
   const [editorCamera, setEditorCamera] = useState(null);
+  const [archiveMoveOffers, setArchiveMoveOffers] = useState([]);
   const [error, setError] = useState("");
   const [deleteResult, setDeleteResult] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -277,6 +279,7 @@ export default function CamerasPage() {
     invalidateCameraPtz();
     setShowEditor(false);
     setEditorCamera(null);
+    if (saved?.archive_move_offer) setArchiveMoveOffers([saved.archive_move_offer]);
     await Promise.all([load(), loadSecondaryStatus()]);
     notifyCameraRuntimeChanged();
   }
@@ -520,6 +523,7 @@ export default function CamerasPage() {
       </div>
 
       {showEditor ? <CameraEditor camera={editorCamera} onClose={() => setShowEditor(false)} onSaved={cameraSaved} /> : null}
+      {archiveMoveOffers.length ? <ArchiveMoveDialog offers={archiveMoveOffers} onClose={() => setArchiveMoveOffers([])} /> : null}
       {ptzCamera && ptzCapabilities[ptzCamera.id]?.supported ? <CameraPtzDialog
         key={`${ptzCamera.id}-${ptzCapabilities[ptzCamera.id].profile_token}`}
         camera={ptzCamera} capability={ptzCapabilities[ptzCamera.id]} onClose={() => setPtzCameraId(null)} /> : null}

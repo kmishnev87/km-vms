@@ -134,6 +134,7 @@ class SettingsUpdateRequest(BaseModel):
     expected_recording_format: Literal["mkv", "mp4"] | None = None
     hardware_preferred_backend: str | None = None
     auto_free_space_cleanup_enabled: bool | None = None
+    archive_failover_enabled: bool | None = None
     auto_free_space_acknowledgement: AutoFreeSpaceAcknowledgement | None = None
 
 
@@ -831,6 +832,7 @@ def patch_settings(
         ("timezone", "settings.timezone_changed", "Часовой пояс", "timezone"),
         ("hardware_preferred_backend", "settings.hardware_backend_changed", "Аппаратное ускорение", "hardware backend"),
         ("recording_format", "settings.recording_format_changed", "Формат записи", "recording format"),
+        ("archive_failover_enabled", "settings.archive_failover_changed", "Аварийная запись", "archive failover"),
         ("online_mode", "settings.online_mode_changed", "Режим онлайн", "live mode"),
         ("online_mode", "settings.online_mode_changed", "Режим онлайн", "live viewing mode"),
     ]

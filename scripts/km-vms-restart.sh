@@ -5,6 +5,7 @@ APP_DIR="${KM_VMS_APP_DIR:-}"
 PROJECT_NAME="${KM_VMS_PROJECT_NAME:-}"
 DOCKER_COMPOSE_BIN="${KM_VMS_DOCKER_COMPOSE:-}"
 VERIFY_STORAGE_SELECTION=0
+ATTACH_ARCHIVE_ROOT=""
 INITIAL_SETUP=0
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
@@ -311,6 +312,12 @@ while [ "$#" -gt 0 ]; do
       VERIFY_STORAGE_SELECTION=1
       shift
       ;;
+    --attach-archive-root)
+      [ "$#" -ge 2 ] || fail "--attach-archive-root requires a value"
+      printf '%s\n' "$2" | grep -Eq '^[a-z0-9_][a-z0-9_.-]{0,35}$' || fail "Invalid archive root id"
+      ATTACH_ARCHIVE_ROOT="$2"
+      shift 2
+      ;;
     --initial-setup)
       INITIAL_SETUP=1
       shift
@@ -327,6 +334,7 @@ done
 
 [ -n "$APP_DIR" ] || fail "--app-dir or KM_VMS_APP_DIR is required."
 [ "$INITIAL_SETUP" = "0" ] || [ "$VERIFY_STORAGE_SELECTION" = "1" ] || fail "--initial-setup requires --verify-storage-selection"
+[ -z "$ATTACH_ARCHIVE_ROOT" ] || [ "$VERIFY_STORAGE_SELECTION" = "0" ] || fail "Conflicting storage modes"
 APP_DIR=$(normalize_path "$APP_DIR")
 [ -f "$APP_DIR/.env" ] || fail ".env not found in app dir: $APP_DIR"
 SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.json"
@@ -367,6 +375,8 @@ bootstrap_command reconcile-policies \
   fail "Container restart policies could not be reconciled."
 [ "$WRITER_ISOLATION" != "active" ] || [ "$VERIFY_STORAGE_SELECTION" = "0" ] ||
   fail "maintenance_writer_isolation_active"
+[ "$WRITER_ISOLATION" != "active" ] || [ -z "$ATTACH_ARCHIVE_ROOT" ] ||
+  fail "maintenance_writer_isolation_active"
 
 (
   cd "$APP_DIR"
@@ -376,7 +386,20 @@ bootstrap_command reconcile-policies \
     prepare_initial_storage_configuration
   fi
   compose_with_archive_roots "$@" config >/dev/null
-  if [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then
+  if [ -n "$ATTACH_ARCHIVE_ROOT" ]; then
+    attach_path="/storage/archive-roots/$ATTACH_ARCHIVE_ROOT"
+    compose_with_archive_roots "$@" config | grep -F "target: $attach_path" >/dev/null ||
+      fail "Approved archive attachment is not present in the deployment plan"
+    compose_with_archive_roots "$@" up -d --no-deps api recorder
+    for service in api recorder; do
+      container=$(compose_with_archive_roots "$@" ps -q "$service")
+      [ -n "$container" ] || fail "Archive attachment has no running $service"
+      docker inspect -f '{{range .Mounts}}{{if .RW}}{{println .Destination}}{{end}}{{end}}' "$container" |
+        grep -Fx "$attach_path" >/dev/null || fail "Archive attachment missing in $service"
+      docker exec "$container" sh -c 'test -d "$1/kmvms/recordings" && test -w "$1/kmvms/recordings"' sh "$attach_path" ||
+        fail "Archive attachment is not writable in $service"
+    done
+  elif [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then
     compose_with_archive_roots "$@" up -d --no-deps --force-recreate api recorder
   else
     reconcile_persistent_services "$@"

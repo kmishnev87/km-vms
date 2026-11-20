@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
+from app.services.camera_archive_placement import ARCHIVE_TARGET_FAILURES, current_default_id, storage_route_evidence
 from app.services.camera_source_health import build_source_issues
 from app.services.live_engine import manager as live_manager
 from app.services.retention_automation import auto_free_runtime_status, retention_runtime_status
@@ -35,6 +36,8 @@ from app.services.timezone_contract import format_system_iso, timezone_context, 
 SEVERITIES = ("ok", "warning", "error", "unknown")
 LIVE_STARTING_WARNING_THRESHOLD_SECONDS = 30
 SAFE_REASON_CODES = {
+    *ARCHIVE_TARGET_FAILURES,
+    "camera_archive_failover", "camera_archive_no_destination",
     "disabled",
     "no_evidence",
     "recorder_heartbeat_stale",
@@ -343,6 +346,8 @@ def _build_camera_domain(
         event_source = (recorder_state.get("event_control") or {}).get("source_status")
         job_state = recorder_state.get("job_state")
         current_failure = bool(recorder_state.get("current_failure"))
+        archive_problem = recorder_state.get("camera_last_error")
+        route = storage_route_evidence(camera, recorder_state)
         confirmed_recording = bool(recorder_state.get("confirmed_recording"))
         stale_current_segment = bool(recorder_state.get("stale_current_segment"))
         current_segment_age = recorder_state.get("current_segment_age_seconds")
@@ -372,6 +377,13 @@ def _build_camera_domain(
         elif configured_state != "configured":
             severity = "unknown"
             _append_reason(reasons, "no_evidence")
+        elif route and route["status"] == "blocked":
+            severity = "error"
+            _append_reason(reasons, "camera_archive_no_destination")
+            _append_reason(reasons, route["reason"])
+        elif archive_problem in ARCHIVE_TARGET_FAILURES:
+            severity = "error"
+            _append_reason(reasons, archive_problem)
         elif current_failure:
             severity = "error"
             _append_reason(reasons, "recording_failed")
@@ -408,6 +420,10 @@ def _build_camera_domain(
             severity = str(live_state.get("severity"))
             for reason in live_state.get("reason_codes") or []:
                 _append_reason(reasons, reason)
+        elif route:
+            severity = "warning"
+            _append_reason(reasons, "camera_archive_failover")
+            _append_reason(reasons, route["reason"])
         else:
             severity = "ok"
 
@@ -422,6 +438,7 @@ def _build_camera_domain(
                 "event_source_status": event_source,
                 "recording_state": job_state or "unknown",
                 "confirmed_recording": confirmed_recording,
+                "archive_route": route,
                 "recording_health": recorder_state.get("recording_health") or ("degraded" if stale_current_segment else "unknown"),
                 "recording_startup_elapsed_seconds": startup_elapsed,
                 "recording_startup_warning_after_seconds": RECORDING_STARTING_WARNING_THRESHOLD_SECONDS,
@@ -773,8 +790,15 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     live_domain, live_by_camera = _build_live_domain(cameras)
     cameras_domain = _build_camera_domain(db, now, ctx, cameras, recorder_states, live_by_camera)
     storage_summary = build_lightweight_storage_monitoring_summary(db)
-    source_issues = build_source_issues(cameras, recorder_states, now, storage_suspended=bool(
-        _as_dict(storage_summary.get("auto_free_space_policy")).get("recording_suspended_by_low_disk")))
+    archive_paths = {item["id"]: item.get("host_path") or item.get("root_path")
+                     for item in storage_summary.get("archive_roots", [])}
+    for item in cameras_domain.get("items", []):
+        if route := item.get("archive_route"):
+            route["source_path"] = archive_paths.get(route["primary_root_id"])
+            route["target_path"] = archive_paths.get(route["actual_root_id"] or route["effective_root_id"])
+    storage_suspended = bool(_as_dict(storage_summary.get("auto_free_space_policy")).get("recording_suspended_by_low_disk"))
+    source_issues = build_source_issues(cameras, recorder_states, now, storage_suspended=storage_suspended,
+                                       default_archive_root_id=current_default_id(db) if storage_suspended else None)
     cameras_domain["source_issues"] = source_issues
     if source_issues:
         cameras_domain["severity"] = _rollup([cameras_domain["severity"], "warning"])

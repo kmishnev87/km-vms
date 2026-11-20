@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { acquireModalScrollLock } from "../lib/modalScrollLock";
 
 export function useModalBodyScrollLock(active, { freezePosition = false } = {}) {
@@ -18,12 +18,16 @@ function focusableElements(container) {
   ).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
 }
 
-export function OperationDialog({ dialog, onClose }) {
+export function OperationDialog({ dialog, onClose, backgrounded = false }) {
   const containerRef = useRef(null);
   const cancelRef = useRef(null);
   const closeRef = useRef(null);
   const returnFocusRef = useRef(null);
   const dialogOpen = Boolean(dialog);
+  const bindOverlay = useCallback(node => {
+    // Keep the native attribute across React versions that serialize it differently.
+    node?.toggleAttribute("inert", backgrounded);
+  }, [backgrounded]);
 
   useModalBodyScrollLock(dialogOpen);
 
@@ -37,7 +41,7 @@ export function OperationDialog({ dialog, onClose }) {
   }, [dialogOpen]);
 
   useEffect(() => {
-    if (!dialogOpen) return undefined;
+    if (!dialogOpen || backgrounded) return undefined;
     const timer = window.setTimeout(() => {
       const activeElement = document.activeElement;
       const activeInsideDialog = activeElement instanceof HTMLElement && containerRef.current?.contains(activeElement);
@@ -48,7 +52,7 @@ export function OperationDialog({ dialog, onClose }) {
       preferred?.focus({ preventScroll: true });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [dialog?.id, dialog?.busy, dialogOpen]);
+  }, [dialog?.id, dialog?.busy, dialogOpen, backgrounded]);
 
   if (!dialog) return null;
   const hasConfirm = typeof dialog.onConfirm === "function";
@@ -98,14 +102,16 @@ export function OperationDialog({ dialog, onClose }) {
 
   return (
     <div
+      ref={bindOverlay}
       className={`operationFeedbackOverlay ${compactConfirmation ? "operationFeedbackOverlay-compactConfirmation" : ""} ${dialog.overlayClassName || ""}`.trim()}
       role="presentation"
+      aria-hidden={backgrounded ? true : undefined}
     >
       <div
         ref={containerRef}
         className={`operationFeedbackDialog operationFeedbackDialog-${dialog.tone || "warning"} ${presentationClass} ${dialog.className || ""}`.trim()}
         role="dialog"
-        aria-modal="true"
+        aria-modal={backgrounded ? undefined : true}
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         aria-busy={dialog.busy ? "true" : "false"}

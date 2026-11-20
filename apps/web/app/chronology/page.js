@@ -1973,7 +1973,7 @@ export default function ChronologyPage() {
                 aria-pressed={playRequested}
                 aria-busy={playPending}
               ><span className="chronologyPlayGlyph" aria-hidden="true">{"\u25b6"}</span></button>
-              <button type="button" className="chronologyIconButton" onClick={handleNextRecording}
+              <button type="button" className="chronologyIconButton chronologyNextRecordingButton" onClick={handleNextRecording}
                 disabled={findingNextRecording || !selectedCameraIds.length}
                 aria-busy={findingNextRecording} title={TEXT.nextRecording} aria-label={TEXT.nextRecording}>
                 <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">

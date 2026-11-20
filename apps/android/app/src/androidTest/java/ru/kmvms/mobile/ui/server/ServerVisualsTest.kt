@@ -25,10 +25,10 @@ class ServerVisualsTest {
         } } }
         listOf("ok","warning","error","unknown").forEach{compose.onNodeWithTag("state-$it").assertIsDisplayed()}
     }
-    @Test fun activeLabelIsCenteredAgainstTheWholeArchiveRootContent() {
-        compose.setContent { KMVMSTheme { ArchiveRootCard(ArchiveRoot("test","Main archive","/storage/archive/cameras",true,true,1024,false)) } }
+    @Test fun archiveStatusIsCenteredAgainstTheWholeArchiveRootContent() {
+        compose.setContent { KMVMSTheme { ArchiveRootCard(ArchiveRoot("test","Archive folder","/storage/archive/cameras",false,true,1024,false,recordingAccess="ready")) } }
         val row=compose.onNodeWithTag("archive-root-test").getUnclippedBoundsInRoot()
-        val label=compose.onNodeWithTag("archive-root-active-test").getUnclippedBoundsInRoot()
+        val label=compose.onNodeWithTag("archive-root-status-test").getUnclippedBoundsInRoot()
         assertEquals(((row.top+row.bottom)/2).value,((label.top+label.bottom)/2).value,.5f)
     }
     @Test fun createUserRequiresMatchingPasswordAndDoesNotOfferAdministratorToAnAdministrator() {

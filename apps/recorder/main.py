@@ -56,6 +56,10 @@ from recorder_core.linked_recording import (
     origin_intent, present as camera_present, resolve_links,
 )
 from recorder_core.event_buffer import PART_STAMP, BufferedCamera, BufferedWriter, PacketBudget
+from recorder_core.archive_destination import (
+    Destination, Route, mounted_paths, mounted_secondary_root, probe_write,
+    secondary_write_state, select_route, writer_disk_problem,
+)
 from recorder_core.storage_activation import recording_start_allowed
 from recorder_core.segment_accounting import SegmentAccounting, bounded_file_fingerprint, receipt_object_identity
 from recorder_core.segment_recovery import probe_interrupted_segment
@@ -163,6 +167,10 @@ class RecordingJob:
     stalled_samples: int = 0
     stable_progress_since: float | None = None
     waiting_for_storage_activation: bool = False
+    archive_target_problem: str | None = None
+    storage_route: Route | None = None
+    storage_writer_unavailable: bool = False
+    storage_route_report: dict | None = field(default_factory=dict)
     event_episode: Episode = field(default_factory=Episode)
     event_decision: Decision | None = None
     link_intent: Intent | None = None
@@ -716,6 +724,143 @@ def active_archive_root() -> tuple[str, Path]:
     return str(row.id), STORAGE_ROOT
 
 
+def selected_archive_root(row) -> tuple[str, Path]:
+    root_id = getattr(row, "recording_archive_root_id", None)
+    if not root_id:
+        return active_archive_root()
+    with engine.connect() as conn:
+        root = conn.execute(text("""
+            SELECT id, is_active FROM archive_roots WHERE id = :root AND retired_at IS NULL
+        """), {"root": root_id}).first()
+    if not root:
+        raise RuntimeError("camera_archive_root_unavailable")
+    return root_id, STORAGE_ROOT if root.is_active else mounted_secondary_root(root_id)
+
+
+secondary_low_disk_roots: set[str] = set()
+writer_root_faults: dict[str, tuple[str, float]] = {}
+archive_device_cache: dict[str, tuple[str | None, int]] = {}
+
+
+def archive_destinations():
+    """A single snapshot for all cameras, using only proven archive mounts."""
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT id, is_active, physical_identity FROM archive_roots
+             WHERE retired_at IS NULL AND retirement_status IS NULL
+             ORDER BY is_active DESC, updated_at DESC, id
+        """)).all()
+        setting = conn.execute(text("SELECT archive_failover_enabled FROM system_settings ORDER BY id LIMIT 1")).scalar()
+    default = next((str(row.id) for row in rows if row.is_active), None)
+    mounts = mounted_paths()
+    now = time.monotonic()
+    targets = {}
+    for row in rows:
+        root_id = str(row.id)
+        try:
+            if row.is_active:
+                if STORAGE_ROOT == Path("/storage/archive") and STORAGE_ROOT.as_posix() not in mounts:
+                    raise RuntimeError("camera_archive_root_unavailable")
+                path = STORAGE_ROOT
+            else:
+                path = mounted_secondary_root(root_id, mounts)
+            problem, size, device = probe_write(path, STORAGE_NAMESPACE, was_full=root_id in secondary_low_disk_roots)
+        except (OSError, RuntimeError):
+            path, problem, size, device = None, "camera_archive_root_unavailable", 0, None
+        writer_fault = writer_root_faults.get(root_id)
+        if writer_fault and now >= writer_fault[1]:
+            writer_root_faults.pop(root_id, None)
+            writer_fault = None
+        if writer_fault:
+            problem = problem or writer_fault[0]
+        if device is not None:
+            archive_device_cache[root_id] = (row.physical_identity, device)
+        elif root_id in archive_device_cache and archive_device_cache[root_id][0] == row.physical_identity:
+            device = archive_device_cache[root_id][1]
+        if problem == "camera_archive_root_low_disk":
+            secondary_low_disk_roots.add(root_id)
+        elif not problem:
+            secondary_low_disk_roots.discard(root_id)
+        targets[root_id] = Destination(root_id, row.physical_identity, path, size, device, problem)
+    return default, targets, bool(setting)
+
+
+def archive_route_for(row, job, snapshot, clock):
+    default, targets, allowed = snapshot
+    primary_id = str(getattr(row, "recording_archive_root_id", None) or default or "")
+    assigned = targets.get(primary_id)
+    if assigned is None:
+        assigned = Destination(primary_id, None, None, 0, None, "camera_archive_root_unavailable")
+    previous = job.storage_route if job else None
+    # Preserve proof of the source device across a mount disruption in this
+    # process; never guess that an unknown mounted path is a different disk.
+    if assigned.device is None and previous and previous.primary_id == primary_id and not previous.fallback \
+            and previous.target and previous.target.device is not None:
+        assigned = replace(assigned, device=previous.target.device)
+    return select_route(assigned, targets, previous, allow_fallback=allowed, now=clock)
+
+
+def writer_archive_root(row, job):
+    route = job.storage_route
+    if route is None:
+        return selected_archive_root(row)
+    default, targets, allowed = archive_destinations()
+    if route.primary_id != str(getattr(row, "recording_archive_root_id", None) or default or ""):
+        raise RuntimeError("camera_archive_root_unavailable")
+    target = targets.get(route.target.root_id) if route.target else None
+    if not target or not target.ready or (route.fallback and not allowed):
+        raise RuntimeError((target.problem if target else None) or "camera_archive_root_unavailable")
+    return target.root_id, target.path
+
+
+def publish_storage_route(job, enabled):
+    route = job.storage_route
+    running = bool(job.process and job.process.poll() is None and job.db_job_id)
+    actual = job.archive_root_id if running else None
+    report = None
+    if enabled and route and (route.problem or (actual and actual != route.primary_id)):
+        target = route.target.root_id if route.target else None
+        phase = ("blocked" if not target else "returning" if actual and target == route.primary_id
+                 else "writing" if running and actual == target else "waiting")
+        previous = job.storage_route_report or {}
+        report = {"instance": RECORDER_INSTANCE_ID, "primary_root_id": route.primary_id, "effective_root_id": target,
+                  "actual_root_id": actual, "job_id": job.db_job_id if running else None,
+                  "status": phase, "reason": route.problem or previous.get("reason")}
+    if job.storage_route_report == report:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE cameras SET recording_storage_state = CAST(:value AS json)
+             WHERE id = :id AND deleted_at IS NULL
+               AND recording_storage_state::text IS DISTINCT FROM :value
+        """), {"id": job.camera_id, "value": json.dumps(report) if report is not None else None})
+    job.storage_route_report = report
+
+
+def write_target_problem(row, low_disk, cache=None):
+    assigned = getattr(row, "recording_archive_root_id", None)
+    global_problem = "critical_low_disk_recording_suspended" if low_disk else None
+    if not assigned:
+        return global_problem
+    if cache is not None and assigned in cache:
+        return cache[assigned]
+    try:
+        _, path = selected_archive_root(row)
+        if path == STORAGE_ROOT:
+            return global_problem  # The SQL event gate can differ from the current global sample.
+        else:
+            problem = secondary_write_state(path, STORAGE_NAMESPACE, was_full=assigned in secondary_low_disk_roots)
+            if problem == "camera_archive_root_low_disk":
+                secondary_low_disk_roots.add(assigned)
+            elif not problem:
+                secondary_low_disk_roots.discard(assigned)
+    except Exception:
+        problem = "camera_archive_root_unavailable"
+    if cache is not None:
+        cache[assigned] = problem
+    return problem
+
+
 def kmvms_recordings_root(root: Path | None = None) -> Path:
     path = (root or active_archive_root()[1]) / STORAGE_NAMESPACE
     path.mkdir(parents=True, exist_ok=True)
@@ -1232,6 +1377,7 @@ def camera_signature(row, recording_format: str) -> tuple[Any, ...]:
         row.recording_mode,
         row.default_record_stream,
         int(row.segment_minutes or 5),
+        getattr(row, "recording_archive_root_id", None),
         normalize_recording_format(recording_format),
     )
 
@@ -1247,10 +1393,14 @@ def ffmpeg_cmd(camera, job: RecordingJob) -> tuple[list[str], str] | tuple[None,
         raise RuntimeError("recording job metadata is required before building segment path")
     recording_format = normalize_recording_format(job.recording_format)
     media_metadata = format_metadata(recording_format)
-    root_id, root_path = active_archive_root()
+    root_id, root_path = writer_archive_root(camera, job)
     if not root_path.exists() or not root_path.is_dir():
         raise RuntimeError("active_archive_root_unavailable")
     namespace_root = root_path / STORAGE_NAMESPACE
+    if root_path != STORAGE_ROOT:
+        problem = secondary_write_state(root_path, STORAGE_NAMESPACE, was_full=root_id in secondary_low_disk_roots)
+        if problem:
+            raise OSError(problem)
     namespace_root.mkdir(parents=True, exist_ok=True)
     if not os.access(namespace_root, os.W_OK):
         raise PermissionError("active_archive_root_unwritable")
@@ -1496,7 +1646,7 @@ def event_start_allowed(row, job: RecordingJob, policy: dict) -> bool:
             SELECT c.id
               FROM cameras c
               CROSS JOIN (
-                  SELECT recording_suspended_by_low_disk, event_recording_emergency_enabled
+                  SELECT recording_suspended_by_low_disk, event_recording_emergency_enabled, archive_failover_enabled
                     FROM system_settings ORDER BY id LIMIT 1
               ) flags
              WHERE c.id = :camera_id AND c.enabled AND c.deleted_at IS NULL
@@ -1510,12 +1660,19 @@ def event_start_allowed(row, job: RecordingJob, policy: dict) -> bool:
                AND c.rtsp_transport IS NOT DISTINCT FROM :transport
                AND c.rtsp_main_url IS NOT DISTINCT FROM :main_url
                AND c.rtsp_sub_url IS NOT DISTINCT FROM :sub_url
-               AND NOT flags.recording_suspended_by_low_disk
+               AND c.recording_archive_root_id IS NOT DISTINCT FROM :recording_root
+               AND (:routed OR NOT flags.recording_suspended_by_low_disk OR EXISTS (
+                   SELECT 1 FROM archive_roots a WHERE a.id = c.recording_archive_root_id
+                   AND NOT a.is_active AND a.retired_at IS NULL))
+               AND (NOT :fallback OR COALESCE(flags.archive_failover_enabled, FALSE))
                AND (:normal_event OR flags.event_recording_emergency_enabled)
             """), {
                 "camera_id": row.id, "revision": str(policy["revision"]), "cutoff": job.event_episode.cutoff,
                 "record_stream": row.default_record_stream, "main_url": row.rtsp_main_url, "sub_url": row.rtsp_sub_url,
                 "live_stream": row.default_live_stream, "transport": row.rtsp_transport,
+                "recording_root": getattr(row, "recording_archive_root_id", None),
+                "routed": bool(job.storage_route and job.storage_route.target),
+                "fallback": bool(job.storage_route and job.storage_route.fallback),
                 "normal_event": request != "emergency", "source": policy["source"],
             }).first() is not None
 
@@ -1529,11 +1686,15 @@ def linked_start_allowed(row, job: RecordingJob) -> bool:
     with engine.connect() as conn:
         current_rows = camera_control_rows(conn)
     current = next((value for value in current_rows if value.id == row.id), None)
-    if (not camera_present(current) or not current.enabled or current.event_low_disk is not False
+    route_snapshot = archive_destinations() if job.storage_route else None
+    available = (bool(archive_route_for(current, job, route_snapshot, time.monotonic()).target)
+                 if current is not None and route_snapshot else
+                 current is not None and not write_target_problem(current, current.event_low_disk is not False))
+    if (not camera_present(current) or not current.enabled or not available
             or current.default_live_stream != row.default_live_stream
             or camera_signature(current, job.recording_format) != camera_signature(row, job.recording_format)):
         return False
-    _, links = camera_control_intents(current_rows, low_disk=False, fresh=True)
+    _, links = camera_control_intents(current_rows, low_disk=False, fresh=True, archive_snapshot=route_snapshot)
     existing = links.get(row.id)
     return bool(existing and existing.generation == intent.generation
                 and existing.decision.request == intent.decision.request
@@ -1801,8 +1962,8 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     return finalized
 
 
-def enforce_retention(camera_id: int, folder_name: str, retention_days: int, storage_quota_gb: int) -> None:
-    root = kmvms_recordings_root() / f"camera_{int(camera_id)}"
+def enforce_retention(camera_id: int, folder_name: str, retention_days: int, storage_quota_gb: int, *, target_root=None) -> None:
+    root = kmvms_recordings_root(target_root) / f"camera_{int(camera_id)}"
     root.parent.mkdir(parents=True, exist_ok=True)
     if not root.exists():
         return
@@ -1813,11 +1974,16 @@ def enforce_retention(camera_id: int, folder_name: str, retention_days: int, sto
 
 def retention_ready(row, job: RecordingJob) -> bool:
     try:
+        target = (writer_archive_root(row, job)[1]
+                  if (job.storage_route is not None or getattr(row, "recording_archive_root_id", None)) and job.process is None
+                  else None)
         enforce_retention(
             row.id,
             row.storage_folder_name,
             int(row.retention_days or 30),
             int(row.storage_quota_gb or 50),
+            **({"target_root": target} if target is not None else
+               {"target_root": job.archive_root_path} if job.process is not None and job.archive_root_path != STORAGE_ROOT else {}),
         )
     except Exception as exc:
         handle_retention_failure(job, exc)
@@ -1888,14 +2054,22 @@ def reconcile_event_buffer(row, job, policy, *, allowed, suspended=False, enable
             job.event_buffer.idle()
 
 
-def sync_camera_writer(row, job, format_choice, low_disk, *, enabled):
+def sync_camera_writer(row, job, format_choice, low_disk, *, enabled, storage_problem=None):
     if not enabled:
         idle_camera(row, job, RecorderState.DISABLED, RecorderState.DISABLED, audit_event="camera_disabled_recording_stopped")
         return
     if low_disk and (row.recording_mode == "always" or job.event_decision is not None):
-        reason = "critical_low_disk_recording_suspended"
+        reason = storage_problem or "critical_low_disk_recording_suspended"
         idle_camera(row, job, RecorderState.IDLE, reason, audit_event=reason)
+        if storage_problem and (storage_problem != job.archive_target_problem or job.last_error != storage_problem):
+            job.archive_target_problem = storage_problem
+            job.last_error = storage_problem
+            update_camera_status_from_job(job)
         return
+    if job.archive_target_problem:
+        job.archive_target_problem = None
+        job.last_error = None
+        update_camera_status_from_job(job)
     if job.event_decision is not None:
         if job.event_decision.request is None:
             reason = "linked_recording_waiting" if job.link_intent is not None else "event_recording_waiting"
@@ -1912,18 +2086,24 @@ def sync_camera_writer(row, job, format_choice, low_disk, *, enabled):
 
     effective_recording_format, format_apply_mode, format_requested_epoch = format_choice
     desired_signature = camera_signature(row, effective_recording_format)
-    if job.process and job.process.poll() is None:
+    route_target = job.storage_route.target.root_id if job.storage_route and job.storage_route.target else None
+    following_route = bool(route_target and job.archive_root_id and route_target != job.archive_root_id)
+    if job.process and job.process.poll() is None and not (following_route and job.storage_writer_unavailable):
         sync_segment_metadata_for_job(job)
         if handle_stale_current_segment(row, job):
             return
 
-    if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
+    if job.config_signature and (job.config_signature != desired_signature or following_route) and job.process and job.process.poll() is None:
         format_changed = job.recording_format != effective_recording_format
         format_only = format_changed and job.config_signature[:-1] == desired_signature[:-1]
-        if format_only:
+        root_changed = following_route or job.config_signature[-2] != desired_signature[-2]
+        root_only = root_changed and job.config_signature[:-2] == desired_signature[:-2] and not format_changed
+        if (format_only or root_only) and not (following_route and job.storage_writer_unavailable):
             if time.monotonic() < job.format_change_retry_at:
                 return
-            if not format_change_ready(job, effective_recording_format, format_apply_mode, format_requested_epoch):
+            change_key = f"root:{route_target or desired_signature[-2]}" if root_only else effective_recording_format
+            apply_mode = "next_segment" if root_only else format_apply_mode
+            if not format_change_ready(job, change_key, apply_mode, None if root_only else format_requested_epoch):
                 return
         log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name, recording_format=effective_recording_format)
         write_audit_event(
@@ -1935,8 +2115,8 @@ def sync_camera_writer(row, job, format_choice, low_disk, *, enabled):
         )
         finished = stop_camera(
             row.id,
-            "recording_format_change" if format_changed else "config_changed",
-            graceful_format_change=format_changed,
+            "recording_archive_target_change" if root_changed else "recording_format_change" if format_changed else "config_changed",
+            graceful_format_change=format_changed or root_changed,
         )
         if not finished and job.process and job.process.poll() is None:
             return
@@ -2019,6 +2199,7 @@ def camera_control_rows(executor):
                    c.rtsp_main_url, c.rtsp_sub_url, c.rtsp_transport, c.recording_mode,
                    c.onvif_path, c.onvif_channel_id, c.onvif_profile_token, c.onvif_sub_profile_token,
                    c.default_record_stream, c.default_live_stream, c.segment_minutes, c.retention_days, c.storage_quota_gb,
+                   c.recording_archive_root_id,
                    c.deleted_at, c.status, c.recording_policy, c.recording_signal_state,
                    (c.protocol = 'onvif' AND CASE WHEN c.recording_policy IS NULL THEN c.events_enabled
                     ELSE COALESCE(c.recording_policy ->> 'source' = 'camera'
@@ -2051,7 +2232,7 @@ def ai_generation(row, policy):
     return hashlib.sha256(json.dumps(value, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
 
-def camera_control_intents(rows, *, low_disk, fresh=False):
+def camera_control_intents(rows, *, low_disk, fresh=False, target_cache=None, archive_snapshot=None, archive_routes=None):
     now, clock = time.time(), time.monotonic()
     decisions, origins = {}, {}
     has_links = any(link_configured(row) for row in rows)
@@ -2059,12 +2240,16 @@ def camera_control_intents(rows, *, low_disk, fresh=False):
         if link_configured(row):
             continue
         policy = event_policy(row)
-        suspended = low_disk or getattr(row, "event_low_disk", None) is not False
+        job = jobs.get(row.id)
+        route = (archive_routes or {}).get(row.id)
+        if route is None and archive_snapshot:
+            route = archive_route_for(row, job, archive_snapshot, clock)
+        suspended = not route.target if route is not None else bool(
+            write_target_problem(row, low_disk or getattr(row, "event_low_disk", None) is not False, target_cache))
         if policy is None:
             if has_links:
                 origins[row.id] = origin_intent(row, suspended=suspended)
             continue
-        job = jobs.get(row.id)
         episode = job.event_episode if job else Episode()
         if fresh:
             episode = replace(episode)
@@ -2092,11 +2277,13 @@ def sync_cameras() -> None:
         ai_configs = {}
         ai_revisions = {}
         ai_notification_windows = {}
+        ai_camera_views = {}
         for row in rows:
             job = get_or_create_job(row)
             job.ai_generation = job.ai_status = None
             policy = ai_policy(row)
             if policy and camera_present(row):
+                ai_camera_views[row.id] = ai_view_kind(row, AI_EVENT_ROOT)
                 if row.enabled:
                     ai_revisions[row.id] = policy["revision"]
                     ai_notification_windows[row.id] = policy["postrecord_minutes"] * 60
@@ -2106,11 +2293,11 @@ def sync_cameras() -> None:
                     kind for kind in kinds if isinstance(kind, str) and kind in AI_KINDS) if isinstance(kinds, list) else frozenset())
                 if policy.get("ai_rules") is not None:
                     ai_configs[row.id] += ((policy["ai_rules"], getattr(row, "analysis_timezone", None),
-                                            ai_view_kind(row, AI_EVENT_ROOT)),)
+                                            ai_camera_views[row.id]),)
             if not event_policy(row) and job.event_episode.revision is not None:
                 job.event_episode = Episode()
         local_ai.configure(ai_configs, gpu_allowed=AI_GPU_ALLOWED, policy_revisions=ai_revisions,
-                           notification_windows=ai_notification_windows)
+                           notification_windows=ai_notification_windows, camera_views=ai_camera_views)
         for row in rows:
             if row.id in ai_configs and isinstance(row.recording_signal_state, dict):
                 retry = row.recording_signal_state.get("ai_retry") or {}
@@ -2119,7 +2306,22 @@ def sync_cameras() -> None:
 
         # Pass 1: resolve all requests from the same snapshot, before touching
         # any media process. Camera id or writer startup order cannot gate a link.
-        decisions, links = camera_control_intents(rows, low_disk=low_disk)
+        snapshot = archive_destinations()
+        archive_routes = {}
+        clock = time.monotonic()
+        for row in rows:
+            job = jobs[row.id]
+            next_route = archive_route_for(row, job, snapshot, clock)
+            previous_target = job.storage_route.target if job.storage_route else None
+            next_target = next_route.target
+            if next_target and (not previous_target or previous_target.root_id != next_target.root_id) \
+                    and job.last_error_type in {ERROR_STORAGE_UNAVAILABLE, ERROR_PERMISSION_DENIED}:
+                job.next_retry_at = None
+            job.storage_route = next_route
+            archive_routes[row.id] = next_route
+            former = snapshot[1].get(job.archive_root_id)
+            job.storage_writer_unavailable = bool(job.archive_root_id and (former is None or not former.ready))
+        decisions, links = camera_control_intents(rows, low_disk=low_disk, archive_routes=archive_routes)
         publish = []
         for row in rows:
             job = jobs[row.id]
@@ -2127,7 +2329,9 @@ def sync_cameras() -> None:
             job.link_intent = link = links.get(row.id)
             policy = linked_policy(row) if link is not None else event_policy(row)
             job.event_decision = link.decision if link is not None else decisions.get(row.id)
-            suspended = low_disk or (job.event_decision is not None and row.event_low_disk is not False)
+            route = archive_routes[row.id]
+            suspended = route.target is None
+            storage_problem = route.problem if suspended else None
             if link is not None:
                 wants_buffer = link.warm or link.allows_start(time.monotonic())
             else:
@@ -2137,7 +2341,9 @@ def sync_cameras() -> None:
                 # explicitly selected local analysis input or existing Live.
                 reconcile_event_buffer(row, job, policy, allowed=bool(job.ai_generation) or enabled and not suspended and wants_buffer,
                                        suspended=suspended, enabled=enabled)
-                sync_camera_writer(row, job, format_choice, suspended, enabled=enabled)
+                sync_camera_writer(row, job, format_choice, suspended, enabled=enabled,
+                                   storage_problem=storage_problem)
+                publish_storage_route(job, enabled)
                 if policy is not None:
                     publish.append((row, job, policy, suspended, enabled))
             except Exception as exc:
@@ -2171,6 +2377,10 @@ def check_children() -> None:
 
         error_text = (proc.failure if isinstance(proc, BufferedWriter) else stderr_tail_text(job)) or "recording writer stopped unexpectedly"
         error_type = classify_error(error_text, exit_code)
+        storage_fault = writer_disk_problem(error_text)
+        if storage_fault and job.archive_root_id:
+            writer_root_faults[job.archive_root_id] = (storage_fault, time.monotonic() + 30)
+            error_type = ERROR_STORAGE_UNAVAILABLE
         try:
             recover_interrupted_segments(job)
             mark_segments_failed_for_job(job, error_text)
@@ -2342,7 +2552,10 @@ except Exception as exc:
     log_event("error", "metadata_schema_failed", error=str(exc))
 
 log_event("info", "service_started", storage_root=str(STORAGE_ROOT))
-startup_recovery = StartupSegmentRecovery(engine, RECORDER_INSTANCE_ID, segment_accounting(), segment_repairs, log_event)
+startup_recovery = StartupSegmentRecovery(
+    engine, RECORDER_INSTANCE_ID, segment_accounting(), segment_repairs, log_event,
+    root_mapper=lambda root_id, active: STORAGE_ROOT if active else mounted_secondary_root(root_id),
+)
 startup_recovery.start()
 write_audit_event(
     event_type="service_started",

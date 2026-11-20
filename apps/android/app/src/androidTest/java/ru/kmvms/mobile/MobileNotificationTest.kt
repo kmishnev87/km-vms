@@ -9,20 +9,73 @@ import android.os.Build
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okio.Buffer
 import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import ru.kmvms.mobile.data.ServerProfile
+import ru.kmvms.mobile.data.ProfileVault
+import ru.kmvms.mobile.events.AiEventCondition
+import ru.kmvms.mobile.events.EventFrameCache
 import ru.kmvms.mobile.events.CameraEventKind
 import ru.kmvms.mobile.push.MobileNotifications
 import ru.kmvms.mobile.push.PushEnvelope
+import ru.kmvms.mobile.push.prepareEventPreview
+import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /** OS notification component test, NOT a claim of provider/Doze delivery. */
 @RunWith(AndroidJUnit4::class)
 class MobileNotificationTest {
+    @Test fun savedAiScenePhotoSurvivesAColdSlowNasResponse() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
+        val vault = ProfileVault(context)
+        MockWebServer().use { server ->
+            val profile = ServerProfile(UUID.randomUUID().toString(), "Preview fixture", server.url("/").toString(), "fixture")
+            val event = PushEnvelope(UUID.randomUUID().toString(), 7, "PTZ", CameraEventKind.MOTION, Instant.now(),
+                aiCondition = AiEventCondition.SCENE, preview = true)
+            val jpeg = ByteArrayOutputStream().apply {
+                val bitmap = Bitmap.createBitmap(160, 90, Bitmap.Config.ARGB_8888)
+                bitmap.eraseColor(0xff464f58.toInt())
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, this)
+                bitmap.recycle()
+            }.toByteArray()
+            vault.save(profile, "fixture-pass", "fixture-session")
+            server.enqueue(MockResponse().setHeader("Content-Type", "image/jpeg").setHeadersDelay(1700, TimeUnit.MILLISECONDS)
+                .setBody(Buffer().write(jpeg)))
+            try {
+                val image = prepareEventPreview(context, profile, event)
+                assertNotNull("A saved JPEG should survive a 1.7s NAS response", image)
+                assertEquals(160, image!!.width)
+                assertEquals("/api/camera-events/" + event.eventId + "/snapshot", server.takeRequest(1, TimeUnit.SECONDS)?.path)
+                MobileNotifications.show(context, profile, event, image)
+                val manager = context.getSystemService(NotificationManager::class.java)
+                val deadline = SystemClock.elapsedRealtime() + 2000
+                var posted = manager.activeNotifications.firstOrNull { it.tag == profile.id + ":" + event.eventId }
+                while (posted == null && SystemClock.elapsedRealtime() < deadline) {
+                    SystemClock.sleep(25)
+                    posted = manager.activeNotifications.firstOrNull { it.tag == profile.id + ":" + event.eventId }
+                }
+                assertNotNull(posted)
+                assertTrue(posted!!.notification.extras.getString(Notification.EXTRA_TEMPLATE).orEmpty().endsWith("BigPictureStyle"))
+                assertEquals(2, posted.notification.actions.size)
+                assertEquals(1, server.requestCount)
+            } finally {
+                MobileNotifications.clear(context, profile.id)
+                EventFrameCache.clear(context, profile.id)
+                vault.remove(profile.id)
+            }
+        }
+    }
+
     @Test fun systemNotificationHasTwoImmutableActionsAndDeduplicates() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext

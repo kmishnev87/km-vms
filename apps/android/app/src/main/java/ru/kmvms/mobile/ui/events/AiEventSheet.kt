@@ -44,6 +44,7 @@ import java.time.format.DateTimeFormatter
     var frame by remember(profileId, event.id) { mutableStateOf(EventFrameCache.memory(profileId, event.id)?.asImageBitmap()) }
     var fetchingFrame by remember(profileId, event.id) { mutableStateOf(event.snapshotAvailable && frame == null) }
     var error by remember(event.id) { mutableStateOf(false) }
+    var reviewError by remember(event.id) { mutableStateOf(false) }
     var checking by remember(event.id) { mutableStateOf(false) }
     var reviewing by remember(event.id) { mutableStateOf(false) }
     var reload by remember(event.id) { mutableIntStateOf(0) }
@@ -94,7 +95,7 @@ import java.time.format.DateTimeFormatter
                     color = Muted, style = MaterialTheme.typography.bodySmall)
             }
             HorizontalDivider()
-            if (error) Text(stringResource(R.string.server_error), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if (error) Text(stringResource(R.string.event_recording_check_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             if (checking) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (video != null) Text(stringResource(when (video) {
                 EventArchiveState.READY -> R.string.ai_event_ready
@@ -121,14 +122,16 @@ import java.time.format.DateTimeFormatter
             }
             if (ai != null && (canReview || ai.falsePositive)) {
                 HorizontalDivider()
+                if (reviewError) Text(stringResource(R.string.server_error), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 if (ai.falsePositive) Text(stringResource(R.string.ai_event_false), style = MaterialTheme.typography.bodySmall)
                 if (canReview) {
                     TextButton(onClick = {
                         reviewing = true
+                        reviewError = false
                         scope.launch {
                             try { row = service.review(row, zone, !ai.falsePositive); onReview() }
                             catch (cancelled: CancellationException) { throw cancelled }
-                            catch (_: Exception) { error = true }
+                            catch (_: Exception) { reviewError = true }
                             finally { reviewing = false }
                         }
                     }, enabled = !reviewing && !checking, modifier = Modifier.testTag("ai-event-review")) {

@@ -44,7 +44,9 @@ class NasApi(val address: ServerAddress) {
     val mediaClient = OkHttpClient.Builder().cookieJar(cookies).followRedirects(false).followSslRedirects(false)
         .connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS).build()
     internal val longPollClient = mediaClient.newBuilder().readTimeout(35, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build()
-    private val quickFrameClient = mediaClient.newBuilder().callTimeout(1150, TimeUnit.MILLISECONDS).build()
+    // Only the notification JPEG uses this bound; the ordinary history asset
+    // timeout and authentication path are unchanged.
+    private val quickFrameClient = mediaClient.newBuilder().callTimeout(3200, TimeUnit.MILLISECONDS).build()
     @Volatile private var access: String? = null
     // Opaque, in-memory boundary for scoped media leases; never expose the bearer.
     @Volatile private var mediaAuthority: Any? = null

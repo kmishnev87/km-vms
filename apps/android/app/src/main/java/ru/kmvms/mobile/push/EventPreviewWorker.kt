@@ -18,6 +18,10 @@ import ru.kmvms.mobile.diagnostics.DiagnosticArea
 import ru.kmvms.mobile.diagnostics.DiagnosticCode
 import ru.kmvms.mobile.events.EventFrameCache
 
+// UnifiedPush 3.3.5 binds for at most five seconds. Leave time to post the
+// single notification; fast responses still complete without a delay.
+private const val PREVIEW_WINDOW_MS = 4100L
+
 /** Drain work queued by older APKs without updating a notification after it was posted. */
 class EventPreviewWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result = Result.success()
@@ -27,7 +31,7 @@ internal suspend fun prepareEventPreview(context: Context, profile: ServerProfil
     val started = SystemClock.elapsedRealtime()
     val vault = ProfileVault(context)
     val bitmap = try {
-        withTimeoutOrNull(2400L) {
+        withTimeoutOrNull(PREVIEW_WINDOW_MS) {
             val saved = vault.signIn(profile.id) ?: return@withTimeoutOrNull null
             val api = NasApi(ServerAddress.parse(profile.address)).apply {
                 useSession(saved.access)

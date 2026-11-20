@@ -1219,9 +1219,29 @@
 }
 
 .storageOpsRootListRow {
-  grid-template-columns: minmax(190px, 1.5fr) 36px repeat(3, minmax(58px, 0.44fr)) minmax(62px, 0.38fr) var(--storage-root-action-column);
+  grid-template-columns: minmax(170px, 1.65fr) 36px repeat(2, minmax(53px, .43fr)) minmax(106px, .85fr);
   padding-right: var(--storage-root-action-inset);
 }
+
+.archiveManagementPolicy { display: grid; padding: 0 15px; gap: 0; }
+.archiveManagementPolicyLine { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 0; }
+.archiveManagementPolicyLine + .archiveManagementPolicyLine { border-top: 1px solid #e1e8ef; }
+.archiveManagementPolicyLine h4 { margin: 0; color: #172437; font-size: 13px; line-height: 1.3; font-weight: 700; }
+.archiveManagementPolicyLine p { margin-top: 3px; }
+.archiveManagementPolicyLine .archiveManagementSwitch { width: 35px; height: 20px; min-width: 35px; }
+.archiveManagementPolicyLine .archiveManagementSwitch > span { top: 2px; left: 2px; width: 14px; height: 14px; }
+.archiveManagementPolicyLine .archiveManagementSwitch.isChecked > span { transform: translateX(15px); }
+
+.archiveRootRemovalContent { display: grid; gap: 12px; color: #475569; font-size: 13px; line-height: 1.4; }
+.archiveRootRemovalContent p { margin: 0; }
+.archiveRootRemovalSummary { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.archiveRootRemovalSummary > strong { color: #172437; }
+.archiveRootRemovalDestination { display: grid; gap: 4px; min-width: 0; }
+.archiveRootRemovalDestination select { min-width: 0; width: 100%; }
+.archiveRootRemovalChoice { display: flex; align-items: center; gap: 8px; }
+.archiveRootRemovalChoice input { margin: 0; }
+.archiveRootRemovalWarning { color: var(--danger, #991b1b); }
+.archiveRootRemovalWarning .button { margin-inline-start: 8px; }
 
 .storageOpsRootActionsCell {
   justify-self: end;
@@ -1283,11 +1303,23 @@
   }
 }
 /* Compact policy grid: only camera rows scroll, labels/actions stay in place. */
-.operationFeedbackDialog.archiveRulesDialog { width: min(760px, calc(100vw - 28px)); max-width: 760px; max-height: calc(100dvh - 36px); display: flex; flex-direction: column; }
+.operationFeedbackDialog.archiveRulesDialog { width: min(1050px, calc(100vw - 28px)); max-width: 1050px; max-height: calc(100dvh - 36px); display: flex; flex-direction: column; }
 .archiveRulesDialog .operationFeedbackBody { min-height: 0; overflow: hidden; display: flex; }
 .archiveRulesDialog .operationFeedbackBusy { display: none; }
 .archiveRulesEditor { display: flex; flex-direction: column; min-height: 0; width: 100%; color: #172238; }
 .archiveRulesGrid { display: grid; grid-template-columns: 22px minmax(120px, 1fr) repeat(3, 104px) 32px; align-items: center; gap: 10px; }
+.withArchiveTargets .archiveRulesGrid { grid-template-columns: 22px minmax(105px, 1fr) repeat(3, 94px) minmax(215px, 1.45fr) 32px; }
+.archiveRulesLabels .archiveRulesTargetHeading { text-align: start; }
+.cameraArchiveTargetSelect.input { width: 100%; min-width: 0; height: 32px; min-height: 32px; padding: 4px 8px; font-size: 13px; }
+.cameraArchiveTargetField { grid-column: 1 / -1; display: grid; min-width: 0; gap: 6px; }
+.cameraArchiveTargetField > span { color: #526377; font-size: 12px; }
+.operationFeedbackDialog.cameraArchiveMoveDialog { width: min(640px, calc(100vw - 28px)); max-height: calc(100dvh - 36px); }
+.cameraArchiveMoveContent { color: #526377; font-size: 13px; }
+.cameraArchiveMoveRows { max-height: 350px; overflow: auto; border-block: 1px solid #dce5ee; }
+.cameraArchiveMoveRow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 2px; }
+.cameraArchiveMoveRow + .cameraArchiveMoveRow { border-top: 1px solid #e8eef4; }
+.cameraArchiveMoveRow strong { display: block; color: #172238; }
+.cameraArchiveMovePath { display: block; overflow-wrap: anywhere; }
 .archiveRulesGrid input[type="checkbox"] { margin: 0; justify-self: center; }
 .archiveRulesGrid input.input { box-sizing: border-box; width: 100%; min-width: 0; height: 32px; min-height: 32px; padding: 4px 8px; text-align: center; font-size: 13px; appearance: textfield; }
 .archiveRulesGrid input[type="number"]::-webkit-inner-spin-button,
@@ -1318,4 +1350,11 @@
   .archiveRulesBulkLabel > span, .archiveRulesCameraHeading small > span { display: none; }
   .archiveRulesGrid input.input { padding: 4px; font-size: 12px; }
   .archiveRulesCameraName { font-size: 12px; }
+  .withArchiveTargets .archiveRulesGrid { grid-template-columns: 18px minmax(55px, 1fr) repeat(3, minmax(40px, 66px)) 32px; }
+  .withArchiveTargets .archiveRulesBulk > span:nth-last-child(2), .archiveRulesTargetHeading { display: none; }
+  .archiveRulesRow .cameraArchiveTargetSelect { grid-column: 2 / -1; }
 }
+@media (min-width: 621px) and (max-width: 895px) {
+  .withArchiveTargets .archiveRulesGrid { grid-template-columns: 18px minmax(70px, 1fr) repeat(3, minmax(48px, 80px)) minmax(145px, 1.4fr) 32px; gap: 6px; }
+}
+.storageOpsRootAssignments { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

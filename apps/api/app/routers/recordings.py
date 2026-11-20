@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
@@ -19,7 +18,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
-from app.utils.video_stream import stream_video as stream_video_response
+from app.utils.video_stream import stream_archive_file, stream_video as stream_video_response
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.recording_operations import (
     DestructiveScopeConflict,
@@ -54,6 +53,7 @@ from app.services.recording_retention import (
 from app.services.recording_storage import (
     archive_root_for_segment,
     archive_root_runtime_access_state,
+    read_root_matches,
     resolve_segment_file_path,
     segment_archive_root_resolution,
     segment_has_resolved_archive_root,
@@ -341,11 +341,11 @@ def recording_ref(segment: RecordingSegment) -> str:
     return f"segment:{int(segment.id)}:root:{_segment_root_id(segment)}"
 
 
-def _segment_from_recording_ref(db: Session, ref: str) -> RecordingSegment:
+def _segment_from_recording_ref(db: Session, ref: str, *, for_media=False) -> RecordingSegment:
     match = re.match(r"^segment:(\d+):root:([A-Za-z0-9_.-]+)$", str(ref or ""))
     if not match:
         raise HTTPException(status_code=400, detail="Invalid recording reference")
-    return get_finalized_segment_by_identity(db, segment_id=int(match.group(1)), archive_root_id=match.group(2))
+    return get_finalized_segment_by_identity(db, segment_id=int(match.group(1)), archive_root_id=match.group(2), for_media=for_media)
 
 
 def get_finalized_segment_by_identity(
@@ -355,19 +355,22 @@ def get_finalized_segment_by_identity(
     archive_root_id: str | None = None,
     recording_ref_value: str | None = None,
     path: str | None = None,
+    for_media: bool = False,
 ) -> RecordingSegment:
     segment_id = segment_id if isinstance(segment_id, int) and not isinstance(segment_id, bool) else None
     archive_root_id = archive_root_id if isinstance(archive_root_id, str) and archive_root_id else None
     recording_ref_value = recording_ref_value if isinstance(recording_ref_value, str) and recording_ref_value else None
     path = path if isinstance(path, str) and path else None
     if recording_ref_value:
-        return _segment_from_recording_ref(db, recording_ref_value)
+        return _segment_from_recording_ref(db, recording_ref_value, for_media=for_media)
     if segment_id is not None:
         segment = finalized_segments_query(db).filter(RecordingSegment.id == int(segment_id)).first()
         if not segment:
             raise HTTPException(status_code=404, detail="Recording metadata not found")
         segment_root_id = _segment_root_id(segment)
-        if archive_root_id and segment_root_id != str(archive_root_id):
+        if archive_root_id and segment_root_id != archive_root_id and not (
+            for_media and read_root_matches(db, segment, archive_root_id, segment_root_id)
+        ):
             raise HTTPException(status_code=404, detail="Recording root mismatch")
         return segment
     if path:
@@ -545,10 +548,10 @@ def _blocked_operation_result(
     return finish_manual_execution_result(db, actor, result)
 
 
-def recording_media_resource_for_segment(segment: RecordingSegment, action: str) -> dict:
+def recording_media_resource_for_segment(segment: RecordingSegment, action: str, *, reference_root=None) -> dict:
     return {
         "segment_id": int(segment.id),
-        "archive_root_id": _segment_root_id(segment),
+        "archive_root_id": reference_root or _segment_root_id(segment),
         "action": action,
     }
 
@@ -983,14 +986,25 @@ def issue_recording_media_token(
         archive_root_id=payload.archive_root_id,
         recording_ref_value=payload.recording_ref,
         path=payload.path,
+        for_media=True,
     )
     resolve_segment_file(segment)
     token, expires_at = create_media_token(
         user=current_user,
         scope="recording",
-        resource=recording_media_resource_for_segment(segment, action),
+        resource=recording_media_resource_for_segment(segment, action, reference_root=_media_reference_root(
+            payload.recording_ref, payload.segment_id, payload.archive_root_id)),
     )
     return media_token_response(token, expires_at)
+
+
+def _media_reference_root(reference, segment_id, root_id):
+    # Only call after resolving the supplied reference, including any move proof.
+    if isinstance(reference, str) and reference:
+        return reference.rsplit(":root:", 1)[1]
+    if isinstance(segment_id, int) and not isinstance(segment_id, bool) and isinstance(root_id, str):
+        return root_id or None
+    return None
 
 
 @router.get("/download")
@@ -1009,23 +1023,22 @@ def download_recording(
         archive_root_id=archive_root_id,
         recording_ref_value=recording_ref,
         path=path,
+        for_media=True,
     )
     validate_media_token(
         db,
         token=media_token,
         scope="recording",
-        resource=recording_media_resource_for_segment(segment, "download"),
+        resource=recording_media_resource_for_segment(segment, "download", reference_root=_media_reference_root(
+            recording_ref, segment_id, archive_root_id)),
         permission=PERMISSION_VIEW_RECORDINGS,
         request=request,
         media_area="recordings",
     )
-    file_path = resolve_segment_file(segment)
-    media_metadata = segment_media_metadata(segment, file_path)
-
-    return FileResponse(
-        path=file_path,
-        filename=file_path.name,
-        media_type=media_metadata["mime_type"] or "application/octet-stream",
+    return stream_archive_file(
+        db, request, segment, resolve_path=resolve_segment_file,
+        media_type=lambda item, path: segment_media_metadata(item, path)["mime_type"],
+        get_filename=lambda _item, path: path.name,
     )
 
 
@@ -1045,19 +1058,20 @@ def stream_recording(
         archive_root_id=archive_root_id,
         recording_ref_value=recording_ref,
         path=path,
+        for_media=True,
     )
     validate_media_token(
         db,
         token=media_token,
         scope="recording",
-        resource=recording_media_resource_for_segment(segment, "stream"),
+        resource=recording_media_resource_for_segment(segment, "stream", reference_root=_media_reference_root(
+            recording_ref, segment_id, archive_root_id)),
         permission=PERMISSION_VIEW_RECORDINGS,
         request=request,
         media_area="recordings",
     )
-    file_path = resolve_segment_file(segment)
-    media_metadata = segment_media_metadata(segment, file_path)
-    return stream_video(request, file_path, media_metadata["mime_type"])
+    return stream_archive_file(db, request, segment, resolve_path=resolve_segment_file,
+                               media_type=lambda item, path: segment_media_metadata(item, path)["mime_type"])
 
 
 @router.post("/deletion-plans")

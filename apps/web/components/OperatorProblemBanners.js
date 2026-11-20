@@ -281,6 +281,7 @@ export default function OperatorProblemBanners({
                             ? recordingFailureMessage(camera.reason, camera.reason_codes, camera.recording_state)
                             : liveFailureMessage(camera.reason, item.reason_codes?.includes("live_interrupted")))}
                           {camera.next_retry_at > Date.now() / 1000 ? ` ${text("Следующая попытка через")} ${Math.ceil(camera.next_retry_at - Date.now() / 1000)} ${text("сек.")}` : ""}
+                          {camera.archive_route?.target_path ? ` ${camera.archive_route.source_path || ""} → ${camera.archive_route.target_path}` : ""}
                         </small>
                       )) : null}
                       {displayHint(item) ? <small>{displayHint(item) === item.action_hint ? text(item.action_hint) : text(displayHint(item))}</small> : null}

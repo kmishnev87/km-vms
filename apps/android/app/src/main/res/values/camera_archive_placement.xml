@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_record_to">Record to</string>
+    <string name="camera_archive_unavailable">Folder unavailable</string>
+    <string name="camera_archive_move_title">Move older recordings?</string>
+    <string name="camera_archive_move_count">Recordings: %1$d</string>
+    <string name="camera_archive_move_help">The new destination is saved. The archive can move in the background.</string>
+    <string name="camera_archive_move_action">Move recordings</string>
+    <string name="camera_archive_keep">Leave in place</string>
+    <string name="camera_archive_move_queued">Move queued. Track it in Storage.</string>
+    <string name="camera_archive_move_partial">Some recordings could not be queued. Check Storage.</string>
+    <string name="camera_archive_move_failed">Could not queue the move. Try again.</string>
+    <string name="camera_archive_ready">Ready to record</string>
+    <string name="camera_archive_removing">Removing</string>
+    <string name="camera_archive_connecting">Connecting</string>
+    <string name="camera_archive_read_only">Read-only</string>
+    <string name="camera_archive_low_space">Low on space</string>
+</resources>

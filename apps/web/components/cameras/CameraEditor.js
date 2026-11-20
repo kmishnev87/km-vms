@@ -8,6 +8,8 @@ import { useI18n, useLocaleText } from "../../lib/i18n";
 import CameraDeviceSettings from "./CameraDeviceSettings";
 import useCameraEditor from "./useCameraEditor";
 import CameraDiscoveryDialog, { CameraSearchIcon } from "./CameraDiscoveryDialog";
+import { apiFetch } from "../../lib/api";
+import { ArchiveRootSelect, useCameraArchiveCopy } from "../storage/CameraArchivePlacement";
 
 function StreamChoice({ label, value, disabled, onChange, name, metadata, children }) {
   const id = useId();
@@ -50,6 +52,8 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   const childReturnFocusRef = useRef(null);
   const childWasOpenRef = useRef(false);
   const [confirm, setConfirm] = useState(null);
+  const [archiveTargets, setArchiveTargets] = useState(null);
+  const archiveCopy = useCameraArchiveCopy();
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [deviceBusy, setDeviceBusy] = useState(false);
   const dialogRef = useRef(null);
@@ -60,6 +64,22 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   const bodyRef = useRef(null);
   const imageCache = useRef(new Map());
   useModalBodyScrollLock(true);
+  const selectedArchiveIsReady = archiveTargets?.items?.some(item => item.id === form.recording_archive_root_id && item.writable);
+  const needsArchiveSelection = !camera && Boolean(archiveTargets) && !selectedArchiveIsReady;
+
+  useEffect(() => {
+    if (camera || form.recording_archive_root_id || !archiveTargets) return;
+    const ready = archiveTargets.items.filter(item => item.writable);
+    if (ready.length === 1) patch("recording_archive_root_id", ready[0].id);
+  }, [archiveTargets, camera, form.recording_archive_root_id, patch]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    apiFetch("/cameras/archive-targets", { signal: controller.signal }).then(value => {
+      if (!controller.signal.aborted) setArchiveTargets(value);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const childOpen = Boolean(discoveryOpen || confirm);
@@ -178,6 +198,10 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
         {input("segment_minutes", copy.segmentDuration, { type: "number", min: 1, hint: copy.minutesShort })}
         {input("retention_days", copy.retentionDays, { type: "number", min: 1, max: MAX_RETENTION_DAYS, hint: copy.daysShort })}
         {input("storage_quota_gb", copy.archiveLimitGb, { type: "number", min: 1 })}
+        {archiveTargets ? <label className="cameraArchiveTargetField"><span>{archiveCopy.target}</span>
+          <ArchiveRootSelect catalog={archiveTargets} value={form.recording_archive_root_id}
+            onChange={value => patch("recording_archive_root_id", value)} disabled={busy} requireSelection={!camera} />
+        </label> : null}
       </div>
     </section>;
   }
@@ -276,16 +300,19 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
         <dl>{sourceGroups.length > 1 ? row(copy.editorSource, `${copy.editorSource} ${selectedSource?.channel ?? sourceGroups.indexOf(selectedSource) + 1}`) : null}
           {row(copy.recordStream, `${roleLabel(form.default_record_stream)} — ${streamDescription(assigned(form.default_record_stream), currentResult(form.default_record_stream), copy)}`)}
           {row(copy.liveStream, `${roleLabel(form.default_live_stream)} — ${streamDescription(assigned(form.default_live_stream), currentResult(form.default_live_stream), copy)}`)}
-          {row(copy.segmentDuration, `${form.segment_minutes} ${copy.minutesShort}`)}{row(copy.retentionDays, `${form.retention_days} ${copy.daysShort}`)}{row(copy.limit, `${form.storage_quota_gb} ${copy.gbShort}`)}</dl>
+          {row(copy.segmentDuration, `${form.segment_minutes} ${copy.minutesShort}`)}{row(copy.retentionDays, `${form.retention_days} ${copy.daysShort}`)}{row(copy.limit, `${form.storage_quota_gb} ${copy.gbShort}`)}
+          {archiveTargets ? row(archiveCopy.target, archiveTargets.items.find(item => item.id === (form.recording_archive_root_id || archiveTargets.default_root_id))?.path || archiveCopy.unavailable) : null}</dl>
       </div>
       <p className="cameraFlowReviewStatus">{editor.verified ? copy.editorVideoChecked : form.manual_confirm_unverified ? copy.editorUnverifiedNotice : copy.editorRecheck}</p>
     </section>;
   }
 
-  const primaryAction = camera || section === "review" ? editor.save
+  const primaryAction = !camera && section === "review" && needsArchiveSelection ? () => setSection("video")
+    : camera || section === "review" ? editor.save
     : section === "connection" && !editor.connectionReady && !form.manual_confirm_unverified ? () => editor.check() : editor.next;
   const preparing = editor.metadataPreparing && section === "connection" && editor.connectionReady && !form.manual_confirm_unverified;
-  const primaryLabel = operation === "saving" ? copy.saving : busy ? copy.checking : preparing ? copy.editorPreparingStreams : camera ? copy.editorSaveChanges
+  const primaryLabel = operation === "saving" ? copy.saving : busy ? copy.checking : preparing ? copy.editorPreparingStreams
+    : section === "review" && needsArchiveSelection ? archiveCopy.choose : camera ? copy.editorSaveChanges
     : section === "review" ? copy.editorAddCamera : section === "connection"
       ? editor.connectionReady || form.manual_confirm_unverified ? copy.editorContinue : copy.editorCheckConnection : copy.editorContinue;
   const feedback = error || (busy ? operation === "preview" ? copy.editorLoadingImage : copy.checking : preparing ? copy.editorPreparingStreams

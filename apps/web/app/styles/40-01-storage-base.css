@@ -162,7 +162,8 @@
   text-align: center;
 }
 
-.archiveManagementRow p {
+.archiveManagementRow p,
+.archiveManagementPolicyLine p {
   margin: 0;
   color: #475569;
   font-size: 12px;

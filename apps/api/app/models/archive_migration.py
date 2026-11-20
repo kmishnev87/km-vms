@@ -27,6 +27,8 @@ class ArchiveMigrationPlan(Base):
 
     source_root_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     target_root_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    # None preserves the existing manually confirmed whole-root operation.
+    selected_camera_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_label_snapshot: Mapped[str] = mapped_column(String(255), nullable=False)
     target_label_snapshot: Mapped[str] = mapped_column(String(255), nullable=False)
     source_physical_identity: Mapped[str] = mapped_column(String(128), nullable=False)

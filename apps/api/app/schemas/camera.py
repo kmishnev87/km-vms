@@ -5,6 +5,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from pydantic import BaseModel, Field, StrictBool, field_serializer, field_validator
 from app.core.camera_limits import MAX_CAMERA_NAME_LENGTH, MAX_RETENTION_DAYS
 from app.core.sanitization import SENSITIVE_QUERY_KEYS, is_sensitive_query_key, redact_text
+from app.services.camera_archive_placement import RootId
 
 
 DELETED_CAMERA_MARKER_RE = re.compile(r"__deleted_\d+_\d+$")
@@ -108,6 +109,7 @@ class CameraBase(BaseModel):
     segment_minutes: int = Field(default=5, ge=1)
     retention_days: int = Field(default=30, ge=1, le=MAX_RETENTION_DAYS)
     storage_quota_gb: int = Field(default=50, ge=1)
+    recording_archive_root_id: RootId | None = None
     preview_token: str | None = None
     validation_token: str | None = None
     main_validation_token: str | None = None
@@ -149,6 +151,7 @@ class CameraUpdate(BaseModel):
     segment_minutes: int | None = Field(default=None, ge=1)
     retention_days: int | None = Field(default=None, ge=1, le=MAX_RETENTION_DAYS)
     storage_quota_gb: int | None = Field(default=None, ge=1)
+    recording_archive_root_id: RootId | None = None
 
     status: str | None = None
     last_error: str | None = None
@@ -195,6 +198,8 @@ class CameraResponse(BaseModel):
     segment_minutes: int
     retention_days: int
     storage_quota_gb: int
+    recording_archive_root_id: str | None = None
+    archive_move_offer: dict | None = None
     status: str
     last_error: str | None
     deleted_at: datetime | None = None

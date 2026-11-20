@@ -67,6 +67,7 @@ class Source:
     scene_active: bool = False
     policy_revision: int | None = None
     notification_window: int = 60
+    is_ptz: bool = False
     rules: RuleEngine | None = None
     rules_invalid: bool = False
 
@@ -189,7 +190,7 @@ class AiSupervisor:
         self.reported_exhaustion = False
         self.transitions = deque(maxlen=12)
 
-    def configure(self, configs, *, gpu_allowed, policy_revisions=None, notification_windows=None):
+    def configure(self, configs, *, gpu_allowed, policy_revisions=None, notification_windows=None, camera_views=None):
         now = time.monotonic()
         with self.cond:
             admitted = sorted(configs)[:MAX_SOURCES]
@@ -218,6 +219,7 @@ class AiSupervisor:
                         source.activity = None
                 source.policy_revision = (policy_revisions or {}).get(i)
                 source.notification_window = (notification_windows or {}).get(i, 60)
+                source.is_ptz = (camera_views or {}).get(i) == "ptz"
             if self.gpu_allowed != gpu_allowed:
                 self.gpu_allowed = gpu_allowed
                 if not gpu_allowed and self.backend and self.backend.get("backend") == "gpu":
@@ -264,12 +266,19 @@ class AiSupervisor:
             if self.queue_bytes - old + size + len(extra) > MAX_QUEUE_BYTES:
                 return False
             source.offered = now
-            source.pending = Frame(camera, generation, stream, ctx.name, extra, bytes(packet), now, time.time(), source.rules is not None)
+            frame = Frame(camera, generation, stream, ctx.name, extra, bytes(packet), now, time.time(), source.rules is not None)
+            source.pending = frame
+            revision = source.policy_revision if source.is_ptz else None
             self.queue_bytes += source.pending.size - old
             self.cond.notify()
-            return True
         finally:
             self.cond.release()
+        if self.event_sink and revision:
+            try:
+                self.event_sink.follow_frame(frame, revision)
+            except Exception:
+                pass  # Evidence must not interrupt capture.
+        return True
 
     def select_stream(self, camera, generation, stream):
         # Stream changes are rare. Fence in-flight observations from the old
@@ -475,9 +484,11 @@ class AiSupervisor:
                         raise RuntimeError
                     with self.cond:
                         evidence = self._accept(frame, response)
+                        source = self.sources.get(frame.camera)
+                        ptz = bool(source and source.is_ptz)
                     if self.event_sink and evidence:
                         try:
-                            self.event_sink.offer(frame, *evidence)
+                            self.event_sink.offer(frame, *evidence, ptz=ptz)
                         except Exception:
                             pass  # Event history must not interrupt analysis or recording.
             except Exception as exc:

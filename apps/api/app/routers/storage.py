@@ -1,7 +1,8 @@
 from datetime import datetime
 import os
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.core.permissions import user_has_permission
 from app.db.session import get_db
+from app.models.camera import Camera
+from app.models.archive_migration import ArchiveMigrationPlan
 from app.models.recording import ArchiveRoot, RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission, require_permissions
@@ -20,6 +23,9 @@ from app.services.archive_root_activation import (
     request_archive_root_activation,
 )
 from app.services.audit_log import create_event
+from app.services.camera_archive_placement import affected_cameras_by_root, archive_target_status, current_default_id
+from app.services import archive_root_removal
+from app.services.archive_root_provisioning import provision_status, queue_provision
 from app.services.recording_operations import (
     DestructiveScopeConflict,
     destructive_scope_guard,
@@ -175,6 +181,17 @@ class ArchiveRootDeleteRequest(BaseModel):
     operation_id: str | None = Field(default=None, max_length=96, pattern=OPERATION_ID_PATTERN)
 
 
+class ArchiveRootRemovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    target_root_id: str | None = Field(default=None, min_length=1, max_length=36, pattern=r"^[A-Za-z0-9_.-]+$")
+    mode: Literal["move", "delete"]
+    recording_count: int = Field(ge=0, le=9223372036854775807, strict=True)
+    scope_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm_delete: bool = False
+
+
 class MigrationPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -212,6 +229,15 @@ def storage_status(
 ):
     summary = build_lightweight_storage_monitoring_summary(db)
     summary["archive_root_activation"] = archive_root_activation_public_status()
+    summary["recording_assignments"] = affected_cameras_by_root(db)
+    summary["archive_provisioning"] = provision_status()
+    default_id = current_default_id(db)
+    for root in list_archive_roots(db):
+        state = archive_target_status(root, default_id)
+        for row in summary.get("archive_roots", ()):
+            if row.get("id") == root.id:
+                row.update(recording_access=state["state"], recording_access_problem=state["problem"])
+                break
     if isinstance(summary.get("storage_operations"), dict):
         summary["storage_operations"]["archive_root_activation"] = summary["archive_root_activation"]
     return summary
@@ -372,7 +398,17 @@ def create_archive_root(
                 if result.get("status") in {"blocked", "already_running"}:
                     raise HTTPException(status_code=409, detail=result)
                 return result
-            return archive_root_public_status(root, include_path=True)
+            state = archive_target_status(root, current_default_id(db))
+            # A previously interrupted registration can be retried by adding
+            # the same approved path. No default root or camera is changed.
+            if not state["writable"] and state["state"] != "low_space":
+                try:
+                    attachment = queue_provision(root, allowed_base or canonical_path.parent)
+                except ValueError as exc:
+                    _archive_root_add_blocked(db, current_user, exc)
+            else:
+                attachment = None
+            return {**archive_root_public_status(root, include_path=True), "archive_provisioning": attachment}
     except ArchiveRootMutationConflict as exc:
         raise HTTPException(status_code=409, detail=exc.blocker) from exc
 
@@ -447,6 +483,7 @@ def _delete_inactive_root(
     *,
     operation_id: str | None = None,
     operation_heartbeat: Callable[[], None] | None = None,
+    confirmed_scope: tuple[int, str] | None = None,
 ) -> dict:
     if root.is_active:
         raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_root_blocked"})
@@ -484,6 +521,8 @@ def _delete_inactive_root(
             kwargs = {"operation_id": operation_id, "scope_lease": scope_lease}
             if operation_heartbeat is not None:
                 kwargs["operation_heartbeat"] = operation_heartbeat
+            if confirmed_scope is not None:
+                kwargs["confirmed_scope"] = confirmed_scope
             return _delete_inactive_root_owned(db, root, current_user, **kwargs)
     except DestructiveScopeConflict as exc:
         reason = str(exc.detail.get("reason") or "destructive_scope_conflict")
@@ -506,6 +545,7 @@ def _delete_inactive_root_owned(
     operation_id: str,
     scope_lease,
     operation_heartbeat: Callable[[], None] | None = None,
+    confirmed_scope: tuple[int, str] | None = None,
 ) -> dict:
     if root.is_active:
         raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_root_blocked"})
@@ -547,6 +587,9 @@ def _delete_inactive_root_owned(
         .order_by(RecordingSegment.id.asc())
         .all()
     )
+    if confirmed_scope is not None and archive_root_removal.exact_recording_scope(
+            segment.id for segment in segments) != confirmed_scope:
+        raise HTTPException(409, detail={"error": "archive_root_removal_changed"})
     usage = root_usage(db, root)
     root_path = archive_root_runtime_path(root).resolve(strict=False)
     namespace_path = (root_path / KMVMS_RECORDINGS_NAMESPACE).resolve(strict=False)
@@ -900,13 +943,17 @@ def activate_archive_root(
 ):
     if not payload.confirm:
         raise HTTPException(status_code=409, detail={"error": "archive_root_activation_confirm_required"})
+    return _schedule_archive_root_activation(root_id, db, current_user, recovery=payload.recovery)
+
+
+def _schedule_archive_root_activation(root_id, db, current_user, *, recovery=False, operation_id=None):
     root = db.get(ArchiveRoot, root_id)
     if not root:
         raise HTTPException(status_code=404, detail="Archive root not found")
     pending = read_pending_archive_root_activation()
-    if pending is not None or payload.recovery:
+    if pending is not None or recovery:
         try:
-            result = request_archive_root_activation(db, root=root, actor=current_user, recovery=payload.recovery)
+            result = request_archive_root_activation(db, root=root, actor=current_user, recovery=recovery)
         except ArchiveRootMutationConflict as exc:
             raise HTTPException(status_code=409, detail=exc.blocker) from exc
         if result.get("status") in {"blocked", "already_running"}:
@@ -922,7 +969,7 @@ def activate_archive_root(
     if previous_root is not None and str(previous_root.id) == str(root.id):
         return request_archive_root_activation(db, root=root, actor=current_user, recovery=False)
 
-    operation_id = new_operation_id("archive-root-activation")
+    operation_id = operation_id or new_operation_id("archive-root-activation")
     try:
         outer_claim = claim_operation_with_conflicts(
             db,
@@ -1001,11 +1048,17 @@ def delete_archive_root(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
+    return _execute_archive_root_delete(root_id, payload, db, current_user)
+
+
+def _execute_archive_root_delete(root_id, payload, db, current_user, *, coordinated_scope=None):
     if not payload.confirm:
         raise HTTPException(status_code=409, detail="Archive root deletion requires confirm=true")
     root = db.get(ArchiveRoot, root_id)
     if not root or (root.retired_at is not None and not payload.operation_id):
         raise HTTPException(status_code=404, detail="Archive root not found")
+    if root.retirement_status == archive_root_removal.REMOVING and coordinated_scope is None:
+        raise HTTPException(409, detail={"error": "archive_root_removal_in_progress"})
     previous_status = str(root.retirement_status or "")
     operation_id = payload.operation_id or new_operation_id("archive-root-cleanup")
     parent_operation_id = (
@@ -1059,16 +1112,27 @@ def delete_archive_root(
     with StorageOperationLifecycle(db, outer_handle, failure_reason="archive_root_delete_failed") as lifecycle:
         try:
             with archive_root_mutation_guard("archive_root_delete"):
-                root = db.get(ArchiveRoot, root_id)
+                root = db.query(ArchiveRoot).filter(ArchiveRoot.id == root_id).populate_existing().with_for_update().one_or_none()
                 if not root or root.retired_at is not None:
                     lifecycle.block("archive_root_not_found", retry_allowed=False)
                     raise HTTPException(status_code=404, detail="Archive root not found")
+                request = archive_root_removal.removal_request(root)
+                pending = request and request.get("status") == "queued"
+                if pending and (coordinated_scope is None or root.retirement_operation_id != operation_id):
+                    raise HTTPException(409, detail={"error": "archive_root_removal_in_progress"})
+                if coordinated_scope is not None and not pending:
+                    raise HTTPException(409, detail={"error": "archive_root_removal_changed"})
+                if db.query(Camera.id).filter(Camera.deleted_at.is_(None),
+                                              Camera.recording_archive_root_id == root.id).limit(1).first() is not None:
+                    raise HTTPException(status_code=409, detail={"error": "archive_root_assigned_to_cameras"})
+                options = {"confirmed_scope": coordinated_scope} if coordinated_scope is not None else {}
                 result = _delete_inactive_root(
                     db,
                     root,
                     current_user,
                     operation_id=operation_id,
                     operation_heartbeat=outer_heartbeat.touch,
+                    **options,
                 )
                 lifecycle.mark_inner_persisted(result)
         except ArchiveRootMutationConflict as exc:
@@ -1100,6 +1164,37 @@ def delete_archive_root(
         if result.get("status") == "partial":
             raise HTTPException(status_code=409, detail=result)
         return result
+
+
+@router.get("/archive-roots/{root_id}/removal")
+def preview_archive_root_removal(root_id: str, db: Session = Depends(get_db),
+                                 current_user: User = Depends(require_permissions("manage_settings", "manage_cameras", "delete_recordings"))):
+    return archive_root_removal.preview_removal(db, root_id, current_user)
+
+
+@router.post("/archive-roots/{root_id}/removal", status_code=202)
+def request_archive_root_removal(root_id: str, payload: ArchiveRootRemovalRequest, db: Session = Depends(get_db),
+                                 current_user: User = Depends(require_permissions("manage_settings", "manage_cameras", "delete_recordings"))):
+    return archive_root_removal.start_removal(db, root_id, payload, current_user)
+
+
+@router.get("/archive-roots/{root_id}/removal/{operation_id}")
+def archive_root_removal_status(root_id: str, operation_id: str, db: Session = Depends(get_db),
+                                current_user: User = Depends(require_permission("manage_settings"))):
+    return archive_root_removal.public_removal(db, root_id, operation_id)
+
+
+@router.get("/camera-archive-moves/status")
+def camera_archive_moves_status(ids: str = Query(min_length=1, max_length=1800),
+                                db: Session = Depends(get_db),
+                                current_user: User = Depends(require_permission("manage_settings"))):
+    try:
+        items = list(dict.fromkeys(str(UUID(value)) for value in ids.split(",")))
+    except ValueError as exc:
+        raise HTTPException(422, detail={"error": "camera_archive_moves_invalid"}) from exc
+    rows = db.query(ArchiveMigrationPlan).filter(ArchiveMigrationPlan.id.in_(items),
+        ArchiveMigrationPlan.selected_camera_id.is_not(None)).all()
+    return {"items": [{"id": plan.id, "status": plan.status, "reason": plan.reason_code} for plan in rows]}
 
 
 @router.post("/migration/preview")

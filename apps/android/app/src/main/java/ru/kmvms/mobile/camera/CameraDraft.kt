@@ -30,6 +30,7 @@ class CameraDraft private constructor(private val fields: Map<String,String>) {
         val keys=baseline?.let{changedFrom(it)}?:defaults.keys
         keys.forEach { key ->
             if(key=="password"&&this@CameraDraft[key].isEmpty())return@forEach
+            if(key=="recording_archive_root_id"&&this@CameraDraft[key].isEmpty())return@forEach
             if(this@CameraDraft["protocol"]!="onvif"&&key in setOf("rtsp_host","rtsp_port"))return@forEach
             put(key,when(key){in integerFields->this@CameraDraft[key].toInt();in booleanFields->flag(key);else->this@CameraDraft[key]})
         }
@@ -44,7 +45,8 @@ class CameraDraft private constructor(private val fields: Map<String,String>) {
             "host" to "","port" to "80","username" to "","password" to "","rtsp_main_url" to "","rtsp_sub_url" to "",
             "rtsp_host" to "","rtsp_port" to "554","rtsp_transport" to "tcp","onvif_path" to "","onvif_profile_token" to "",
             "onvif_sub_profile_token" to "","onvif_channel_id" to "","recording_mode" to "always","default_live_stream" to "sub",
-            "default_record_stream" to "main","segment_minutes" to "5","retention_days" to "30","storage_quota_gb" to "50")
+            "default_record_stream" to "main","segment_minutes" to "5","retention_days" to "30","storage_quota_gb" to "50",
+            "recording_archive_root_id" to "")
         fun empty()=CameraDraft(defaults)
         fun from(value: JSONObject)=CameraDraft(defaults.mapValues { (key,fallback)->if(key=="password")"" else value.opt(key)?.takeUnless{it==JSONObject.NULL}?.toString()?:fallback }.toMutableMap().apply{
             if(value.optString("protocol")=="onvif") {

@@ -1083,6 +1083,14 @@ def test_retired_root_reactivation_reuses_identity_and_blocks_conflict_or_partia
     stage48.db.refresh(stage48.root_b)
     assert result["id"] == "root_b"
     assert stage48.root_b.retired_at is None
+    assert result["archive_provisioning"]["status"] == "provisioning"
+    with pytest.raises(HTTPException) as in_progress:
+        storage_router.create_archive_root(payload, db=stage48.db, current_user=_actor())
+    assert in_progress.value.status_code == 409
+    from app.services import archive_root_provisioning as attach
+    request = attach._request()
+    (setup_storage.install_control_dir() / attach.RESULT).write_text(
+        json.dumps({"request_id": request["request_id"], "root_id": "root_b", "status": "completed"}))
 
     stage48.root_b.retired_at = datetime.utcnow()
     stage48.root_b.retirement_status = "completed"

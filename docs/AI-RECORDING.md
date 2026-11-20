@@ -35,6 +35,8 @@ The local engine recognizes people, vehicles and supported animal classes. A **M
 
 Open **Camera Events → History**. An AI event has a detection frame when available, its type and the matched rule. Select **Source → NAS AI** in web history to choose a rule from the selected camera and period or to filter by condition. Android also opens available snapshots of camera events through the same event details control.
 
+For a confirmed PTZ lens, if a NAS AI **Major scene change** is the first detection of the episode, the snapshot waits for a frame at least one second after detection so the camera has time to turn. Recording and the event timestamp do not wait. If an object opens the episode instead, it follows the normal snapshot path; later detections don't replace the opening image. If the delayed image is unavailable in time, the phone can still receive a text alert.
+
 Starting with NAS 1.0.4, the first accepted detection opens the camera's episode without waiting for the recorder. Further matching activity on that camera, including a different selected event type or AI rule, extends it without another history entry or alert. A new episode can start after **After** minutes of quiet. For event recording this is the same interval that extends recording. Ending one detection or rolling to a new file does not rearm alerts. If you mute the opening alert, continuing activity does not send it again after you re-enable alerts.
 
 **Watch event** opens only an available recording that covers the event. If a segment is still being written, check again after it closes. A snapshot can exist without video. A saved clip is a separate copy; it does not pin the original files or alter retention. Marking a false positive does not retrain AI.

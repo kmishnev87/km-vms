@@ -83,9 +83,19 @@ import ru.kmvms.mobile.ui.Muted
                 Text(root.label.ifBlank{stringResource(R.string.archive)},fontWeight=FontWeight.Medium)
                 root.path?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=Muted,maxLines=2,overflow=TextOverflow.Ellipsis)}
                 Text(Formatter.formatShortFileSize(context,root.bytes),style=MaterialTheme.typography.bodySmall,color=Muted)
-                if(!root.readable)Text(stringResource(if(root.requiresActivation&&!root.active)R.string.inactive_archive else R.string.storage_unavailable),style=MaterialTheme.typography.bodySmall,color=if(root.requiresActivation&&!root.active)Muted else MaterialTheme.colorScheme.error)
             }
-            if(root.active)Text(stringResource(R.string.active_archive),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary,modifier=Modifier.testTag("archive-root-active-${root.id}"))
+            val status=when(root.recordingAccess) {
+                "ready"->R.string.camera_archive_ready
+                "removing"->R.string.camera_archive_removing
+                "provisioning"->R.string.camera_archive_connecting
+                "read_only"->R.string.camera_archive_read_only
+                "low_space"->R.string.camera_archive_low_space
+                "unavailable"->R.string.storage_unavailable
+                else->if(root.readable)R.string.camera_archive_ready else R.string.storage_unavailable
+            }
+            Text(stringResource(status),style=MaterialTheme.typography.labelMedium,
+                color=if(status==R.string.storage_unavailable)MaterialTheme.colorScheme.error else Muted,
+                modifier=Modifier.testTag("archive-root-status-${root.id}"))
         }
     }
 }

@@ -32,6 +32,7 @@ import org.json.JSONObject
     val failure=stringResource(R.string.camera_action_failed)
     LaunchedEffect(state.failures){if(state.failures>0)message(failure)}
     LaunchedEffect(state.saved){if(state.saved)saved()}
+    LaunchedEffect(state.phase){if(state.phase==2)controller.loadArchiveTargets()}
     DisposableEffect(controller){onDispose{controller.close()}}
     BackHandler { close() }
     Column(Modifier.fillMaxSize().imePadding()) {
@@ -104,16 +105,46 @@ import org.json.JSONObject
                     CameraField(R.string.segment_duration,"segment_minutes",state,controller,numeric=true)
                     CameraField(R.string.retention_duration,"retention_days",state,controller,numeric=true)
                     CameraField(R.string.camera_quota,"storage_quota_gb",state,controller,numeric=true)
+                    state.archiveTargets?.let { catalog ->
+                        val selected=state.draft["recording_archive_root_id"].ifBlank{if(id!=null)catalog.defaultId.orEmpty() else ""}
+                        val current=catalog.items.firstOrNull{it.id==selected}
+                        val choices=catalog.items.filter{it.writable}.map{it.id to it.path}
+                        LabeledChoice(stringResource(R.string.camera_record_to),
+                            current?.path?:stringResource(if(choices.isEmpty())R.string.camera_archive_unavailable else R.string.camera_record_to),
+                            choices,!state.busy&&choices.isNotEmpty(),"camera-archive-root"){controller.change("recording_archive_root_id",it)}
+                    }
                 }
             }
         }
         Row(Modifier.fillMaxWidth().padding(16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             if(state.phase>0)OutlinedButton(onClick={controller.phase(state.phase-1)},enabled=!state.busy,modifier=Modifier.weight(1f)){Text(stringResource(R.string.back))}
             if(state.phase<2)Button(onClick=controller::next,enabled=!state.busy&&state.draft.validConnection(id!=null)&&state.draft.validPolicy(),modifier=Modifier.weight(1f).testTag("camera-next")){Text(stringResource(R.string.next))}
-            else Button(onClick={controller.save()},enabled=!state.busy&&state.draft.validPolicy(),modifier=Modifier.weight(1f).testTag("camera-save")){Text(stringResource(R.string.save))}
+            else Button(onClick={controller.save()},enabled=!state.busy&&state.draft.validPolicy()&&
+                (id!=null||state.archiveTargets?.items?.any{
+                    it.writable&&it.id==state.draft["recording_archive_root_id"]} != false),modifier=Modifier.weight(1f).testTag("camera-save")){Text(stringResource(R.string.save))}
         }
     }
     encoding?.let{(token,config)->CameraEncodingDialog(config,{encoding=null}){diff->controller.applyConfiguration(token,diff)}}
+    state.archiveMoveOffer?.let { offer ->
+        val finished=state.archiveMoveResult in setOf("queued","partial")
+        AlertDialog(onDismissRequest={if(!state.busy)saved()},title={Text(stringResource(R.string.camera_archive_move_title))},
+            text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+                Text(offer.cameraName)
+                Text(offer.targetPath,color=Muted)
+                Text(stringResource(R.string.camera_archive_move_count,offer.count))
+                val result=when(state.archiveMoveResult){
+                    "queued"->R.string.camera_archive_move_queued
+                    "partial"->R.string.camera_archive_move_partial
+                    "failed"->R.string.camera_archive_move_failed
+                    else->R.string.camera_archive_move_help
+                }
+                Text(stringResource(result))
+            }},confirmButton={
+                TextButton(onClick={if(finished)saved() else controller.moveSavedArchive()},enabled=!state.busy){
+                    Text(stringResource(if(finished)R.string.close else R.string.camera_archive_move_action))
+                }
+            },dismissButton={if(!finished)TextButton(onClick=saved,enabled=!state.busy){Text(stringResource(R.string.camera_archive_keep))}})
+    }
 }
 
 @Composable private fun CameraField(label:Int,key:String,state:CameraEditorState,controller:CameraEditorController,

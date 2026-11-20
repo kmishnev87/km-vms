@@ -42,12 +42,16 @@ class Camera(Base):
     # Versioned policy and bounded signal/runtime state. NULL keeps legacy intent.
     recording_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     recording_signal_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    recording_storage_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     default_live_stream: Mapped[str] = mapped_column(String(20), default="sub")
     default_record_stream: Mapped[str] = mapped_column(String(20), default="main")
 
     segment_minutes: Mapped[int] = mapped_column(Integer, default=5)
     retention_days: Mapped[int] = mapped_column(Integer, default=30)
     storage_quota_gb: Mapped[int] = mapped_column(Integer, default=50)
+    # NULL follows the installation's default. An explicit ID never falls back
+    # to that default if the selected root stops being available.
+    recording_archive_root_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     retention_policy_version: Mapped[int] = mapped_column(BigInteger, default=1, nullable=False)
 
     status: Mapped[str] = mapped_column(String(50), default="new")

@@ -22,8 +22,11 @@ from app.models.camera import Camera
 from app.models.recording import ArchiveRoot, RecordingSegment
 from app.models.storage_operation import StorageOperation
 from app.models.user import User
+from app.routers import camera_archive_rules as camera_rules, chronology, recordings
 from app.services import archive_migration as migration
+from app.services import camera_archive_placement as placement
 from app.services import migration_files
+from app.services.media_tokens import create_media_token
 from app.services.archive_migration import ArchiveMigrationBlocked, ArchiveMigrationPartial
 from app.services.recording_storage import resolve_segment_file_path
 from app.services.schema_migrations import STAGE4104_ARCHIVE_MIGRATION, STAGE4104_TABLES
@@ -236,6 +239,84 @@ def add_segment(
     ctx.db.commit()
     ctx.db.refresh(segment)
     return segment, path
+
+
+def test_camera_move_requires_separate_consent_and_never_moves_other_cameras(stage4104, monkeypatch):
+    ctx = stage4104
+    selected = add_camera(ctx, name="Panorama")
+    keep = add_camera(ctx, name="PTZ")
+    old, old_path = add_segment(ctx, selected)
+    other, other_path = add_segment(ctx, keep)
+    target_id = ctx.roots["target"].id
+    monkeypatch.setattr(placement, "archive_root_runtime_mount_path", lambda root: Path(root.root_path))
+    save = camera_rules.RuleChanges(changes=[{
+        "camera_id": camera.id,
+        "expected": {**camera_rules.rule_values(camera), camera_rules.ROOT_FIELD: None},
+        "values": {camera_rules.ROOT_FIELD: target_id},
+    } for camera in (selected, keep)])
+    change = camera_rules.save_archive_rules(save, SimpleNamespace(headers={}, client=None), ctx.db, ctx.owner)
+    assert {offer["camera_id"] for offer in change["archive_move_offers"]} == {selected.id, keep.id}
+    assert ctx.db.query(ArchiveMigrationPlan).count() == 0
+    assert resolve_segment_file_path(ctx.db, old, require_exists=True) == old_path
+    old_ref = recordings.recording_ref(old)
+    stream_token, _ = create_media_token(user=ctx.owner, scope="recording",
+                                         resource=recordings.recording_media_resource_for_segment(old, "stream"))
+    chronology_token, _ = create_media_token(user=ctx.owner, scope="chronology",
+                                             resource=chronology._chronology_media_resource(old))
+    new, new_path = add_segment(ctx, selected, root_name="target", name="after.mkv")
+    confirm = camera_rules.ConfirmCameraMoves(request_id=uuid.uuid4(), cameras=[{"camera_id": selected.id, "target_root_id": target_id}])
+    result = camera_rules.confirm_camera_moves(confirm, ctx.db, ctx.owner)
+    assert not result["skipped"] and len(result["plans"]) == 1
+    plan_id = result["plans"][0]["plan_id"]
+    assert result["plans"][0]["phase"] == "awaiting_recording"
+    replay = camera_rules.confirm_camera_moves(confirm, ctx.db, ctx.owner)
+    assert replay["plans"][0]["plan_id"] == plan_id
+    plan = ctx.db.get(ArchiveMigrationPlan, plan_id)
+    assert plan.selected_camera_id == selected.id
+    plan.updated_at = datetime.utcnow() - timedelta(seconds=20)
+    ctx.db.commit()
+    assert migration._prepare_one_plan() is True
+    ctx.db.refresh(plan)
+    assert plan.status == "ready", plan.reason_code
+    items = ctx.db.query(ArchiveMigrationItem).filter_by(plan_id=plan.id).all()
+    assert [item.segment_id for item in items] == [old.id]
+    assert migration._queue_one_camera_move() is True
+    assert migration._run_one_operation() is True
+    ctx.db.expire_all()
+    assert ctx.db.get(ArchiveMigrationPlan, plan_id).status == "completed"
+    assert not old_path.exists()
+    assert resolve_segment_file_path(ctx.db, old, require_exists=True).read_bytes() == b"stage4104-video"
+    assert resolve_segment_file_path(ctx.db, new, require_exists=True) == new_path
+    assert resolve_segment_file_path(ctx.db, other, require_exists=True) == other_path
+    req = SimpleNamespace(headers={"range": "bytes=0-7"}, client=SimpleNamespace(host="127.0.0.1"))
+    assert recordings.stream_recording(req, recording_ref=old_ref, media_token=stream_token, db=ctx.db).status_code == 206
+    assert chronology.chronology_file(request=req, playback_ref=old_ref, media_token=chronology_token, db=ctx.db).status_code == 206
+    # A stale rooted reference is allowed for read-only media of the same
+    # segment, never for a different camera or a destructive operation.
+    with pytest.raises(Exception, match="Recording root mismatch"):
+        recordings.get_finalized_segment_by_identity(ctx.db, recording_ref_value=old_ref)
+    with pytest.raises(Exception, match="Recording root mismatch"):
+        recordings.get_finalized_segment_by_identity(ctx.db, segment_id=new.id,
+            archive_root_id=ctx.roots["source"].id, for_media=True)
+
+
+def test_scoped_archive_move_waits_before_freezing_newly_finalized_file(stage4104):
+    ctx = stage4104
+    camera = add_camera(ctx, name="Camera with fresh file")
+    recent, _ = add_segment(ctx, camera, age_minutes=1)
+    camera.recording_archive_root_id = ctx.roots["target"].id
+    ctx.db.commit()
+    public = migration.request_migration_plan(ctx.db, actor=ctx.owner,
+        source_root_id=ctx.roots["source"].id, target_root_id=ctx.roots["target"].id,
+        idempotency_key="scoped-wait-test", selected_camera_id=camera.id)
+    plan = ctx.db.get(ArchiveMigrationPlan, public["plan_id"])
+    assert migration._open_scoped_inventory(ctx.db, plan) is False
+    assert plan.phase == "awaiting_recording"
+    assert ctx.db.query(ArchiveMigrationItem).filter_by(plan_id=plan.id).count() == 0
+    recent.updated_at = datetime.utcnow() - timedelta(minutes=30)
+    ctx.db.commit()
+    assert migration._open_scoped_inventory(ctx.db, plan) is True
+    assert plan.segment_high_watermark == recent.id
 
 
 def add_archive_root(ctx, *, name):

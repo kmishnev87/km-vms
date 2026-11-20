@@ -14,6 +14,22 @@ class EventsApiTest {
     private val id = "de5d0fb2-f7f4-4f0b-817a-94a4a567f746"
     private fun client(server: MockWebServer) = EventsApi(NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") })
 
+    @Test fun ordinaryCameraEventAcceptsArchiveStatusWithoutAiFields() = runBlocking {
+        MockWebServer().use { server ->
+            val event = JSONObject("""{"id":"$id","camera_id":3,"camera_name":"Panorama","kind":"intrusion","occurred_at":"2026-11-20T13:44:47Z","snapshot_available":true}""")
+            val row = CameraEvent.from(event, ZoneOffset.UTC)
+            for (state in listOf("pending", "unavailable", "ready")) {
+                val archive = JSONObject().put("state", state).put("camera_id", 3).put("timestamp_utc", "2026-11-20T13:44:42Z")
+                server.enqueue(MockResponse().setBody(JSONObject().put("event", event).put("archive", archive).toString()))
+                val result = client(server).evidence(row, ZoneOffset.UTC)
+                assertEquals(state.uppercase(), result.state.name)
+                assertNull(result.event.ai)
+                assertTrue(result.event.snapshotAvailable)
+                assertEquals("/api/camera-events/$id/evidence", server.takeRequest().path)
+            }
+        }
+    }
+
     @Test fun unreadFilterSearchesServerHistoryAndIsReversibleWithoutMarkingAnythingRead() = runBlocking {
         MockWebServer().use { server ->
             val api = client(server)
