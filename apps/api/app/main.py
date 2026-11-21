@@ -37,7 +37,7 @@ from app.services.archive_integrity import start_archive_integrity_worker, stop_
 from app.services.archive_migration import start_archive_migration_worker, stop_archive_migration_worker
 from app.services.archive_root_activation import start_archive_root_activation_closeout_worker
 from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
-from app.services.recording_storage import ensure_archive_roots, migrate_archive_root_identities, write_archive_roots_runtime_files
+from app.services.recording_storage import ensure_archive_roots, migrate_archive_root_identities, storage_root, write_archive_roots_runtime_files
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 from app.services.update_check import run_startup_due_check
@@ -166,7 +166,7 @@ async def safe_request_validation_error(
 
 @app.on_event("startup")
 def startup():
-    Path(settings.storage_root).mkdir(parents=True, exist_ok=True)
+    storage_root()
     Path(settings.storage_previews).mkdir(parents=True, exist_ok=True)
     Path(settings.storage_exports).mkdir(parents=True, exist_ok=True)
 

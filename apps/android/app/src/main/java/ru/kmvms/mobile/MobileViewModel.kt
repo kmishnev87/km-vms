@@ -34,6 +34,7 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     private val vault = ProfileVault(application)
     private val clients = mutableMapOf<String, NasApi>()
     private var generation = 0L
+    private var lastPushCheck: Pair<String, Long>? = null
     private val mutable = MutableStateFlow(MobileState())
     val state: StateFlow<MobileState> = mutable
     fun api(): NasApi? = mutable.value.active?.id?.let { clients[it] }
@@ -70,6 +71,7 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
                 clients[profile.id] = client
                 mutable.value = MobileState(profiles = vault.profiles(), active = profile, user = user)
                 reloadCameras()
+                checkPushRegistration()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (own == generation) mutable.update { it.copy(connecting = false, problem = problem(error)) }
@@ -91,12 +93,22 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
                 clients[profile.id] = client
                 mutable.update { it.copy(user = user, loading = false) }
                 reloadCameras()
+                checkPushRegistration()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (own == generation) mutable.update { it.copy(loading = false, problem = problem(error),
                     showConnection = problem(error) in setOf(ApiProblem.AUTHENTICATION, ApiProblem.SAVED_SIGN_IN)) }
             }
         }
+    }
+    fun checkPushRegistration() {
+        val profile = mutable.value.active?.takeIf { mutable.value.user?.can("view_live") == true } ?: return
+        val client = api() ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastPushCheck?.let { it.first == profile.id && now - it.second < 60_000 } == true) return
+        lastPushCheck = profile.id to now
+        val own = generation
+        viewModelScope.launch { PushLifecycle.reconcile(getApplication(), profile.id, client) { own == generation } }
     }
     fun reloadCameras() {
         val client = api() ?: return

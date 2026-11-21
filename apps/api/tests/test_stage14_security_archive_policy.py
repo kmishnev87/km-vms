@@ -142,7 +142,9 @@ def test_materializer_ignores_injected_yaml_and_prunes_registry(host, tmp_path, 
     text = target.read_text()
     assert "privileged:" not in text and "untrusted" not in text
     assert all(f"  {service}:\n" in text for service in ("api", "schema-update", "recorder"))
-    assert text.count("create_host_path: false") == 6
+    # Both public runtime mounts and the installer primary bind must be
+    # derived from the same validated plan.
+    assert text.count("create_host_path: false") == 9
     assert target.stat().st_mode & 0o777 == 0o400
     assert "privileged: true" in injected.read_text()  # Not parsed or rewritten.
     (control / "archive-roots-runtime.json").write_text(json.dumps(intent("/Volume3/archive")))
@@ -244,3 +246,93 @@ def test_new_common_uses_protected_policy_for_old_slot_and_pythonless_helper():
     assert 'archive_override = protected_archive_override(app_dir, project_name)' in bridge
     assert 'archive_override="$stable_app_dir/data/install-control/docker-compose.archive-roots.yml"' not in common
     assert 'app_dir / "data/install-control/docker-compose.archive-roots.yml"' not in bridge
+
+
+def _cold_fixture(host, tmp_path, monkeypatch):
+    app = tmp_path / "app"
+    control = app / "data/install-control"
+    control.mkdir(parents=True)
+    tree, mountinfo = host
+    (tree / "Volume2/secondary").mkdir(parents=True)
+    with mountinfo.open("a") as stream:
+        stream.write(f"2 0 0:2 / {tree}/Volume2 rw - ext4 /dev/test2 rw\n")
+    (app / ".env").write_text("KM_VMS_HOST_APP_DIR=/Volume3/app\nSURVEILLANCE_ROOT=/Volume3/archive\n")
+    (control / "archive-roots-runtime.json").write_text(json.dumps(intent("/Volume3/archive", "/Volume2/secondary")))
+    for path in ("Volume3/archive", "Volume2/secondary"):
+        (tree / path / "kmvms/recordings").mkdir(parents=True)
+    monkeypatch.setattr(policy, "installed_sources", lambda _: {"/Volume3/archive", "/Volume2/secondary"})
+
+    def docker(args, *, data=None, timeout=20):
+        if args[0] == "info":
+            return "/Volume1/docker-data"
+        if args[0] == "image":
+            return "sha256:" + "a" * 64
+        return json.dumps(policy._host_probe(json.loads(data), str(tree), str(mountinfo)))
+
+    monkeypatch.setattr(policy, "docker_command", docker)
+    original = policy.materialize(app, "fixture")
+    assert set(item["target"] for item in policy.mount_evidence(app)) == {
+        "/storage/archive", "/storage/archive-roots/root_0", "/storage/archive-roots/root_1",
+    }
+    return app, tree, mountinfo, original
+
+
+@pytest.mark.parametrize("unplug", ["primary", "secondary", "both"])
+def test_cold_start_omits_only_missing_approved_mounts_and_restores_them(host, tmp_path, monkeypatch, unplug):
+    app, tree, _, override = _cold_fixture(host, tmp_path, monkeypatch)
+    existing = override.read_bytes()
+    missing = []
+    for name, relative in (("primary", "Volume3/archive"), ("secondary", "Volume2/secondary")):
+        if unplug in {name, "both"}:
+            path = tree / relative
+            held = path.with_name(path.name + "-held")
+            path.rename(held)
+            missing.append((held, path))
+    policy.materialize(app, "fixture")
+    plan = override.read_text()
+    assert ("/Volume3/app/data/update-runtime/archive-authority/unavailable-primary" in plan) == (
+        unplug in {"primary", "both"}
+    )
+    assert ('source: "/Volume2/secondary"' in plan) == (unplug == "primary")
+    assert ('source: "/Volume3/archive"' in plan) == (unplug == "secondary")
+    assert ("read_only: true" in plan) == (unplug != "secondary")
+    assert all(not path.exists() for _, path in missing)
+    for held, path in missing:
+        held.rename(path)
+    assert policy.materialize(app, "fixture").read_bytes() == existing
+
+
+def test_same_path_on_wrong_or_unmounted_filesystem_is_not_reattached(host, tmp_path, monkeypatch):
+    app, tree, mountinfo, override = _cold_fixture(host, tmp_path, monkeypatch)
+    original = mountinfo.read_text()
+    # An unmounted NAS path can still look like a real directory in the
+    # underlying system FS. Directory existence is not a mount.
+    mountinfo.write_text("\n".join(line for line in original.splitlines() if "/Volume2 " not in line) + "\n")
+    policy.materialize(app, "fixture")
+    assert 'source: "/Volume2/secondary"' not in override.read_text()
+    path = tree / "Volume2/secondary"
+    path.rename(path.with_name("original"))
+    (path / "kmvms/recordings").mkdir(parents=True)
+    mountinfo.write_text(original)
+    policy.materialize(app, "fixture")
+    assert 'source: "/Volume2/secondary"' not in override.read_text()
+    assert not any((path / "kmvms/recordings").iterdir())
+    assert {entry["target"] for entry in policy.mount_evidence(app) if not entry["available"]} == {
+        "/storage/archive-roots/root_1"
+    }
+
+
+def test_returning_disk_uses_superblock_readiness_not_readonly_probe_mount_flag(host, tmp_path, monkeypatch):
+    app, tree, mountinfo, override = _cold_fixture(host, tmp_path, monkeypatch)
+    healthy = override.read_bytes()
+    original = mountinfo.read_text()
+    disk = tree / "Volume2/secondary"
+    held = disk.with_name("held")
+    disk.rename(held)
+    policy.materialize(app, "fixture")
+    held.rename(disk)
+    mountinfo.write_text(original.replace("/Volume2 rw - ext4 /dev/test2 rw", "/Volume2 ro - ext4 /dev/test2 ro"))
+    policy.materialize(app, "fixture")
+    assert 'source: "/Volume2/secondary"' not in override.read_text()
+    mountinfo.write_text(original.replace("/Volume2 rw - ext4", "/Volume2 ro - ext4"))
+    assert policy.materialize(app, "fixture").read_bytes() == healthy

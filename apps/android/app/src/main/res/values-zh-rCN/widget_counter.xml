@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="widget_count_title">通知 · 3 × 1</string>
     <string name="widget_count_description">快速控制通知并查看 NAS 未读数。点击数字打开事件历史。</string>
     <string name="widget_with_count">显示未读数</string>
     <string name="widget_without_count">不显示未读数</string>

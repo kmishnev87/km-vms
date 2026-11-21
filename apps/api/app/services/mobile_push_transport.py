@@ -33,6 +33,10 @@ class PushDeliveryError(RuntimeError):
         super().__init__(code)
 
 
+class PushEndpointUnavailable(RuntimeError):
+    """A valid-looking service address cannot be resolved right now."""
+
+
 def decode_key(value: str, size: int) -> bytes:
     if not isinstance(value, str) or len(value) > 128:
         raise ValueError("mobile_push_key_invalid")
@@ -73,12 +77,21 @@ def public_target(endpoint: str) -> PushTarget:
         host = url.hostname.encode("idna").decode("ascii").lower()
         if len(host) > 253 or host.endswith((".local", ".localhost")) or host == "localhost":
             raise ValueError()
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("mobile_push_endpoint_invalid") from exc
+    try:
         answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except OSError:
+        # A dead resolver or lost WAN is not proof that the endpoint was revoked.
+        raise PushEndpointUnavailable("mobile_push_dns_unavailable") from None
+    try:
         addresses = list(dict.fromkeys(answer[4][0] for answer in answers))
-        if not addresses or len(addresses) > 32 or any(not ipaddress.ip_address(ip).is_global for ip in addresses):
+        if not addresses:
+            raise PushEndpointUnavailable("mobile_push_dns_unavailable")
+        if len(addresses) > 32 or any(not ipaddress.ip_address(ip).is_global for ip in addresses):
             raise ValueError()
         return PushTarget(host, addresses[0], (url.path or "/") + ("?" + url.query if url.query else ""))
-    except (ValueError, OSError, UnicodeError) as exc:
+    except (ValueError, UnicodeError) as exc:
         raise ValueError("mobile_push_endpoint_invalid") from exc
 
 
@@ -135,6 +148,8 @@ def send_push(subscription: dict, payload: str) -> None:
         code = exc.response.status_code if exc.response is not None else 0
         raise PushDeliveryError("push_registration_expired" if code in (404, 410) else "push_service_rejected",
                                 permanent=code in (400, 401, 403, 404, 410, 413)) from None
+    except PushEndpointUnavailable:
+        raise PushDeliveryError("push_endpoint_unavailable") from None
     except ValueError:
         raise PushDeliveryError("push_endpoint_invalid", permanent=True) from None
     except PushDeliveryError:

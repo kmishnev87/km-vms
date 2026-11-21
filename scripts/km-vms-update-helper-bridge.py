@@ -247,7 +247,7 @@ SOURCE_TAG_COMMITS: dict[str, str] = dict(UPDATE_LINEAGE["tag_commits"])
 
 
 
-def protected_archive_override(app_dir: Path, project_name: str | None = None) -> Path | None:
+def load_archive_policy():
     script = Path(__file__).with_name("km-vms-archive-policy.py")
     if script.is_symlink() or not script.is_file():
         raise BridgeError("archive_roots_manifest_invalid", "Trusted archive policy is unavailable.")
@@ -255,9 +255,13 @@ def protected_archive_override(app_dir: Path, project_name: str | None = None) -
     if spec is None or spec.loader is None:
         raise BridgeError("archive_roots_manifest_invalid", "Trusted archive policy cannot be loaded.")
     module = importlib.util.module_from_spec(spec)
+    _exec_module_without_bytecode(spec, module)
+    return module
+
+
+def protected_archive_override(app_dir: Path, project_name: str | None = None) -> Path | None:
     try:
-        _exec_module_without_bytecode(spec, module)
-        return module.materialize(app_dir, project_name or resolve_stable_project_name(app_dir))
+        return load_archive_policy().materialize(app_dir, project_name or resolve_stable_project_name(app_dir))
     except Exception as exc:
         if getattr(exc, "code", None) == "archive_probe_image_unavailable":
             raise BridgeError("archive_probe_image_unavailable", "Required archive validation image is unavailable.") from exc
@@ -268,6 +272,131 @@ def normalize_archive_roots_override(app_dir: Path) -> bool:
     # API-writable YAML is a compatibility projection, never executable input.
     protected_archive_override(app_dir)
     return False
+
+
+def _archive_service_observation(project: str, service: str) -> dict | None:
+    filters = ["--filter", f"label=com.docker.compose.project={project}",
+               "--filter", f"label=com.docker.compose.service={service}"]
+    ids = run_command(["docker", "ps", "-aq", *filters], timeout=15,
+                      error_code="archive_recovery_not_ready",
+                      error_message="Archive service observation is unavailable.").stdout.splitlines()
+    if not ids:
+        return None  # Respect an intentionally removed deployment.
+    if len(ids) != 1 or not re.fullmatch(r"[0-9a-f]{12,64}", ids[0]):
+        raise BridgeError("archive_recovery_not_ready", "Archive runtime is not uniquely identified.")
+    # Filter by name again inside inspect. Only emit the few non-sensitive
+    # fields used by this recovery; never fetch full container environment.
+    template = (
+        '{{index .Config.Labels "com.docker.compose.project"}}\n'
+        '{{index .Config.Labels "com.docker.compose.service"}}\n'
+        '{{json .State}}\n{{json .Mounts}}\n'
+        '{{json .HostConfig.RestartPolicy.Name}}\n'
+        '{{range .Config.Env}}{{if eq (printf "%.29s" .) "KMVMS_OFFLINE_ARCHIVE_MOUNTS="}}{{println .}}{{end}}{{end}}'
+    )
+    observed = run_command(["docker", "inspect", "--format", template, ids[0]], timeout=15,
+                           error_code="archive_recovery_not_ready",
+                           error_message="Archive service observation is unavailable.").stdout.splitlines()
+    if len(observed) < 5 or observed[:2] != [project, service]:
+        raise BridgeError("archive_recovery_not_ready", "Archive runtime identity does not match the installation.")
+    state, mounts = json.loads(observed[2]), json.loads(observed[3])
+    offline = set()
+    for value in observed[5:]:
+        if value.startswith("KMVMS_OFFLINE_ARCHIVE_MOUNTS="):
+            snapshot = json.loads(value.split("=", 1)[1])
+            if type(snapshot) is list and all(type(item) is str for item in snapshot):
+                offline.update(snapshot)
+    return {
+        "state": state,
+        "restart_policy": json.loads(observed[4]),
+        "offline": offline,
+        "mounts": {row["Destination"]: (row["Source"], not row["RW"])
+                   for row in mounts if row.get("Type") == "bind"},
+    }
+
+
+def archive_recovery_changes(evidence, observations, sentinel, *, unavailable_primary=False):
+    """Only take action for a lost mount or one deliberately omitted on startup."""
+    drop, attach = set(), set()
+    for item in evidence:
+        target = item["target"]
+        state = (item["source"], False) if item["available"] else (
+            (sentinel, True) if target == "/storage/archive" else None
+        )
+        for observation in observations:
+            if observation["mounts"].get(target) == state:
+                continue
+            if not item["available"] and target not in observation["offline"]:
+                drop.add(target)
+            elif item["available"] and (target in observation["offline"] or (
+                target == "/storage/archive" and unavailable_primary
+            )):
+                attach.add(target)
+    return drop, attach
+
+
+def reconcile_archive_mounts(app_dir, project_name, *, returning, now, boot_recovery):
+    """One bounded pass from the existing update helper, on the active slot only."""
+    bootstrap = load_stable_bootstrap(app_dir)
+    if bootstrap.writer_isolation_active(app_dir):
+        return True, None
+    bundle, _ = bootstrap.validate_current_bundle(app_dir)
+    engine = bootstrap.load_slot_engine(bundle)
+    slot_id, source, manifest = bootstrap.resolve_authority(app_dir, project_name=project_name, repair=False)
+    # /host-app and the exact installed host path are separate bind aliases
+    # of this same slot inside the helper container.
+    if not source.samefile(Path(__file__).resolve().parents[1]):
+        return False, None  # Keep a helper process from a previous slot inert.
+    config = manifest["compose_evidence"]["services"]
+    if not {"api", "recorder", "postgres"}.issubset(config):
+        return False, None
+    entries = [_archive_service_observation(project_name, name) for name in ("api", "recorder")]
+    if any(entry is None for entry in entries):
+        return False, None
+    policy = load_archive_policy()
+    override = policy.materialize(app_dir, project_name)
+    if override is None:
+        return False, None
+    evidence = policy.mount_evidence(app_dir)
+    missing = any(not item["available"] for item in evidence)
+    host_app, _ = policy.installer_paths(app_dir)
+    sentinel = str(Path(host_app) / policy.AUTHORITY_DIRECTORY / policy.OFFLINE_PRIMARY)
+    drop, attach = archive_recovery_changes(
+        evidence, entries, sentinel,
+        unavailable_primary=any(entry["mounts"].get("/storage/archive") == (sentinel, True) for entry in entries),
+    )
+    if not drop and not attach:
+        return missing, None
+    # Docker can reject a bind before persisting State.Error. Only during
+    # helper startup, and only to drop an actually missing old bind, recover
+    # stopped services configured to autostart. Honor maintenance isolation
+    # and do not revive an intentionally stopped app on a later reattachment.
+    if any(entry["state"].get("Paused") or entry["state"].get("Status") == "removing" for entry in entries):
+        return missing, None
+    active_or_failed = any(entry["state"].get("Running") or entry["state"].get("Error") for entry in entries)
+    cold_bind_failure = (boot_recovery and drop
+                         and all(entry["restart_policy"] == "always" for entry in entries))
+    if not (active_or_failed or cold_bind_failure):
+        return missing, None
+    if attach and not drop:
+        signature = tuple((item["target"], item["identity"]["volume"], item["identity"]["inode"])
+                          for item in evidence if item["target"] in attach and item["identity"])
+        if returning is None or returning[0] != signature:
+            return True, (signature, now)
+        if now - returning[1] < 30:
+            return True, returning
+    database = _archive_service_observation(project_name, "postgres")
+    if not database or (database["state"].get("Health") or {}).get("Status") != "healthy":
+        return True, returning
+    with tempfile.TemporaryDirectory(prefix="km-vms-archive-recovery-") as temporary:
+        compose, env, _, _ = slot_compose(app_dir, project_name, slot_id, engine=engine,
+                                          override_root=Path(temporary), with_image_override=True)
+        if policy.mount_evidence(app_dir) != evidence or bootstrap.writer_isolation_active(app_dir):
+            return True, None  # Never apply an old observation after a change.
+        run_command([*compose, "up", "-d", "--no-build", "--no-deps", "api", "recorder"],
+                    env=env, timeout=160, error_code="archive_recovery_start_failed",
+                    error_message="Archive runtime did not converge.")
+        wait_compose_service_ready(compose, "api", env=env, timeout_seconds=45)
+    return missing, None
 
 
 

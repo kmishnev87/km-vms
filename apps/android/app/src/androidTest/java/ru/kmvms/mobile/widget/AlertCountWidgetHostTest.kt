@@ -2,7 +2,6 @@ package ru.kmvms.mobile.widget
 
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
-import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -21,7 +20,7 @@ import ru.kmvms.mobile.push.PushStore
 /** Isolated host IDs; runner grants BIND_APPWIDGET only to the debug package. */
 @RunWith(AndroidJUnit4::class)
 class AlertCountWidgetHostTest {
-    @Test fun threeByOneOpensLiveAndHistoryForItsBoundNas() {
+    @Test fun onlyTwoByOneCanBeAddedAndOpensLiveAndHistoryForItsBoundNas() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val manager = AppWidgetManager.getInstance(context)
         val host = AppWidgetHost(context, 117202611)
@@ -34,13 +33,15 @@ class AlertCountWidgetHostTest {
         try {
             vault.save(one, "synthetic-only", "synthetic-access")
             vault.save(two, "synthetic-only", "synthetic-access")
-            for (variant in WidgetVariant.entries) {
+            val installed = manager.installedProviders.filter { it.provider.packageName == context.packageName }
+            assertEquals(listOf(alertWidgetComponent(context)), installed.map { it.provider })
+            run {
                 val id = host.allocateAppWidgetId().also(ids::add)
-                assertTrue("debug host needs adb appwidget grantbind", manager.bindAppWidgetIdIfAllowed(id, ComponentName(context, variant.provider)))
+                assertTrue("debug host needs adb appwidget grantbind", manager.bindAppWidgetIdIfAllowed(id, alertWidgetComponent(context)))
                 store.bind(id, AlertWidgetBinding(one.id, one.username))
-                assertEquals(variant, widgetVariant(context, id))
+                assertTrue(ownedAlertWidget(context, id))
                 val info = manager.getAppWidgetInfo(id)
-                assertEquals(if (variant == WidgetVariant.COUNT) 3 else 2, info.targetCellWidth)
+                assertEquals(2, info.targetCellWidth)
                 assertEquals(1, info.targetCellHeight)
                 for ((action, address, expected) in listOf(
                     Triple(AlertWidgetProvider.OPEN_LIVE, "live", EventAction.LIVE),
@@ -48,15 +49,12 @@ class AlertCountWidgetHostTest {
                 )) {
                     val intent = Intent(action, Uri.parse("kmvmswidget://$address/$id"))
                         .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                    val accepted = AlertWidgetProvider.openDestination(context, intent)
-                    assertEquals(variant == WidgetVariant.COUNT, accepted)
-                    if (accepted) {
+                    assertTrue(AlertWidgetProvider.openDestination(context, intent))
                         assertEquals(one.id, NotificationNavigation.pending.value?.profileId)
                         assertEquals(expected, NotificationNavigation.pending.value?.action)
                         assertNull(NotificationNavigation.pending.value?.eventId)
                         assertEquals(two.id, vault.selectedId())
                         NotificationNavigation.pending.value?.let { NotificationNavigation.consume(it.key) }
-                    }
                 }
                 AlertWidgetProvider.render(context, id)
             }

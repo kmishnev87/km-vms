@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.camera_archive_placement import ARCHIVE_TARGET_FAILURES, current_default_id, storage_route_evidence
-from app.services.camera_source_health import build_source_issues
+from app.services.camera_source_health import build_source_issues, fresh, is_video_network_failure
 from app.services.live_engine import manager as live_manager
 from app.services.retention_automation import auto_free_runtime_status, retention_runtime_status
 from app.services.recorder_runtime_status import (
@@ -228,9 +228,20 @@ def _build_live_domain(cameras: list[Camera]) -> tuple[dict[str, Any], dict[int,
     items: list[dict[str, Any]] = []
     by_camera: dict[int, dict[str, Any]] = {}
 
+    measured_at = _utc_now()
     for camera_id, stream in keys:
         item = by_key.get((camera_id, stream))
         severity, reasons, safe_failure_reason = _live_reason_and_severity(item, (camera_id, stream) in expected_keys)
+        link_evidence = None
+        if item:
+            if ((item.get("running") and item.get("ready") and (
+                    fresh(item.get("last_segment_at"), measured_at, 45)
+                    or fresh(item.get("last_ffmpeg_progress_at"), measured_at, 45)))
+                    or (safe_failure_reason == "auth_failed" and fresh(item.get("state_changed_at"), measured_at))):
+                link_evidence = "reachable"
+            elif (severity == "error" and fresh(item.get("state_changed_at"), measured_at)
+                    and is_video_network_failure(item.get("failure_reason"), item.get("last_error"))):
+                link_evidence = "network_failure"
         safe_item = {
             "camera_id": camera_id,
             "camera_name": camera_names.get(camera_id),
@@ -246,6 +257,7 @@ def _build_live_domain(cameras: list[Camera]) -> tuple[dict[str, Any], dict[int,
             "next_retry_at": item.get("next_retry_at") if item and isinstance(item.get("next_retry_at"), (int, float)) else None,
             "retry_count": int(item.get("retry_count") or 0) if item else 0,
             "ever_ready": bool(item.get("ever_ready")) if item else False,
+            "link_evidence": link_evidence,
         }
         items.append(safe_item)
         current = by_camera.get(camera_id)
@@ -797,7 +809,11 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
             route["source_path"] = archive_paths.get(route["primary_root_id"])
             route["target_path"] = archive_paths.get(route["actual_root_id"] or route["effective_root_id"])
     storage_suspended = bool(_as_dict(storage_summary.get("auto_free_space_policy")).get("recording_suspended_by_low_disk"))
-    source_issues = build_source_issues(cameras, recorder_states, now, storage_suspended=storage_suspended,
+    live_evidence = {}
+    for item in live_domain["items"]:
+        if evidence := item.get("link_evidence"):
+            live_evidence.setdefault(item["camera_id"], set()).add(evidence)
+    source_issues = build_source_issues(cameras, recorder_states, now, live_evidence=live_evidence, storage_suspended=storage_suspended,
                                        default_archive_root_id=current_default_id(db) if storage_suspended else None)
     cameras_domain["source_issues"] = source_issues
     if source_issues:
@@ -852,7 +868,8 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
             | set(storage_domain.get("reason_codes") or [])
             | set(retention_domain.get("reason_codes") or [])
             | set(reconciliation_domain.get("reason_codes") or [])
-            | {"ai_analysis_failed" if issue["kind"] == "ai" else "camera_event_channel_failed" for issue in source_issues}
+            | {"ai_analysis_failed" if issue["kind"] == "ai" else "camera_unreachable" if issue.get("cause") == "unreachable"
+               else "camera_event_channel_failed" for issue in source_issues}
         ),
         "domains": {
             "cameras": cameras_domain,

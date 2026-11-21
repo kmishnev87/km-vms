@@ -3,7 +3,6 @@ package ru.kmvms.mobile.widget
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -29,10 +28,10 @@ open class AlertWidgetProvider : AppWidgetProvider() {
     }
     companion object {
         fun refresh(context: Context) {
-            WidgetVariant.entries.forEach { variant -> widgetIds(context, variant).forEach { render(context, it) } }
+            widgetIds(context).forEach { render(context, it) }
         }
         internal fun render(context: Context, id: Int) {
-            val variant = widgetVariant(context, id) ?: return
+            if (!ownedAlertWidget(context, id)) return
             val language = AppLocales.selected(context)
             val localized = if (language.isNotEmpty()) AppLocales.localizedContext(context, language) else context
             val binding = AlertWidgetStore(context).binding(id)
@@ -44,23 +43,19 @@ open class AlertWidgetProvider : AppWidgetProvider() {
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             val click = PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            val views = RemoteViews(context.packageName, if (variant == WidgetVariant.COUNT) R.layout.alert_widget_count else R.layout.alert_widget).apply {
-                setTextViewText(R.id.alert_widget_title, localized.getString(R.string.widget_alerts))
+            val views = RemoteViews(context.packageName, R.layout.alert_widget_count).apply {
                 setTextViewText(R.id.alert_widget_server, profile?.name ?: localized.getString(R.string.widget_configure))
-                val settingsArea = if (variant == WidgetVariant.COUNT) R.id.alert_widget_settings else R.id.alert_widget_root
-                setContentDescription(settingsArea, localized.getString(R.string.widget_open_for, profile?.name.orEmpty()))
-                setOnClickPendingIntent(settingsArea, click)
-                if (variant == WidgetVariant.COUNT) {
-                    val signedIn = profile != null && runCatching { ProfileVault(context).signIn(profile.id) }.getOrNull() != null
-                    val value = profile?.takeIf { signedIn }?.let { WidgetUnreadStore(context).get(it)?.count }
-                    setTextViewText(R.id.alert_widget_count, value?.coerceAtMost(99)?.toString() ?: "—")
-                    setViewVisibility(R.id.alert_widget_count_plus, if (value != null && value > 99) android.view.View.VISIBLE else android.view.View.INVISIBLE)
-                    setContentDescription(R.id.alert_widget_count_area, if (value == null) localized.getString(R.string.widget_count_unavailable)
-                        else localized.getString(R.string.widget_unread_count, value))
-                    setContentDescription(R.id.alert_widget_live, localized.getString(R.string.live))
-                    setOnClickPendingIntent(R.id.alert_widget_live, if (configured) destinationClick(context, id, OPEN_LIVE, "live") else click)
-                    setOnClickPendingIntent(R.id.alert_widget_count_area, if (configured) destinationClick(context, id, OPEN_EVENTS, "events") else click)
-                }
+                setContentDescription(R.id.alert_widget_settings, localized.getString(R.string.widget_open_for, profile?.name.orEmpty()))
+                setOnClickPendingIntent(R.id.alert_widget_settings, click)
+                val signedIn = profile != null && runCatching { ProfileVault(context).signIn(profile.id) }.getOrNull() != null
+                val value = profile?.takeIf { signedIn }?.let { WidgetUnreadStore(context).get(it)?.count }
+                setTextViewText(R.id.alert_widget_count, value?.coerceAtMost(99)?.toString() ?: "—")
+                setViewVisibility(R.id.alert_widget_count_plus, if (value != null && value > 99) android.view.View.VISIBLE else android.view.View.INVISIBLE)
+                setContentDescription(R.id.alert_widget_count_area, if (value == null) localized.getString(R.string.widget_count_unavailable)
+                    else localized.getString(R.string.widget_unread_count, value))
+                setContentDescription(R.id.alert_widget_live, localized.getString(R.string.live))
+                setOnClickPendingIntent(R.id.alert_widget_live, if (configured) destinationClick(context, id, OPEN_LIVE, "live") else click)
+                setOnClickPendingIntent(R.id.alert_widget_count_area, if (configured) destinationClick(context, id, OPEN_EVENTS, "events") else click)
             }
             AppWidgetManager.getInstance(context).updateAppWidget(id, views)
         }
@@ -85,7 +80,7 @@ open class AlertWidgetProvider : AppWidgetProvider() {
             val data = intent.data ?: return false
             if (data.scheme != "kmvmswidget" || data.host != host || data.query != null || data.fragment != null) return false
             val id = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
-            if (widgetVariant(context, id) != WidgetVariant.COUNT || data.path != "/$id") return false
+            if (!ownedAlertWidget(context, id) || data.path != "/$id") return false
             val binding = AlertWidgetStore(context).binding(id) ?: return false
             if (ProfileVault(context).profiles().none(binding::matches)) return false
             if (host == "live") NotificationNavigation.live(binding.profileId) else NotificationNavigation.events(binding.profileId)
@@ -96,18 +91,18 @@ open class AlertWidgetProvider : AppWidgetProvider() {
 
 internal object AlertWidgetPin {
     fun supported(context: Context) = AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported
-    fun request(context: Context, profileId: String, variant: WidgetVariant = WidgetVariant.COMPACT): Boolean {
+    fun request(context: Context, profileId: String): Boolean {
         val vault = ProfileVault(context)
         val profile = vault.profiles().firstOrNull { it.id == profileId } ?: return false
         if (vault.signIn(profileId) == null) return false
         val manager = AppWidgetManager.getInstance(context)
         if (!manager.isRequestPinAppWidgetSupported) return false
-        val nonce = AlertWidgetStore(context).pending(AlertWidgetBinding(profile.id, profile.username), variant = variant)
+        val nonce = AlertWidgetStore(context).pending(AlertWidgetBinding(profile.id, profile.username))
         val callback = PendingIntent.getBroadcast(context, 0,
             Intent(context, AlertWidgetPinnedReceiver::class.java).setData(Uri.parse("kmvmswidget://pin/$nonce")),
             // Explicit private receiver + one-use nonce. The launcher must fill in the allocated widget ID.
             PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE)
-        return manager.requestPinAppWidget(ComponentName(context, variant.provider), null, callback)
+        return manager.requestPinAppWidget(alertWidgetComponent(context), null, callback)
     }
 }
 
@@ -115,14 +110,14 @@ class AlertWidgetPinnedReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.data?.scheme != "kmvmswidget" || intent.data?.host != "pin") return
         val id = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
-        val variant = widgetVariant(context, id) ?: return
-        val binding = AlertWidgetStore(context).consume(intent.data?.lastPathSegment.orEmpty(), variant = variant) ?: return
+        if (!ownedAlertWidget(context, id)) return
+        val binding = AlertWidgetStore(context).consume(intent.data?.lastPathSegment.orEmpty()) ?: return
         if (!ProfileVault(context).profiles().any(binding::matches)) return
         AlertWidgetStore(context).bind(id, binding)
         AlertWidgetProvider.render(context, id)
-        if (variant == WidgetVariant.COUNT) WidgetUnreadSync.enqueue(context, binding.profileId)
+        WidgetUnreadSync.enqueue(context, binding.profileId)
     }
 }
 
-/** Separate provider keeps both sizes selectable and preserves existing widgets. */
+/** Keep the original counter provider ID so an already pinned counter keeps its profile. */
 class AlertCountWidgetProvider : AlertWidgetProvider()

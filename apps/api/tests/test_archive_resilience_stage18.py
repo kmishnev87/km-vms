@@ -15,6 +15,20 @@ def disk(root, volume, dev, free, error=None):
     return Destination(root, volume, Path(f"/test/{root}"), free, dev, error)
 
 
+def test_offline_primary_bind_is_not_counted_as_available_system_disk(tmp_path, monkeypatch):
+    from app.services.recording_storage import root_status, storage_root
+    from app.services.storage_monitoring import _path_checks
+
+    sentinel = tmp_path / "primary"
+    monkeypatch.setattr(settings, "storage_root", str(sentinel))
+    monkeypatch.setenv("KMVMS_OFFLINE_ARCHIVE_MOUNTS", json.dumps([str(sentinel)]))
+    assert storage_root() == sentinel and not sentinel.exists()
+    sentinel.mkdir()
+    assert not root_status(sentinel)["available"]
+    assert not _path_checks(sentinel)["path_exists"]
+    assert _path_checks(sentinel)["storage_root_realpath"] is None
+
+
 def test_failover_uses_largest_available_bytes_on_a_different_volume_and_stays_there():
     primary = disk("home", "physical-a", 1, 0, "camera_archive_root_unavailable")
     same = disk("another-folder", "physical-a", 1, 10**15)
@@ -103,3 +117,13 @@ def test_status_never_claims_recording_from_an_old_or_unconfirmed_writer():
     assert storage_route_evidence(camera, proof)["actual_root_id"] == "tmp"
     proof["job_id"] = "new-writer"
     assert storage_route_evidence(camera, proof)["status"] == "waiting"
+def test_cold_route_uses_persisted_volume_proof_even_without_source_device():
+    from recorder_core.archive_destination import Destination, select_route
+
+    missing = Destination("missing", None, None, 0, None, "camera_archive_root_unavailable", "physical-a")
+    same = Destination("same-disk", None, Path("/archive/a"), 1000, 2, None, "physical-a")
+    large = Destination("larger", None, Path("/archive/b"), 500, 3, None, "physical-b")
+    small = Destination("smaller", None, Path("/archive/c"), 300, 4, None, "physical-c")
+    destinations = {row.root_id: row for row in (missing, same, large, small)}
+    assert select_route(missing, destinations, None, allow_fallback=False, now=0).target is None
+    assert select_route(missing, destinations, None, allow_fallback=True, now=0).target == large

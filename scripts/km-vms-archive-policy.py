@@ -26,6 +26,10 @@ PYTHON_IMAGE = "python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb5
 PROBE_IMAGE_PULL_TIMEOUT_SECONDS = 120
 ROOT_ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
 PROJECT = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+PRIMARY_ARCHIVE = "/storage/archive"
+AUTHORITY_DIRECTORY = "data/update-runtime/archive-authority"
+ARCHIVE_EVIDENCE = "mount-evidence.json"
+OFFLINE_PRIMARY = "unavailable-primary"
 
 
 class ArchivePolicyError(RuntimeError):
@@ -107,6 +111,7 @@ def parse_intent(value):
 def _host_probe(payload, host_root="/host", mountinfo="/proc/self/mountinfo"):
     # This function is shipped verbatim to a fixed read-only Python container.
     # Absolute host symlinks must be rebased, not resolved in its own rootfs.
+    import hashlib
     import json
     import os
     import re
@@ -152,14 +157,16 @@ def _host_probe(payload, host_root="/host", mountinfo="/proc/self/mountinfo"):
     app = canonical(payload["app_dir"])
     default = app + "/data/archive"
     docker_root = canonical(payload["docker_root"])
+    trusted_raw = set(payload["trusted"])
+    previous = payload.get("previous", {})
     trusted = set()
     for path in payload["trusted"]:
         try:
             trusted.add(canonical(path))
-        except FileNotFoundError:
+        except OSError:
             pass  # A removed, no-longer-requested archive must not block cleanup.
     blocked = ("/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/run", "/sbin", "/sys", "/usr", "/var", "/root", "/tmp", "/home")
-    mounts = set()
+    mounts = {}
     with open(mountinfo, encoding="utf-8") as stream:
         for line in stream:
             fields = line.split()
@@ -167,35 +174,100 @@ def _host_probe(payload, host_root="/host", mountinfo="/proc/self/mountinfo"):
                 continue
             point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[4])
             host_prefix = str(root).rstrip("/")
-            if point.startswith(host_prefix + "/") and point != host_prefix:
-                point = point[len(host_prefix):]
+            if point == host_prefix or point.startswith(host_prefix + "/"):
+                point = point[len(host_prefix):] or "/"
                 separator = fields.index("-")
                 filesystem = fields[separator + 1]
                 if filesystem not in {"proc", "sysfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "tmpfs", "overlay", "squashfs", "aufs", "debugfs", "tracefs", "securityfs", "pstore", "configfs", "mqueue", "hugetlbfs", "fusectl", "autofs"}:
                     try:
-                        mounts.add(canonical(point))
+                        # The isolated host probe deliberately sees read-only
+                        # view mounts; only their superblock flags carry the
+                        # underlying filesystem's read-only state.
+                        super_read_only = "ro" in fields[separator + 3].split(",")
+                        mount_read_only = root == Path("/") and "ro" in fields[5].split(",")
+                        mounts[canonical(point)] = (filesystem, fields[3], super_read_only or mount_read_only)
                     except (OSError, ValueError):
                         continue
 
+    def check_location(path, installer_default):
+        if (path == "/" or (not installer_default and any(path == p or path.startswith(p + "/") for p in blocked))
+                or overlaps(path, docker_root) or (overlaps(path, app) and not installer_default)
+                or path in mounts):
+            raise ValueError("Archive path overlaps a protected host location.")
+
+    def filesystem_identity(source, expected_nas_volume):
+        points = [point for point in mounts if source.startswith(point.rstrip("/") + "/")]
+        point = max(points, key=len, default=None)
+        if point is None or (expected_nas_volume and canonical(expected_nas_volume) not in points):
+            return None, False  # A leftover directory is not a mounted NAS volume.
+        filesystem, fs_root, read_only = mounts[point]
+        local = root / source.lstrip("/")
+        fsid = getattr(os.statvfs(local), "f_fsid", 0)
+        if not fsid:
+            # Do not invent a durable device identity on an unsupported FS.
+            return None, read_only
+        return {
+            "volume": hashlib.sha256(f"{filesystem}:{fsid}".encode()).hexdigest(),
+            "mountpoint": point,
+            "mount_root": fs_root,
+            "inode": local.stat().st_ino,
+        }, read_only
+
     result = []
     for item in payload["items"]:
+        configured, target = item["source"], item["target"]
+        prior = previous.get(configured) or {}
+        known = bool(prior or configured in trusted_raw or item.get("installer"))
+        is_default = configured == payload["app_dir"].rstrip("/") + "/data/archive"
+        check_location(configured, is_default)
+        expected_nas_volume = None
+        if re.fullmatch(r"/[Vv]olume[0-9]+", "/" + configured.split("/")[1]):
+            expected_nas_volume = "/" + configured.split("/")[1]
+
+        def unavailable():
+            return {"configured": configured, "source": prior.get("source") or configured,
+                    "target": target, "available": False, "identity": prior.get("identity")}
+
         try:
-            source = canonical(item["source"])
-        except FileNotFoundError:
+            source = canonical(configured)
+        except OSError as exc:
+            if known:
+                result.append(unavailable())
+                continue
             # Add-root may publish an inactive intent before the existing
             # activation helper creates its folder. Never bind/approve it yet.
-            if (item.get("active") is False and item["target"] != "/storage/archive"
-                    and canonical(str(PurePosixPath(item["source"]).parent)) in mounts):
+            if (isinstance(exc, FileNotFoundError) and item.get("active") is False and target != "/storage/archive"
+                    and str(PurePosixPath(configured).parent) in mounts):
                 continue
             raise
-        is_default = source == default and item["source"] == payload["app_dir"].rstrip("/") + "/data/archive"
-        if (source == "/" or (not is_default and any(source == p or source.startswith(p + "/") for p in blocked))
-                or overlaps(source, docker_root) or (overlaps(source, app) and not is_default)
-                or source in mounts):
-            raise ValueError("Archive path overlaps a protected host location.")
+        is_default = source == default and is_default
+        check_location(source, is_default)
+        try:
+            identity, read_only = filesystem_identity(source, expected_nas_volume)
+        except OSError:
+            if not known:
+                raise
+            result.append(unavailable())
+            continue
+        if (expected_nas_volume and identity is None) or (
+            prior.get("identity") and (prior["source"] != source or prior["identity"] != identity)
+        ):
+            if not known:
+                raise ValueError("Archive volume identity cannot be verified.")
+            result.append(unavailable())
+            continue
+        if prior and not prior.get("available") and not prior.get("identity") and not is_default:
+            # First start on a newer runtime may already be missing the disk.
+            # No previous fingerprint can prove a replacement is the old disk.
+            # Do not silently enroll one merely because its path is occupied.
+            result.append(unavailable())
+            continue
+        if prior and not prior.get("available") and read_only:
+            result.append(unavailable())
+            continue
         if source not in trusted and not is_default:
             # A marker in an arbitrary personal folder is not approval.
-            if not any(str(PurePosixPath(source).parent) == mount for mount in mounts):
+            if str(PurePosixPath(source).parent) not in mounts:
                 raise ValueError("New archive must be a dedicated folder on a discovered volume.")
             if any(overlaps(source, approved) for approved in trusted):
                 raise ValueError("New archive overlaps an existing writable archive.")
@@ -225,7 +297,8 @@ def _host_probe(payload, host_root="/host", mountinfo="/proc/self/mountinfo"):
                     metadata = json.load(stream)
                 if type(metadata) is not dict or metadata.get("product") != "KM VMS" or metadata.get("schema_version") != 1:
                     raise ValueError("New archive marker is invalid.")
-        result.append({"source": source, "target": item["target"]})
+        result.append({"configured": configured, "source": source, "target": target,
+                       "available": True, "identity": identity})
     return result
 
 
@@ -317,6 +390,10 @@ def _protected_directory(path, owner):
 
 
 def _atomic(path, content, mode, owner):
+    if (not path.is_symlink() and path.is_file()
+            and path.stat().st_size == len(content) and path.stat().st_mode & 0o777 == mode
+            and path.read_bytes() == content):
+        return
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     try:
@@ -331,6 +408,71 @@ def _atomic(path, content, mode, owner):
         temporary.unlink(missing_ok=True)
 
 
+def _validated_evidence(value):
+    if (type(value) is not dict or set(value) != {"schema_version", "roots"}
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or type(value["roots"]) is not list or len(value["roots"]) > 129):
+        raise ArchivePolicyError("Protected archive mount evidence is invalid.")
+    targets = set()
+    for item in value["roots"]:
+        if type(item) is not dict or set(item) != {"configured", "source", "target", "available", "identity"}:
+            raise ArchivePolicyError("Protected archive mount entry is invalid.")
+        host_path(item["configured"])
+        host_path(item["source"])
+        target = item["target"]
+        if not isinstance(target, str) or (target != PRIMARY_ARCHIVE and (
+                not target.startswith("/storage/archive-roots/") or not ROOT_ID.fullmatch(target.rsplit("/", 1)[-1])
+                or target.count("/") != 3)) or target in targets or type(item["available"]) is not bool:
+            raise ArchivePolicyError("Protected archive mount target is invalid.")
+        targets.add(target)
+        identity = item["identity"]
+        if identity is None:
+            continue
+        if (type(identity) is not dict or set(identity) != {"volume", "mountpoint", "mount_root", "inode"}
+                or not isinstance(identity["volume"], str) or not re.fullmatch(r"[0-9a-f]{64}", identity["volume"])
+                or type(identity["inode"]) is not int or identity["inode"] <= 0):
+            raise ArchivePolicyError("Protected archive filesystem evidence is invalid.")
+        host_path(identity["mountpoint"])
+        host_path(identity["mount_root"])
+    return value["roots"]
+
+
+def mount_evidence(app_dir: Path):
+    value = read_json(app_dir / AUTHORITY_DIRECTORY / ARCHIVE_EVIDENCE, missing_ok=True)
+    return [] if value is None else _validated_evidence(value)
+
+
+def render_runtime_plan(app_dir, host_app, evidence, directory, owner):
+    offline = sorted(item["target"] for item in evidence if not item["available"])
+    devices = {item["target"]: item["identity"]["volume"] for item in evidence if item["identity"]}
+    planned = {item["target"]: (item["source"], False) for item in evidence if item["available"]}
+    if PRIMARY_ARCHIVE in offline:
+        # Compose needs a replacement for the primary target, including on
+        # previous immutable slots with an unconditional primary bind. Mount an
+        # empty, read-only sentinel; it is never a recording destination.
+        unavailable = directory / OFFLINE_PRIMARY
+        _protected_directory(unavailable, owner)
+        if next(unavailable.iterdir(), None) is not None:
+            raise ArchivePolicyError("Unavailable primary archive sentinel is not empty.")
+        planned[PRIMARY_ARCHIVE] = (str(Path(host_app) / AUTHORITY_DIRECTORY / OFFLINE_PRIMARY), True)
+
+    def quoted(value):
+        return json.dumps(value.replace("$", "$$"), ensure_ascii=True)
+
+    lines = ["# Generated by the privileged KM VMS archive policy.", "services:"] if planned else ["services: {}"]
+    for service in ("api", "schema-update", "recorder") if planned else ():
+        lines.append(f"  {service}:")
+        if service in {"api", "recorder"}:
+            lines.extend(["    environment:", f"      KMVMS_OFFLINE_ARCHIVE_MOUNTS: {quoted(json.dumps(offline, separators=(',', ':')))}"])
+            if service == "recorder":
+                lines.append(f"      KMVMS_ARCHIVE_VOLUME_EVIDENCE: {quoted(json.dumps(devices, sort_keys=True, separators=(',', ':')))}")
+        lines.append("    volumes:")
+        for target, (source, read_only) in sorted(planned.items()):
+            lines.extend(["      - type: bind", f"        source: {quoted(source)}", f"        target: {quoted(target)}",
+                          f"        read_only: {str(read_only).lower()}", "        bind:", "          create_host_path: false"])
+    return ("\n".join(lines) + "\n").encode()
+
+
 def materialize(app_dir: Path, project_name: str):
     if not PROJECT.fullmatch(project_name):
         raise ArchivePolicyError("Archive Compose project is invalid.")
@@ -342,7 +484,7 @@ def materialize(app_dir: Path, project_name: str):
         # Before images/services exist, only the exact installer default needs
         # no extra mount. Deleting intent never exempts an arbitrary primary.
         return None
-    directory = app_dir / "data/update-runtime/archive-authority"
+    directory = app_dir / AUTHORITY_DIRECTORY
     owner_info = app_dir.stat()
     owner = (owner_info.st_uid, owner_info.st_gid)
     _protected_directory(directory, owner)
@@ -357,15 +499,21 @@ def materialize(app_dir: Path, project_name: str):
         items = parse_intent(value) if value is not None else []
         host_app, default = installer_paths(app_dir)
         registry = read_json(directory / "approved.json", missing_ok=True)
-        if registry is not None and (type(registry) is not dict or set(registry) != {"schema_version", "sources"} or registry["schema_version"] != 1 or type(registry["sources"]) is not list or len(registry["sources"]) > 128):
+        if registry is not None and (type(registry) is not dict or set(registry) != {"schema_version", "sources"} or registry["schema_version"] != 1 or type(registry["sources"]) is not list or len(registry["sources"]) > 129):
             raise ArchivePolicyError("Protected archive authority is invalid.")
         trusted = {host_path(path) for path in (registry or {}).get("sources", [])}
         trusted.update(installed_sources(project_name))
-        host_app, default = installer_paths(app_dir)
-        probe_items = [*items, *([{"source": default, "target": "/storage/archive"}] if default else [])]
+        previous = {item["configured"]: item for item in mount_evidence(app_dir)}
+        probe_items = [
+            {**item, "installer": bool(default and item["source"] == default)}
+            for item in items
+        ]
+        if default:
+            probe_items.append({"source": default, "target": PRIMARY_ARCHIVE, "installer": True})
         docker_root = host_path(docker_command(["info", "--format", "{{.DockerRootDir}}"] ))
         probe = inspect.getsource(_host_probe) + "\nimport json,sys\ntry:\n print(json.dumps(_host_probe(json.loads(sys.stdin.buffer.read(262145)))))\nexcept Exception:\n sys.exit(2)\n"
-        payload = {"app_dir": host_app, "docker_root": docker_root, "trusted": sorted(trusted), "items": probe_items}
+        payload = {"app_dir": host_app, "docker_root": docker_root, "trusted": sorted(trusted),
+                   "items": probe_items, "previous": previous}
         if not Path("/.dockerenv").exists() and not Path("/run/.containerenv").exists():
             # The canonical installer already requires host Python. Do not add
             # a base-image provisioning dependency before its first build.
@@ -374,20 +522,19 @@ def materialize(app_dir: Path, project_name: str):
             ensure_probe_image()
             output = docker_command(["run", "--rm", "--pull=never", "--network", "none", "--read-only", "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--security-opt", "no-new-privileges:true", "--memory", "64m", "--pids-limit", "32", "--mount", "type=bind,source=/,target=/host,readonly,bind-propagation=rslave", "-i", PYTHON_IMAGE, "python3", "-B", "-c", probe], data=json.dumps(payload), timeout=30)
             approved = json.loads(output)
-        if type(approved) is not list or len(approved) > len(probe_items):
+        evidence_document = {"schema_version": 1, "roots": approved}
+        evidence = _validated_evidence(evidence_document)
+        requested = {item["target"]: item["source"] for item in probe_items}
+        if len(evidence) > len(probe_items) or any(requested.get(item["target"]) != item["configured"] for item in evidence):
             raise ArchivePolicyError("Host archive validation returned invalid evidence.")
         if read_json(intent_path, missing_ok=True) != value or installer_paths(app_dir) != (host_app, default):
             raise ArchivePolicyError("Archive intent changed during validation; retry the operation.")
+        content = render_runtime_plan(app_dir, host_app, evidence, directory, owner)
         # Do not retain an ever-growing history of old archive approvals.
-        registry_bytes = (json.dumps({"schema_version": 1, "sources": sorted({item["source"] for item in approved})}, sort_keys=True) + "\n").encode()
+        registry_bytes = (json.dumps({"schema_version": 1, "sources": sorted({item["source"] for item in evidence
+                          if item["available"] or item["configured"] in previous or item["source"] in trusted})}, sort_keys=True) + "\n").encode()
+        _atomic(directory / ARCHIVE_EVIDENCE, (json.dumps(evidence_document, sort_keys=True) + "\n").encode(), 0o600, owner)
         _atomic(directory / "approved.json", registry_bytes, 0o600, owner)
-        approved = [item for item in approved if item["target"] != "/storage/archive"]
-        lines = ["# Generated by the privileged KM VMS archive policy.", "services:"] if approved else ["services: {}"]
-        for service in ("api", "schema-update", "recorder") if approved else ():
-            lines.extend([f"  {service}:", "    volumes:"])
-            for item in approved:
-                lines.extend(["      - type: bind", "        source: " + json.dumps(item["source"].replace("$", "$$"), ensure_ascii=True), "        target: " + json.dumps(item["target"]), "        read_only: false", "        bind:", "          create_host_path: false"])
-        content = ("\n".join(lines) + "\n").encode()
         # One deterministic protected file; no archive/configuration history tail.
         target = directory / "docker-compose.archive-roots.yml"
         _atomic(target, content, 0o400, owner)

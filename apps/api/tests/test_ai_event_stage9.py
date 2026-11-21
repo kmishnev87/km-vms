@@ -301,6 +301,48 @@ def test_outbox_coalesces_sustained_positives_and_preserves_first_rule(api, monk
     assert packets[2]["rule_id"] == "quiet"
 
 
+@pytest.mark.parametrize("first_failure", ["full_inbox", "write_error"])
+def test_first_ai_trigger_survives_transient_outbox_failure_without_restart(api, monkeypatch, jpeg, first_failure):
+    from threading import Event
+    from recorder_core import ai_event_outbox as module
+
+    monkeypatch.setattr(module, "isolated_thumbnail", lambda _: jpeg)
+    monkeypatch.setattr(module, "OUTBOX_RETRY_DELAYS", (.06, .12, .25))
+    monkeypatch.setattr(module, "PROGRESS_INTERVAL", 3600)
+    outbox = module.AiEventOutbox(history.root())
+    write = outbox._write
+    failed = Event()
+    commits = []
+    def briefly_unavailable(header, thumbnail=b"", *, identifier=None):
+        if identifier is not None:
+            commits.append(identifier)
+            if len(commits) == 1:
+                failed.set()
+                if first_failure == "write_error":
+                    raise OSError("test-only temporary error")
+                return False
+        return write(header, thumbnail, identifier=identifier)
+    monkeypatch.setattr(outbox, "_write", briefly_unavailable)
+    captured = UTC_NOW.timestamp()
+    outbox.offer(SimpleNamespace(camera=7, captured=captured), 2, [("gate", "exit", ("vehicle",))])
+    try:
+        assert failed.wait(2)
+        outbox.offer(SimpleNamespace(camera=7, captured=captured + 1), 2, [])
+        deadline = time.monotonic() + 4
+        while not list(outbox.root.glob("*.evt")) and time.monotonic() < deadline:
+            time.sleep(.02)
+        path, = list(outbox.root.glob("*.evt"))
+        assert len(commits) == 2 and commits[0] == commits[1] == path.stem
+        value, frame = history._read(path)
+        assert value["captured"] == captured and frame == jpeg
+        client, factory, _ = api
+        with factory() as db:
+            assert history.ingest(db, path, received=NOW)
+        assert client.get(f"/camera-events/{uuid.UUID(hex=path.stem)}/snapshot").content == jpeg
+    finally:
+        outbox.stop()
+
+
 def test_ptz_scene_opener_waits_one_second_and_keeps_the_trigger_time(tmp_path, monkeypatch):
     from recorder_core import ai_event_outbox as module
 

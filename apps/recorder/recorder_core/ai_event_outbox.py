@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import struct
@@ -11,6 +12,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
@@ -20,6 +22,17 @@ PROGRESS_INTERVAL = 5
 SOURCE_LIMIT = 64
 PTZ_PHOTO_DELAY = 1.0
 PTZ_PHOTO_DEADLINE = 4.0
+OUTBOX_RETRY_DELAYS = (.5, 1, 2, 4, 8, 15)
+_log = logging.getLogger(__name__)
+
+
+@dataclass
+class PendingStartWrite:
+    header: dict
+    jpeg: bytes
+    identifier: str
+    attempts: int = 0
+    due: float = 0
 
 
 def thumbnail(packet):
@@ -86,6 +99,7 @@ class AiEventOutbox:
         self.progress = {}
         self.pending_starts = set()
         self.delayed_photos = {}
+        self.retry_writes = {}
 
     def _queue_start(self, key, captured, rule_id, condition, kinds, frame):
         try:
@@ -153,12 +167,12 @@ class AiEventOutbox:
                 if (self.closed.is_set() or now - detected >= PTZ_PHOTO_DEADLINE) and self._queue_start(*start, None):
                     del self.delayed_photos[key]
 
-    def _write(self, header, jpeg=b""):
+    def _write(self, header, jpeg=b"", *, identifier=None):
         self.root.mkdir(parents=True, exist_ok=True)
         with os.scandir(self.root) as entries:
             if sum(item.name.endswith(".evt") for item in entries) >= MAX_PENDING:
-                return
-        event_id = uuid.uuid4().hex
+                return False
+        event_id = identifier or uuid.uuid4().hex
         path = self.root / (event_id + ".evt")
         temporary = self.root / (event_id + ".part")
         payload = json.dumps(header, separators=(",", ":"), allow_nan=False).encode()
@@ -167,6 +181,7 @@ class AiEventOutbox:
                 writer.write(payload + b"\n")
                 writer.write(jpeg)
             os.replace(temporary, path)
+            return True
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -186,9 +201,32 @@ class AiEventOutbox:
             except (OSError, ValueError):
                 continue
 
+    def _write_start(self, key, pending):
+        written = False
+        try:
+            written = self._write(pending.header, pending.jpeg, identifier=pending.identifier)
+        except OSError:
+            pass
+        except ValueError:
+            pending.attempts = len(OUTBOX_RETRY_DELAYS)
+        if not written and not self.closed.is_set() and pending.attempts < len(OUTBOX_RETRY_DELAYS):
+            pending.due = time.monotonic() + OUTBOX_RETRY_DELAYS[pending.attempts]
+            pending.attempts += 1
+            self.retry_writes[key] = pending
+            return
+        self.retry_writes.pop(key, None)
+        if not written:
+            _log.warning("AI event handoff failed for camera %s after %s retries", key[0], pending.attempts)
+        with self.guard:
+            self.pending_starts.discard(key)
+
     def _run(self):
         while True:
             self._flush_photo_deadlines()
+            now = time.monotonic()
+            for key, pending in tuple(self.retry_writes.items()):
+                if self.closed.is_set() or now >= pending.due:
+                    self._write_start(key, pending)
             self._flush_progress()
             if self.closed.is_set() and self.queue.empty():
                 break
@@ -196,26 +234,24 @@ class AiEventOutbox:
                 key, captured, rule_id, condition, kinds, frame = self.queue.get(timeout=.5)
             except queue.Empty:
                 continue
-            try:
-                with self.guard:
-                    older = self.progress.get(key)
-                    if older and older[1] < captured:
-                        del self.progress[key]
-                    else:
-                        older = None
-                if older:
-                    self._write_progress(key, older[1])
+            with self.guard:
+                older = self.progress.get(key)
+                if older and older[1] < captured:
+                    del self.progress[key]
+                else:
+                    older = None
+            if older:
                 try:
-                    jpeg = isolated_thumbnail(frame) if frame is not None else b""
-                except Exception:
-                    jpeg = b""  # Detection remains useful without a still.
-                self._write({"v": 2, "camera_id": key[0], "revision": key[1], "captured": captured,
-                             "rule_id": rule_id, "condition": condition, "objects": kinds}, jpeg)
-            except (OSError, ValueError):
-                pass
-            finally:
-                with self.guard:
-                    self.pending_starts.discard(key)
+                    self._write_progress(key, older[1])
+                except (OSError, ValueError):
+                    pass
+            try:
+                jpeg = isolated_thumbnail(frame) if frame is not None else b""
+            except Exception:
+                jpeg = b""  # Detection remains useful without a still.
+            header = {"v": 2, "camera_id": key[0], "revision": key[1], "captured": captured,
+                      "rule_id": rule_id, "condition": condition, "objects": kinds}
+            self._write_start(key, PendingStartWrite(header, jpeg, uuid.uuid4().hex))
         self._flush_progress()
 
     def stop(self):

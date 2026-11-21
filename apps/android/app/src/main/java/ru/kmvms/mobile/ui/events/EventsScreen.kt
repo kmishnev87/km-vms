@@ -39,6 +39,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -70,6 +73,7 @@ import java.time.format.DateTimeFormatter
     }
     val navigator = remember(api) { EventVideoNavigation(api) }
     val scope = rememberCoroutineScope()
+    val openedReads = remember(service) { mutableMapOf<String, Deferred<Unit>>() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var preferencesOpen by rememberSaveable { mutableStateOf(false) }
     var filtersOpen by remember { mutableStateOf(false) }
@@ -111,6 +115,25 @@ import java.time.format.DateTimeFormatter
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer); controller.close() }
     }
+    fun markOpened(event: CameraEvent): Deferred<Unit>? {
+        if (event.read) return null
+        return openedReads[event.id] ?: scope.async(start = CoroutineStart.LAZY) {
+            try {
+                service.read(setOf(event.id))
+                controller.refresh(state.page?.offset ?: 0)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { message(failure) }
+            finally { openedReads.remove(event.id) }
+        }.also { pending ->
+            openedReads[event.id] = pending
+            pending.start()
+        }
+    }
+    fun openDetails(event: CameraEvent) {
+        detailZone = null
+        detail = event
+        markOpened(event)
+    }
     fun navigate(event: CameraEvent, action: EventAction) {
         if (opening || state.busy) return
         opening = true
@@ -119,11 +142,9 @@ import java.time.format.DateTimeFormatter
                 val result = navigator.open(event, action, state.page?.zone ?: java.time.ZoneOffset.UTC)
                 val request = result.request
                 if (request == null) {
-                    if (event.ai != null) { detailZone = null; detail = event } else message(unavailable)
+                    if (event.ai != null) openDetails(event) else message(unavailable)
                 } else {
-                    try { service.read(setOf(event.id)) }
-                    catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { message(failure) }
+                    markOpened(event)?.await()
                     if (result.liveFallback) message(fallback)
                     open(request)
                 }
@@ -191,7 +212,7 @@ import java.time.format.DateTimeFormatter
                 }
                 items(page?.items.orEmpty(), key = { it.id }) { event ->
                     EventRow(event, state, canArchive, opening, { controller.select(event.id, it) },
-                        { navigate(event, it) }, { detailZone = null; detail = event })
+                        { navigate(event, it) }, { openDetails(event) })
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 }
             }

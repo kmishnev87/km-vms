@@ -180,4 +180,43 @@ class EventHistoryLayoutTest {
             assertTrue(requests.all { it.method=="GET" })
         } finally { server.shutdown() }
     }
+
+    @Test fun openingThePhotoMarksOnlyThatEventAndSelectionAloneDoesNotMarkIt() = MockWebServer().use { server ->
+        val another = "1fdbc11a-2e3f-43a0-a1ac-44aaab711111"
+        val reads = CopyOnWriteArrayList<String>()
+        fun row(id: String, name: String) =
+            """{"id":"$id","camera_id":1,"camera_name":"$name","kind":"person","occurred_at":"2026-11-17T10:00:00Z","read":${id in reads},"snapshot_available":false}"""
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val body = when (request.requestUrl!!.encodedPath) {
+                    "/api/camera-events" -> """
+                        {"items":[${row(event.id, "First camera")},${row(another, "Second camera")}],"total":2,
+                         "unread_count":${2 - reads.size},"timezone":"UTC","history_count":2}
+                    """.trimIndent()
+                    "/api/camera-events/cameras" -> """{"items":[]}"""
+                    "/api/camera-events/preferences" -> "{}"
+                    "/api/camera-events/updates" -> """{"changed":false,"items":[]}"""
+                    "/api/camera-events/${event.id}/evidence" ->
+                        """{"event":${row(event.id, "First camera")},"archive":{"state":"unavailable"}}"""
+                    "/api/camera-events/read" -> {
+                        val ids = org.json.JSONObject(request.body.readUtf8()).getJSONArray("ids")
+                        for (i in 0 until ids.length()) reads += ids.getString(i)
+                        """{"marked":${ids.length()}}"""
+                    }
+                    else -> return MockResponse().setResponseCode(404)
+                }
+                return MockResponse().setBody(body)
+            }
+        }
+        server.start()
+        val api = NasApi(ServerAddress.parse(server.url("/").toString())).apply { useSession("fixture") }
+        compose.setContent { KMVMSTheme { EventsScreen(api, false, true, {}, { error(it) }) } }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("First camera").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("event-check-$another").performClick().assertIsOn()
+        compose.runOnIdle { assertTrue(reads.isEmpty()) }
+        compose.onNodeWithTag("event-photo-${event.id}").performClick()
+        compose.waitUntil(5_000) { reads.isNotEmpty() }
+        compose.onNodeWithTag("camera-event-detail").assertIsDisplayed()
+        assertEquals(listOf(event.id), reads.toList())
+    }
 }

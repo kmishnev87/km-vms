@@ -38,7 +38,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.Role
@@ -170,7 +169,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     val allowed = Section.entries.filter { it in implemented && (it.permission == null || state.user?.can(it.permission) == true) }
     LaunchedEffect(allowed, state.user?.id) { if (state.user != null && section !in allowed) section=Section.HOME }
     BackHandler(enabled = state.showConnection && state.profiles.isNotEmpty()) { model.cancelConnection() }
-    BackHandler(enabled = !state.showConnection && section != Section.HOME) { section = Section.HOME }
+    BackHandler(enabled = !state.showConnection && section != Section.HOME) { section = parentSection(section) }
     KMVMSTheme {
         Scaffold(modifier = Modifier.semantics { testTagsAsResourceId = true }, containerColor = PageBackground,
             snackbarHost = { SnackbarHost(snackbars) }, bottomBar = {
@@ -246,7 +245,10 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                             {if(model.api()===api)model.signOut()},{section=Section.SETTINGS}){text->uiScope.launch{snackbars.showSnackbar(text)}} }
                     }}
                     section == Section.SETTINGS -> SettingsScreen(state, model::openConnection,
-                        { model.select(it) }, { removeConfirmation = it }, { signOutConfirmation = true }, {section=Section.SERVER_SETTINGS}, updates)
+                        { model.select(it) }, { removeConfirmation = it }, { signOutConfirmation = true },
+                        { section = Section.SERVER_SETTINGS },
+                        systemStatus = if (Section.SYSTEM in allowed) ({ section = Section.SYSTEM }) else null,
+                        updates = updates)
                     else -> Unit
                 }
                 }
@@ -314,8 +316,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     LazyVerticalGrid(columns = GridCells.Adaptive(160.dp), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            HomeBrandHeader(state, selectServer, addServer,
-                listOf(Section.RECORDING_CENTER, Section.SYSTEM).filter { it in sections }, select)
+            HomeBrandHeader(state, selectServer, addServer)
         }
         items(visibleSections) { section ->
             Surface(onClick = { select(section) }, shape = RoundedCornerShape(14.dp), color = Color.White,
@@ -334,8 +335,7 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
     }
 }
 
-@Composable private fun HomeBrandHeader(state:MobileState,selectServer:(ServerProfile)->Unit,addServer:()->Unit,
-                                       shortcuts: List<Section> = emptyList(), openSection: (Section) -> Unit = {}) {
+@Composable private fun HomeBrandHeader(state:MobileState,selectServer:(ServerProfile)->Unit,addServer:()->Unit) {
     var serverMenu by remember{mutableStateOf(false)}
     Box(Modifier.fillMaxWidth().height(76.dp).testTag("home-brand-header")) {
                 Image(painterResource(R.drawable.kmvms_home_header),null,Modifier.matchParentSize(),contentScale=ContentScale.Crop,alignment=Alignment.CenterEnd)
@@ -356,25 +356,24 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
                             }
                         }
                     }
-                    shortcuts.forEach { target ->
-                        val label = stringResource(target.label)
-                        IconButton(onClick = { openSection(target) }, modifier = Modifier.size(44.dp)
-                            .testTag("home-shortcut-${target.name}").semantics { contentDescription = label }) {
-                            SectionIcon(target, Modifier.size(29.dp))
-                        }
-                    }
                 }
     }
 }
 
 @Composable private fun SettingsScreen(state: MobileState, add: () -> Unit, select: (ServerProfile) -> Unit,
                                       remove: (ServerProfile) -> Unit, signOut: () -> Unit,serverSettings:()->Unit,
+                                      systemStatus: (() -> Unit)?,
                                       updates: ru.kmvms.mobile.update.AppUpdates) {
     val context=LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(stringResource(R.string.application), style = MaterialTheme.typography.titleLarge)
         val languages=listOf("" to stringResource(R.string.system_language),"en" to "English","ru" to "Русский","zh-CN" to "中文")
         LabeledChoice(stringResource(R.string.app_language),languages.find{it.first==AppLocales.selected(context)}?.second.orEmpty(),languages,true,"app-language"){AppLocales.set(context,it)}
+        if (systemStatus != null) OutlinedButton(onClick = systemStatus,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("open-system-status")) {
+            SectionIcon(Section.SYSTEM, Modifier.size(26.dp))
+            Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.system_status))
+        }
         ru.kmvms.mobile.widget.AlertWidgetSetupButton(state.profiles, state.active?.id)
         Surface(shape = RoundedCornerShape(14.dp), color = Color.White) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -399,6 +398,8 @@ enum class Section(val label: Int, val image: Int?, val permission: String?) {
         }
     }
 }
+
+internal fun parentSection(section: Section) = if (section == Section.SYSTEM) Section.SETTINGS else Section.HOME
 
 @Composable private fun SectionIcon(section: Section, modifier: Modifier, navigation: Boolean = false) {
     val artwork = if (navigation) menuArtwork(section) else section.image

@@ -18,15 +18,8 @@
         <service android:name=".push.MobilePushService" android:exported="false">
             <intent-filter><action android:name="org.unifiedpush.android.connector.PUSH_EVENT" /></intent-filter>
         </service>
-        <receiver android:name=".widget.AlertWidgetProvider" android:exported="false" android:label="@string/widget_title">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="android.intent.action.LOCALE_CHANGED" />
-            </intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/alert_widget_info" />
-        </receiver>
         <receiver android:name=".widget.AlertWidgetPinnedReceiver" android:exported="false" />
-        <receiver android:name=".widget.AlertCountWidgetProvider" android:exported="false" android:label="@string/widget_count_title">
+        <receiver android:name=".widget.AlertCountWidgetProvider" android:exported="false" android:label="@string/widget_title">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="android.intent.action.LOCALE_CHANGED" />

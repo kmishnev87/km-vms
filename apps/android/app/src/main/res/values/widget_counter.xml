@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="widget_count_title">Notifications · 3 × 1</string>
     <string name="widget_count_description">Quick notification controls and the NAS unread count. Tap the number to open events.</string>
     <string name="widget_with_count">With count</string>
     <string name="widget_without_count">No count</string>

@@ -11,8 +11,7 @@ from app.models.user import User
 from app.routers.deps import require_permission
 from app.services import mobile_push as push
 from app.services import mobile_push_store as store
-from app.services.mobile_push_transport import vapid_public_key
-from app.services.mobile_push_transport import PushDeliveryError
+from app.services.mobile_push_transport import PushDeliveryError, PushEndpointUnavailable, vapid_public_key
 from app.services import camera_events
 from app.services.timezone_contract import timezone_context
 
@@ -73,6 +72,9 @@ def registration(device_id: UUID, payload: Registration, db: Session = Depends(g
     try:
         return push.register_device(db, user.id, str(device_id), payload.revision, payload.label,
             payload.enabled, payload.subscription, badge_enabled=payload.badge_enabled)
+    except PushEndpointUnavailable as exc:
+        db.rollback()
+        raise HTTPException(503, detail={"code": str(exc)}) from None
     except ValueError as exc:
         db.rollback()
         code = str(exc)

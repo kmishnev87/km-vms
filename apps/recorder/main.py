@@ -57,7 +57,8 @@ from recorder_core.linked_recording import (
 )
 from recorder_core.event_buffer import PART_STAMP, BufferedCamera, BufferedWriter, PacketBudget
 from recorder_core.archive_destination import (
-    Destination, Route, mounted_paths, mounted_secondary_root, probe_write,
+    ArchiveMountUnavailable, Destination, Route, RUNTIME_ROOTS, archive_mount_configuration,
+    mounted_paths, mounted_secondary_root, probe_write,
     secondary_write_state, select_route, writer_disk_problem,
 )
 from recorder_core.storage_activation import recording_start_allowed
@@ -68,6 +69,7 @@ from recorder_core.startup_recovery import StartupSegmentRecovery
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "/storage/archive"))
+OFFLINE_ARCHIVE_MOUNTS, ARCHIVE_VOLUME_EVIDENCE = archive_mount_configuration()
 FFMPEG_LOGLEVEL = os.getenv("FFMPEG_LOGLEVEL", "warning")
 DEFAULT_RECORD_STREAM = os.getenv("DEFAULT_RECORD_STREAM", "main").lower()
 LOOP_INTERVAL_SECONDS = 5
@@ -85,7 +87,8 @@ MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS = MEDIA_STALL_SECONDS
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
 
-STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+if STORAGE_ROOT.as_posix() not in OFFLINE_ARCHIVE_MOUNTS:
+    STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -727,14 +730,26 @@ def active_archive_root() -> tuple[str, Path]:
 def selected_archive_root(row) -> tuple[str, Path]:
     root_id = getattr(row, "recording_archive_root_id", None)
     if not root_id:
-        return active_archive_root()
+        root, _ = active_archive_root()
+        return root, mapped_archive_mount(root, True)
     with engine.connect() as conn:
         root = conn.execute(text("""
             SELECT id, is_active FROM archive_roots WHERE id = :root AND retired_at IS NULL
         """), {"root": root_id}).first()
     if not root:
         raise RuntimeError("camera_archive_root_unavailable")
-    return root_id, STORAGE_ROOT if root.is_active else mounted_secondary_root(root_id)
+    return root_id, mapped_archive_mount(root_id, root.is_active)
+
+
+def mapped_archive_mount(root_id, is_primary, mounts=None):
+    if not is_primary:
+        return mounted_secondary_root(root_id, mounts)
+    if STORAGE_ROOT.as_posix() in OFFLINE_ARCHIVE_MOUNTS or (
+        STORAGE_ROOT == Path("/storage/archive")
+        and STORAGE_ROOT.as_posix() not in (mounted_paths() if mounts is None else mounts)
+    ):
+        raise ArchiveMountUnavailable()
+    return STORAGE_ROOT
 
 
 secondary_low_disk_roots: set[str] = set()
@@ -757,13 +772,9 @@ def archive_destinations():
     targets = {}
     for row in rows:
         root_id = str(row.id)
+        target = STORAGE_ROOT if row.is_active else RUNTIME_ROOTS / root_id.strip(".-").lower()
         try:
-            if row.is_active:
-                if STORAGE_ROOT == Path("/storage/archive") and STORAGE_ROOT.as_posix() not in mounts:
-                    raise RuntimeError("camera_archive_root_unavailable")
-                path = STORAGE_ROOT
-            else:
-                path = mounted_secondary_root(root_id, mounts)
+            path = mapped_archive_mount(root_id, row.is_active, mounts)
             problem, size, device = probe_write(path, STORAGE_NAMESPACE, was_full=root_id in secondary_low_disk_roots)
         except (OSError, RuntimeError):
             path, problem, size, device = None, "camera_archive_root_unavailable", 0, None
@@ -781,7 +792,8 @@ def archive_destinations():
             secondary_low_disk_roots.add(root_id)
         elif not problem:
             secondary_low_disk_roots.discard(root_id)
-        targets[root_id] = Destination(root_id, row.physical_identity, path, size, device, problem)
+        targets[root_id] = Destination(root_id, row.physical_identity, path, size, device, problem,
+                                       ARCHIVE_VOLUME_EVIDENCE.get(target.as_posix()))
     return default, targets, bool(setting)
 
 
@@ -2554,7 +2566,7 @@ except Exception as exc:
 log_event("info", "service_started", storage_root=str(STORAGE_ROOT))
 startup_recovery = StartupSegmentRecovery(
     engine, RECORDER_INSTANCE_ID, segment_accounting(), segment_repairs, log_event,
-    root_mapper=lambda root_id, active: STORAGE_ROOT if active else mounted_secondary_root(root_id),
+    root_mapper=mapped_archive_mount,
 )
 startup_recovery.start()
 write_audit_event(

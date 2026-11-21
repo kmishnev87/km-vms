@@ -72,8 +72,9 @@ class PushStore(context: Context) {
             save(it.copy(status = if (it.enabled) status else PushStatus.OFF))
         }
     }
-    fun renew(profileId: String): PushBinding? = synchronized(lock) {
-        val old = binding(profileId)?.takeIf { it.transportActive && it.subscription != null } ?: return@synchronized null
+    fun renew(profileId: String, expectedRevision: Int? = null): PushBinding? = synchronized(lock) {
+        val old = binding(profileId)?.takeIf { it.transportActive && it.subscription != null &&
+            (expectedRevision == null || it.revision == expectedRevision) } ?: return@synchronized null
         val value = old.copy(revision = old.revision + 1, status = PushStatus.UPLOADING)
         save(value); value
     }

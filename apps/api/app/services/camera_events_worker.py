@@ -4,11 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+from requests import exceptions as request_errors
+from zeep.exceptions import Fault, TransportError
 
 from app.core.security import decrypt_text
 from app.db.session import SessionLocal
@@ -98,11 +102,30 @@ def receiver_fault_snapshots(cameras):
             faults[camera.id] = {
                 "group": incident["id"],
                 "phase": "exhausted" if status == "retry_exhausted" else "failed",
+                "reachability": state.get("reachability"),
+                "failed_at": incident.get("last_failure_at"),
                 "next_attempt_at": incident.get("next_attempt_at"),
                 "retry_available": bool(status == "retry_exhausted" and job.manual_ready_at is not None
                                         and now >= job.manual_ready_at and not job.retry_requested.is_set()),
             }
     return faults
+
+
+def event_link_evidence(error):
+    """Classify what the failed request proved, not what needs to be retried."""
+    for _ in range(5):
+        if error is None:
+            break
+        if (isinstance(error, Fault)
+                or isinstance(error, TransportError) and error.status_code
+                or isinstance(error, request_errors.HTTPError) and error.response is not None
+                or getattr(error, "code", None) in {"events_unsupported", "event_response_too_large",
+                    "event_response_timeout", "onvif_authentication_failed"}):
+            return "reachable"
+        if isinstance(error, (request_errors.Timeout, request_errors.ConnectionError, ConnectionError, TimeoutError, socket.gaierror)):
+            return "network_failure"
+        error = error.__cause__ or error.__context__
+    return None
 
 
 def _state(group, status, **fields):
@@ -349,7 +372,7 @@ class Receiver:
                 phase = "exhausted" if delay is None else "failed"
                 self._publish(lease, phase, generation=self.generation, disconnected=True, transitions=transitions)
                 status = "retry_exhausted" if delay is None else "unsupported" if reason == "events_unsupported" else "reconnecting"
-                _state(self.group, status, reason=reason, incident=self.recovery.details())
+                _state(self.group, status, reason=reason, incident=self.recovery.details(), reachability=event_link_evidence(exc))
             finally:
                 if self.client is not None:
                     self.client.close()

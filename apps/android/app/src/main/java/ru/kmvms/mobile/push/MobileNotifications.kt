@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -29,7 +30,13 @@ object MobileNotifications {
     const val CHANNEL = "camera-events-v1"
     private val lock = Any()
     fun allowed(context: Context) = (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) && NotificationManagerCompat.from(context).areNotificationsEnabled()
-    fun show(original: Context, profile: ServerProfile, event: PushEnvelope, image: Bitmap? = null) = synchronized(lock) {
+    internal fun show(
+        original: Context,
+        profile: ServerProfile,
+        event: PushEnvelope,
+        image: Bitmap? = null,
+        manufacturer: String = Build.MANUFACTURER,
+    ) = synchronized(lock) {
         fun log(code: DiagnosticCode) = AppDiagnostics.record(code, DiagnosticArea.PUSH, profile.id, event.eventId, event.cameraId)
         if (!allowed(original)) { log(DiagnosticCode.PUSH_PERMISSION_BLOCKED); return@synchronized }
         val context = AppLocales.wrap(original)
@@ -45,13 +52,25 @@ object MobileNotifications {
         if (key in delivered) { log(DiagnosticCode.PUSH_DUPLICATE); return@synchronized }
         val text = if (event.test) context.getString(R.string.push_test_received) else eventLabels(event.kind, event.objects, event.aiCondition).joinToString(" · ") { context.getString(it) } + " · " +
             DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault()).format(event.occurred)
+        val title = if (event.test) profile.name else profile.name + " · " + event.cameraName
         val builder = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(if (event.test) profile.name else profile.name + " · " + event.cameraName)
-            .setContentText(text).setStyle(if (image != null) NotificationCompat.BigPictureStyle().bigPicture(image).setSummaryText(text)
-                else NotificationCompat.BigTextStyle().bigText(text))
+            .setContentTitle(title).setContentText(text)
             .setCategory(NotificationCompat.CATEGORY_EVENT).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setOnlyAlertOnce(true)
             .setGroup("nas:${profile.id}")
+        when {
+            image == null -> builder.setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            // Verified on EMUI 14.2: the stock expanded card may omit its BigPicture, even ungrouped.
+            manufacturer.equals("HUAWEI", ignoreCase = true) -> builder
+                .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                .setCustomBigContentView(RemoteViews(context.packageName, R.layout.notification_event_preview).apply {
+                    setTextViewText(R.id.notification_event_title, title)
+                    setTextViewText(R.id.notification_event_text, text)
+                    setImageViewBitmap(R.id.notification_event_frame, image)
+                    setContentDescription(R.id.notification_event_frame, context.getString(R.string.event_photo))
+                })
+            else -> builder.setStyle(NotificationCompat.BigPictureStyle().bigPicture(image).setSummaryText(text))
+        }
         if (!event.test) {
             builder.setContentIntent(open(context, profile.id, event.eventId, "open"))
             if (event.cameraId != null) builder

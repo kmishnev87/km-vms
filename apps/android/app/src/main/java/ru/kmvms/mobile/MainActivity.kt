@@ -12,6 +12,7 @@ import ru.kmvms.mobile.ui.MobileApp
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class MainActivity : ComponentActivity() {
+    private val mobile: MobileViewModel by viewModels()
     private val updates: ru.kmvms.mobile.update.AppUpdates by viewModels()
     override fun attachBaseContext(newBase:Context) { super.attachBaseContext(AppLocales.wrap(newBase)) }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -19,11 +20,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         NotificationNavigation.accept(intent)
         ru.kmvms.mobile.widget.AlertWidgetProvider.openDestination(this, intent)
-        setContent { MobileApp(updates = updates) }
+        setContent { MobileApp(model = mobile, updates = updates) }
     }
     override fun onResume() {
         super.onResume()
         updates.foreground()
+        mobile.checkPushRegistration()
         ru.kmvms.mobile.widget.WidgetUnreadSync.opened(this)
     }
     override fun onNewIntent(intent: Intent) {

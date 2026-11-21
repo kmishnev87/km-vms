@@ -58,14 +58,15 @@ function SystemStatusProblemAction({ action, currentUser, text, labelOverride })
 }
 
 function SourceIssueFacts({ issue, t, nextAttempt }) {
-  const ai = issue.kind === "ai";
-  const key = ai ? "ai" : "events";
+  const key = issue.kind === "ai" ? "ai" : issue.cause === "unreachable"
+    ? "offline" : issue.cause === "subscription" ? "events" : "noResponse";
+  const multiple = issue.cameras.filter(camera => !camera.dependent).length > 1;
   return <div className="systemStatusSourceFacts">
-    <h3>{t(`systemStatus.source.${key}Title`)}</h3>
+    <h3>{t(`systemStatus.source.${key === "offline" && multiple ? "offlineMultiple" : key}Title`)}</h3>
     <p>{t(`systemStatus.source.${key}Cause`)}</p>
     <ul>
       {issue.cameras.map(camera => <li key={camera.camera_id}>
-        <strong>{camera.name}</strong><span>{t(`systemStatus.source.recording.${camera.recording_state}`)}</span>
+        <strong>{camera.name}</strong><span>{camera.dependent ? `${t("systemStatus.source.relatedCamera")} · ` : ""}{t(`systemStatus.source.recording.${camera.recording_state}`)}</span>
       </li>)}
     </ul>
     {nextAttempt ? <p>{t("systemStatus.source.nextAttempt", { time: nextAttempt })}</p> : null}
@@ -226,7 +227,9 @@ export default function SystemStatusPage() {
                         </div>}
                         <div className="systemStatusActions" aria-label={t("systemStatus.activeProblems")}>
                           <SystemStatusProblemAction action={item.action} currentUser={currentUser} text={text}
-                            labelOverride={source ? t(`systemStatus.source.open${source.kind === "ai" ? "Ai" : "Camera"}`) : undefined} />
+                            labelOverride={source ? t(source.cause === "unreachable" ? (
+                              item.action.href === "/cameras" ? "systemStatus.source.openCameras" : "systemStatus.source.openCamera"
+                            ) : "systemStatus.source.openAi") : undefined} />
                           {source?.retry_available && !systemHealth.stale && canUseAction(currentUser, item.action)
                             ? <SourceIssueRetry issue={source} t={t} /> : null}
                         </div>

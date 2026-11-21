@@ -27,6 +27,55 @@ SPEC.loader.exec_module(bridge)
 TARGET_COMMIT = "5" * 40
 
 
+def test_cold_archive_recovery_never_acts_on_an_unrelated_config_change():
+    primary = "/storage/archive"
+    secondary = "/storage/archive-roots/second"
+    evidence = [
+        {"target": primary, "source": "/Volume1/archive-a", "available": False},
+        {"target": secondary, "source": "/Volume3/archive-b", "available": True},
+    ]
+    sentinel = "/opt/kmvms/data/update-runtime/archive-authority/unavailable-primary"
+    normal = {"offline": set(), "mounts": {primary: ("/Volume1/archive-a", False)}}
+    assert bridge.archive_recovery_changes(evidence, [normal], sentinel) == ({primary}, set())
+    degraded = {"offline": {primary}, "mounts": {primary: (sentinel, True)}}
+    assert bridge.archive_recovery_changes(evidence, [degraded], sentinel) == (set(), set())
+    evidence[0]["available"] = True
+    assert bridge.archive_recovery_changes(evidence, [degraded], sentinel) == (set(), {primary})
+
+
+def test_cold_archive_recovery_accepts_bind_alias_but_does_not_revive_stopped_runtime_later(tmp_path, monkeypatch):
+    alias = tmp_path / "installed-source"
+    alias.symlink_to(BRIDGE_PATH.parents[1], target_is_directory=True)
+    active = {"isolated": False}
+    bootstrap = SimpleNamespace(
+        writer_isolation_active=lambda _: active["isolated"],
+        validate_current_bundle=lambda _: (None, None),
+        load_slot_engine=lambda _: object(),
+        resolve_authority=lambda *a, **k: ("slot", alias, {"compose_evidence": {"services": ["api", "recorder", "postgres"]}}),
+    )
+    monkeypatch.setattr(bridge, "load_stable_bootstrap", lambda _: bootstrap)
+    items = [{"source": "/Volume1/archive", "target": "/storage/archive", "available": False, "identity": None}]
+    policy = SimpleNamespace(AUTHORITY_DIRECTORY="authority", OFFLINE_PRIMARY="absent",
+                             materialize=lambda *_: tmp_path / "plan.yml", mount_evidence=lambda _: items,
+                             installer_paths=lambda _: ("/app", "/Volume1/archive"))
+    monkeypatch.setattr(bridge, "load_archive_policy", lambda: policy)
+    monkeypatch.setattr(bridge, "_archive_service_observation",
+                        lambda _, service: {"state": {"Health": {"Status": "healthy"}}} if service == "postgres" else
+                        {"state": {"Status": "exited", "Running": False, "Error": ""}, "offline": set(),
+                         "restart_policy": "always", "mounts": {"/storage/archive": ("/Volume1/archive", False)}})
+    monkeypatch.setattr(bridge, "slot_compose", lambda *a, **k: (["compose"], {}, alias, {}))
+    monkeypatch.setattr(bridge, "wait_compose_service_ready", lambda *a, **k: None)
+    commands = []
+    monkeypatch.setattr(bridge, "run_command", lambda command, **kw: commands.append(command))
+    bridge.reconcile_archive_mounts(tmp_path, "fixture", returning=None, now=0, boot_recovery=False)
+    assert commands == []
+    bridge.reconcile_archive_mounts(tmp_path, "fixture", returning=None, now=0, boot_recovery=True)
+    assert commands == [["compose", "up", "-d", "--no-build", "--no-deps", "api", "recorder"]]
+    active["isolated"] = True
+    bridge.reconcile_archive_mounts(tmp_path, "fixture", returning=None, now=1, boot_recovery=True)
+    assert len(commands) == 1
+
+
 @pytest.mark.parametrize("previous_protocol", ["1", "", "2"])
 def test_schema_preflight_requires_capability_of_exact_previous_api_image(tmp_path, monkeypatch, previous_protocol):
     image = "sha256:" + "d" * 64

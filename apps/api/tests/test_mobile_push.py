@@ -113,6 +113,39 @@ def test_dns_with_any_private_answer_is_rejected(fixture, monkeypatch):
     assert client.put(f"/mobile/push/devices/{device}", json={"revision": 1, "label": "Test", "enabled": True, "subscription": subscription}).status_code == 422
 
 
+def test_failed_dns_is_retryable_on_registration_and_does_not_discard_a_working_route(fixture, monkeypatch):
+    client, factory, device, subscription = fixture
+    identifier = register(fixture)
+    current = event(factory)
+    resolve = transport.socket.getaddrinfo
+
+    def disconnected(*_, **__):
+        raise transport.socket.gaierror(transport.socket.EAI_AGAIN, "test-resolver")
+
+    monkeypatch.setattr(transport.socket, "getaddrinfo", disconnected)
+    response = client.put(f"/mobile/push/devices/{device}", json={"revision": 2, "label": "Test phone",
+        "enabled": True, "subscription": subscription})
+    assert response.status_code == 503 and response.json()["detail"]["code"] == "mobile_push_dns_unavailable"
+    assert push.deliver_one(factory, identifier, "dns-test", sender=transport.send_push)
+    with factory() as db:
+        saved = store.get(db, identifier)
+        assert saved.enabled and saved.subscription_encrypted
+        assert saved.revision == 1 and saved.last_status == "push_endpoint_unavailable"
+        assert saved.cursor_id != current and saved.retry_at > events.now_utc()
+        saved.retry_at = events.now_utc() - timedelta(seconds=1)
+        saved.save()
+        db.commit()
+
+    monkeypatch.setattr(transport.socket, "getaddrinfo", resolve)
+    sent = []
+    assert push.deliver_one(factory, identifier, "dns-test", sender=lambda sub, data: sent.append(json.loads(data)))
+    assert [item["event_id"] for item in sent] == [current]
+    with factory() as db:
+        saved = store.get(db, identifier)
+        assert saved.enabled and saved.last_status == "service_accepted"
+        assert saved.failures == 0 and saved.retry_at is None
+
+
 def test_real_webpush_encryption_and_pinned_tls_do_not_follow_redirects(fixture, monkeypatch):
     from http_ece import decrypt
     private = ec.generate_private_key(ec.SECP256R1())

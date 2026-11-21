@@ -28,7 +28,7 @@ internal class AlertWidgetStore(context: Context) {
         preferences.edit().putString("widget.$id", binding.json().toString()).apply()
     }
     fun remove(id: Int) { preferences.edit().remove("widget.$id").apply() }
-    fun pending(binding: AlertWidgetBinding, now: Long = System.currentTimeMillis(), variant: WidgetVariant = WidgetVariant.COMPACT): String {
+    fun pending(binding: AlertWidgetBinding, now: Long = System.currentTimeMillis()): String {
         val edit = preferences.edit()
         // Lazy housekeeping, never a background worker or timer.
         preferences.all.filterKeys { it.startsWith("pin.") }.forEach { (key, stored) ->
@@ -36,38 +36,30 @@ internal class AlertWidgetStore(context: Context) {
             if (now - created !in 0..86_400_000) edit.remove(key)
         }
         val nonce = UUID.randomUUID().toString()
-        edit.putString("pin.$nonce", JSONObject().put("binding", binding.json()).put("created", now).put("variant", variant.name).toString()).apply()
+        edit.putString("pin.$nonce", JSONObject().put("binding", binding.json()).put("created", now).put("variant", "COUNT").toString()).apply()
         return nonce
     }
-    fun consume(nonce: String, now: Long = System.currentTimeMillis(), variant: WidgetVariant? = null): AlertWidgetBinding? = synchronized(lock) {
+    fun consume(nonce: String, now: Long = System.currentTimeMillis()): AlertWidgetBinding? = synchronized(lock) {
         if (!nonce.matches(Regex("[a-f0-9-]{36}"))) return@synchronized null
         val stored = preferences.getString("pin.$nonce", null) ?: return@synchronized null
         preferences.edit().remove("pin.$nonce").apply()
         runCatching { JSONObject(stored).let {
             require(now - it.getLong("created") in 0..86_400_000)
-            require(variant == null || it.optString("variant", WidgetVariant.COMPACT.name) == variant.name)
+            require(it.optString("variant") == "COUNT")
             AlertWidgetBinding.from(it.getJSONObject("binding"))
         } }.getOrNull()
     }
     companion object { private val lock = Any() }
 }
 
-internal enum class WidgetVariant(val provider: Class<out AlertWidgetProvider>) {
-    COMPACT(AlertWidgetProvider::class.java), COUNT(AlertCountWidgetProvider::class.java)
-}
-
-internal fun widgetVariant(context: Context, id: Int): WidgetVariant? = if (id <= 0) null else
-    AppWidgetManager.getInstance(context).getAppWidgetInfo(id)?.provider?.let { provider ->
-        WidgetVariant.entries.find { provider == ComponentName(context, it.provider) }
-    }
-
-internal fun ownedAlertWidget(context: Context, id: Int) = widgetVariant(context, id) != null
-internal fun widgetIds(context: Context, variant: WidgetVariant) = AppWidgetManager.getInstance(context)
-    .getAppWidgetIds(ComponentName(context, variant.provider))
+internal fun alertWidgetComponent(context: Context) = ComponentName(context, AlertCountWidgetProvider::class.java)
+internal fun ownedAlertWidget(context: Context, id: Int) = id > 0 &&
+    AppWidgetManager.getInstance(context).getAppWidgetInfo(id)?.provider == alertWidgetComponent(context)
+internal fun widgetIds(context: Context) = AppWidgetManager.getInstance(context).getAppWidgetIds(alertWidgetComponent(context))
 internal fun hasCountWidgets(context: Context, profileId: String): Boolean {
     val profile = ProfileVault(context).profiles().find { it.id == profileId } ?: return false
     val store = AlertWidgetStore(context)
-    return widgetIds(context, WidgetVariant.COUNT).any { store.binding(it)?.matches(profile) == true }
+    return widgetIds(context).any { store.binding(it)?.matches(profile) == true }
 }
 
 internal fun alertWidgetClient(context: Context, binding: AlertWidgetBinding): NasApi {

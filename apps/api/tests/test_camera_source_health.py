@@ -95,3 +95,34 @@ def test_receiver_health_reads_current_worker_only_and_does_not_probe(monkeypatc
     receiver._states["1"]["status"] = "reconnecting"
     source.onvif_profile_token = "other-profile"
     assert receiver.receiver_fault_snapshots([source]) == {}
+
+
+def test_multiple_confirmed_offline_cameras_are_grouped_but_unknown_evidence_is_not(monkeypatch):
+    failed_at = (NOW - timedelta(seconds=5)).isoformat()
+    monkeypatch.setattr(health, "receiver_fault_snapshots", lambda cameras: {
+        1: {"group": "one", "phase": "failed", "reachability": "network_failure", "failed_at": failed_at, "retry_available": True},
+        2: {"group": "two", "phase": "failed", "reachability": "network_failure", "failed_at": failed_at},
+        3: {"group": "three", "phase": "failed", "reachability": "network_failure", "failed_at": failed_at},
+        4: {"group": "four", "phase": "failed", "reachability": "reachable", "failed_at": failed_at},
+        5: {"group": "five", "phase": "failed", "reachability": "network_failure",
+            "failed_at": (NOW - timedelta(minutes=20)).isoformat()},
+    })
+    fresh_failure = {"heartbeat_current": True, "recorder_instance_id": "current", "current_recorder_instance_id": "current",
+                     "recording_health": "retrying", "job_updated_at": failed_at, "last_error": "Connection refused"}
+    issues = health.build_source_issues([camera(i, enabled=i != 3) for i in range(1, 6)], {2: fresh_failure},
+        NOW, live_evidence={1: {"network_failure"}, 5: {"network_failure"}})
+    offline, paused, answering, stale = issues
+    assert offline["cause"] == "unreachable" and not offline["retry_available"]
+    assert [item["camera_id"] for item in offline["cameras"]] == [1, 2]
+    assert paused["cause"] == "no_response" and paused["cameras"][0]["recording_state"] == "paused"
+    assert answering["cause"] == "subscription" and answering["camera_id"] == 4
+    assert stale["cause"] == "no_response"
+
+
+def test_typed_control_errors_do_not_confuse_camera_response_with_network_loss():
+    import requests
+    from zeep.exceptions import Fault
+    assert receiver.event_link_evidence(requests.exceptions.ConnectionError()) == "network_failure"
+    assert receiver.event_link_evidence(requests.exceptions.ReadTimeout()) == "network_failure"
+    assert receiver.event_link_evidence(Fault("unsupported operation")) == "reachable"
+    assert receiver.event_link_evidence(OSError("could be local disk")) is None

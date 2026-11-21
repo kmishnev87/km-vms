@@ -7,6 +7,7 @@ import shutil
 import stat
 import uuid
 from datetime import datetime
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 from typing import Callable, Iterable
@@ -38,9 +39,25 @@ ROOT_RESOLUTION_PROBLEMS = {
 }
 
 
+@lru_cache(maxsize=4)
+def _offline_mounts(raw: str) -> frozenset[str]:
+    try:
+        value = json.loads(raw)
+        if type(value) is list and len(value) <= 129 and all(type(item) is str for item in value):
+            return frozenset(value)
+    except ValueError:
+        pass
+    return frozenset()
+
+
+def archive_mount_offline(path: Path) -> bool:
+    return path.as_posix() in _offline_mounts(os.getenv("KMVMS_OFFLINE_ARCHIVE_MOUNTS", "[]"))
+
+
 def storage_root() -> Path:
     root = Path(settings.storage_root)
-    root.mkdir(parents=True, exist_ok=True)
+    if not archive_mount_offline(root):
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -255,6 +272,10 @@ def archive_root_runtime_path(root_row) -> Path:
     stored = _stored_root_path(root_row)
     runtime = Path(settings.storage_root)
     per_root_runtime = archive_root_runtime_mount_path(root_row)
+    if bool(getattr(root_row, "is_active", False)) and archive_mount_offline(runtime):
+        return runtime
+    if archive_mount_offline(per_root_runtime):
+        return per_root_runtime
     if per_root_runtime.exists():
         return per_root_runtime
     if (
@@ -273,11 +294,17 @@ def _inactive_runtime_activation_root(root_row) -> bool:
         and not bool(getattr(root_row, "is_active", False))
         and stored.as_posix() != Path(settings.storage_root).as_posix()
         and not stored.exists()
+        and not archive_mount_offline(archive_root_runtime_mount_path(root_row))
         and not archive_root_runtime_mount_path(root_row).exists()
     )
 
 
 def root_status(root_path: Path) -> dict:
+    if archive_mount_offline(root_path):
+        return {
+            "exists": False, "is_dir": False, "readable": False, "writable": False,
+            "available": False, "namespace_exists": False, "problem": "archive_root_runtime_mount_missing",
+        }
     exists = root_path.exists()
     is_dir = root_path.is_dir() if exists else False
     namespace_root = root_path / KMVMS_RECORDINGS_NAMESPACE
@@ -980,6 +1007,8 @@ def resolve_segment_file_path(db: Session, segment, *, require_exists: bool = Fa
     root_row = archive_root_for_segment(db, segment)
     if root_row is None:
         raise ValueError("archive_root_missing")
+    if require_exists and archive_mount_offline(_root_path(root_row)):
+        raise FileNotFoundError("archive_root_unavailable")
     relative_path = getattr(segment, "relative_path", None)
     if not relative_path:
         file_path = getattr(segment, "file_path", None)
@@ -1021,6 +1050,8 @@ def active_namespace_dir(db: Session, camera_id: int, job_id: str) -> Path:
     root = active_archive_root(db)
     if root is None:
         raise RuntimeError("active_archive_root_missing")
+    if archive_mount_offline(Path(settings.storage_root)):
+        raise RuntimeError("archive_root_unavailable")
     path = build_namespace_dir(camera_id, job_id, root=Path(settings.storage_root))
     path.mkdir(parents=True, exist_ok=True)
     return path

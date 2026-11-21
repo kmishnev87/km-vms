@@ -23,11 +23,11 @@ A GPU and `/dev/dri` are **not required**. The shared installer/update/restart l
 
 ## 1. Install a published release
 
-The following commands select **[1.0.6](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.6)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
+The following commands select **[1.0.7](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.7)** explicitly. Run them in a writable directory in the NAS/server terminal or over SSH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.6/scripts/install.sh -o km-vms-install.sh
-sh km-vms-install.sh --branch v1.0.6
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/v1.0.7/scripts/install.sh -o km-vms-install.sh
+sh km-vms-install.sh --branch v1.0.7
 ```
 
 The first command downloads the installer. You can inspect it before running the second command.
@@ -37,13 +37,13 @@ The interactive default is `$HOME/km-vms` for application files/data and port `8
 To choose your NAS's persistent application directory, replace `/path/to/km-vms` below with your own unused directory:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.6 --app-dir /path/to/km-vms
+sh km-vms-install.sh --branch v1.0.7 --app-dir /path/to/km-vms
 ```
 
 For unattended installation, both an explicit directory and confirmation flag are required:
 
 ```sh
-sh km-vms-install.sh --branch v1.0.6 --app-dir /path/to/km-vms --yes
+sh km-vms-install.sh --branch v1.0.7 --app-dir /path/to/km-vms --yes
 ```
 
 Optional flags:
@@ -115,7 +115,9 @@ Add a folder in **Storage → Archive roots** and wait until it is ready before 
 
 To retire an archive folder with cameras or recordings on it, select another ready folder. You can transfer old recordings to that folder, or explicitly confirm how many recordings you are deleting. KM VMS rechecks the selection before deletion and does not delete the physical volume or unrelated files. Recent recordings may have to finish or pass the safety window before a move can finish. A regular manual archive move is still available separately.
 
-Optional **Emergency recording** in Storage is off by default. If the selected volume becomes unwritable while KM VMS is running, future segments can be recorded on the healthy eligible volume with the most free space. The camera's saved assignment and recording rules stay unchanged. Recording returns at a segment boundary once the original location is consistently writable again. Starting the application with a configured volume already missing is not covered by this feature. Emergency recording does not protect footage on a failed disk.
+Optional **Emergency recording** in Storage is off by default. If the selected volume fails or is absent when KM VMS starts, future segments can be recorded on the eligible healthy volume with the most free space. With the switch off, affected cameras wait; cameras on healthy volumes can still record. As long as the installation and database are available, a missing archive volume does not block sign-in, even when all archive volumes are offline.
+
+The camera's saved destination and rules remain unchanged. Unavailable archives keep their catalogue entries. After the original volume is verified and consistently available, KM VMS closes the current recording segments and reconnects the archive. This can briefly interrupt viewing and recording while the affected services restart. Recordings made on the fallback volume stay there and remain in the same timeline. If the original volume was never verified by this version before it went offline, review its identity before reconnecting it. Do not recreate a missing archive path on another disk. Emergency recording does not protect footage already on a failed disk.
 
 Use **Settings → Language** to choose **English**, **简体中文**, or **Русский**.
 
@@ -168,7 +170,7 @@ Calls temporarily use the low-latency video path and preserve the saved sound/PT
 
 KM VMS verifies a new call password before saving it. Rejected sign-ins allow another attempt; network failures do not erase credentials. Calls temporarily enable listening, respect manual speaker mute and restore the previous listening preference on hang-up.
 
-1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.18.apk** from the [1.0.6 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.6). The NAS release includes its matching APK information; no separate web release check is required.
+1. Open **Settings → Download APK** in the NAS web interface or download **km-vms-android-0.8.19.apk** from the [1.0.7 release](https://github.com/kmishnev87/km-vms/releases/tag/v1.0.7). The NAS release includes its matching APK information; no separate web release check is required.
 2. Install it on Android **8.0 or later**, allowing installation from the selected source when Android asks.
 3. Add the NAS address (a local **IP:port** is sufficient) and sign in with its existing account. Saved server profiles and sessions are separate; no new NAS administrator or camera account is created.
 4. Both HTTP and HTTPS work. HTTP requires confirmation of its unencrypted connection; HTTPS retains normal certificate and hostname verification. Installing the APK does not obtain a certificate, change the NAS site or configure remote access.

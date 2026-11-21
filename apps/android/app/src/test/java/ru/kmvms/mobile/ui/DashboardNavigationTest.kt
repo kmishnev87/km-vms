@@ -17,6 +17,11 @@ class DashboardNavigationTest {
         assertEquals(listOf(Section.HOME, Section.RECORDINGS, Section.LIVE, Section.CAMERAS, Section.EVENTS), primaryNavigation)
         assertEquals(Section.LIVE, primaryNavigation[2])
     }
+    @Test fun systemStatusBackReturnsToSettingsWithoutAddingADashboardTile() {
+        assertFalse(Section.SYSTEM in dashboardSections)
+        assertEquals(Section.SETTINGS, parentSection(Section.SYSTEM))
+        assertEquals(Section.HOME, parentSection(Section.SETTINGS))
+    }
     @Test fun menuUsesMatchedSmallArtworkAndDashboardKeepsOriginalSources() {
         assertEquals(R.drawable.kmvms_menu_home, menuArtwork(Section.HOME))
         assertNull(Section.HOME.image)

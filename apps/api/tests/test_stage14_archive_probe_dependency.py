@@ -116,7 +116,8 @@ def test_failed_cold_materialize_can_retry_without_changing_existing_data(tmp_pa
         assert args[args.index("--network") + 1] == "none"
         assert "--privileged" not in args and "docker.sock" not in " ".join(args)
         assert "type=bind,source=/,target=/host,readonly,bind-propagation=rslave" in args
-        return json.dumps([{"source": "/Volume3/archive", "target": "/storage/archive-roots/root_a"}])
+        return json.dumps([{"configured": item["source"], "source": item["source"], "target": item["target"],
+                            "available": True, "identity": None} for item in json.loads(data)["items"]])
 
     monkeypatch.setattr(policy, "docker_command", docker)
     with pytest.raises(policy.ArchiveProbeImageError):

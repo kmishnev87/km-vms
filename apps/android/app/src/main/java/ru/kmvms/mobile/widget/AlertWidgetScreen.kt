@@ -115,10 +115,10 @@ private fun minuteText(value: Int) = "%02d:%02d".format(java.util.Locale.ROOT, v
         Image(painterResource(R.drawable.kmvms_menu_events), null, Modifier.size(26.dp))
         Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.widget_title))
     }
-    if (choose) AlertWidgetProfileDialog(profiles, activeId, { profile, variant ->
+    if (choose) AlertWidgetProfileDialog(profiles, activeId, { profile ->
         val activity = context.widgetActivity()
-        val prepared = variant == WidgetVariant.COMPACT || (activity != null && WidgetUnreadSync.prepare(activity, profile))
-        val accepted = prepared && AlertWidgetPin.request(context, profile.id, variant)
+        val prepared = activity != null && WidgetUnreadSync.prepare(activity, profile)
+        val accepted = prepared && AlertWidgetPin.request(context, profile.id)
         if (accepted) choose = false
         accepted
     }, { choose = false })
@@ -129,28 +129,13 @@ private fun minuteText(value: Int) = "%02d:%02d".format(java.util.Locale.ROOT, v
 }
 
 @Composable internal fun AlertWidgetProfileDialog(profiles: List<ServerProfile>, initialId: String?,
-    choose: suspend (ServerProfile, WidgetVariant) -> Boolean, dismiss: () -> Unit, fixedVariant: WidgetVariant? = null) {
+    choose: suspend (ServerProfile) -> Boolean, dismiss: () -> Unit) {
     var selected by remember { mutableStateOf(initialId?.takeIf { id -> profiles.any { it.id == id } } ?: profiles.firstOrNull()?.id) }
     var failed by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var variant by remember(fixedVariant) { mutableStateOf(fixedVariant ?: WidgetVariant.COMPACT) }
     val scope = rememberCoroutineScope()
     AlertDialog(onDismissRequest = { if (!busy) dismiss() }, title = { Text(stringResource(R.string.widget_title)) }, text = {
         Column {
-            if (fixedVariant == null) Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                WidgetVariant.entries.forEach { option ->
-                    OutlinedButton(onClick = { variant = option; failed = false }, enabled = !busy,
-                        modifier = Modifier.weight(1f).testTag("widget-size-${option.name}"),
-                        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (variant == option) SoftAccent else Color.Transparent),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (option == WidgetVariant.COUNT) "3 × 1" else "2 × 1")
-                            Text(stringResource(if (option == WidgetVariant.COUNT) R.string.widget_with_count else R.string.widget_without_count),
-                                style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                        }
-                    }
-                }
-            }
             Text(stringResource(if (profiles.isEmpty()) R.string.widget_no_servers else R.string.widget_choose_server), style = MaterialTheme.typography.bodySmall, color = Muted)
             Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
                 profiles.forEach { profile -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = !busy) { selected = profile.id; failed = false }
@@ -160,13 +145,13 @@ private fun minuteText(value: Int) = "%02d:%02d".format(java.util.Locale.ROOT, v
                 } }
             }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp).testTag("widget-setup-progress"))
-            if (failed) Text(stringResource(if (variant == WidgetVariant.COUNT) R.string.widget_count_setup_failed else R.string.widget_sign_in), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if (failed) Text(stringResource(R.string.widget_count_setup_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
     }, confirmButton = {
         TextButton(onClick = { profiles.firstOrNull { it.id == selected }?.let { profile ->
             busy = true; failed = false
             scope.launch {
-                try { failed = !choose(profile, variant) }
+                try { failed = !choose(profile) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { failed = true }
                 finally { busy = false }

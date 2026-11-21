@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import text
 
+from .archive_destination import ArchiveMountUnavailable
 from .contracts import METADATA_SOURCE_RECORDER, OWNERSHIP_KM_VMS, RECORDER_RECEIPT_CONTRACT_VERSION
 from .segment_accounting import bounded_file_fingerprint, receipt_object_identity
 from .segment_repair import JOURNAL_DIRECTORY, file_identity, read_publication, reconcile_publication
@@ -103,6 +104,10 @@ class StartupSegmentRecovery:
                     after = row["id"]
                     try:
                         self._submit(row)
+                    except ArchiveMountUnavailable:
+                        # A deliberately omitted mount is not evidence of a
+                        # damaged file; the next attach can recover it.
+                        continue
                     except Exception as exc:
                         reason = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
                         self._unconfirmed(row, reason)

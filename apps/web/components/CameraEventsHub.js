@@ -62,6 +62,7 @@ export default function CameraEventsHub({ currentUser }) {
   const [eventToast, setEventToast] = useState(null);
   const preferenceServerRef = useRef(null);
   const generation = useRef(0);
+  const openedReads = useRef(new Map());
   const selectionGeneration = useRef(0);
   const selectPageRef = useRef(null);
   const eventListRef = useRef(null);
@@ -105,6 +106,7 @@ export default function CameraEventsHub({ currentUser }) {
 
   useEffect(() => {
     setOpen(false); setDetail(null); setEventToast(null); setHistory(null); setPreference(null); clearSelection(); setDeleteTarget(null); setBusy(false);
+    openedReads.current = new Map();
     preferenceServerRef.current = null;
     const owner = ++generation.current;
     if (!enabled || !session) { setUnread(0); return undefined; }
@@ -214,13 +216,32 @@ export default function CameraEventsHub({ currentUser }) {
       const target = await apiFetch(`/camera-events/${event.id}/target?mode=${mode}`);
       if (!current()) return;
       // Read bookkeeping must not prevent opening an already authorized video.
-      try { await apiFetch("/camera-events/read", { method: "POST", headers, body: JSON.stringify({ ids: [event.id] }) }); }
-      catch (error) { if (current()) showError(error); }
+      await markOpened(event, current);
       if (!current()) return;
       setOpen(false); setDetail(null); setEventToast(null);
       router.push(target.url);
       if (pathname === (mode === "live" ? "/live" : "/chronology")) window.dispatchEvent(new CustomEvent(CAMERA_EVENT_OPEN, { detail: { id: event.id, mode } }));
     });
+  }
+
+  function markOpened(event, current = captureAuthSession()) {
+    if (event.read || !current()) return;
+    const pending = openedReads.current;
+    if (!pending.has(event.id)) {
+      pending.set(event.id, apiFetch("/camera-events/read", {
+        method: "POST", headers, body: JSON.stringify({ ids: [event.id] }),
+      }).then(() => {
+        if (current()) setRefresh(n => n + 1);
+      }).catch(error => {
+        if (current()) showError(error);
+      }).finally(() => pending.delete(event.id)));
+    }
+    return pending.get(event.id);
+  }
+
+  function openPhoto(event) {
+    setDetail(event);
+    void markOpened(event);
   }
 
   async function readSelection(ids) {
@@ -310,7 +331,7 @@ export default function CameraEventsHub({ currentUser }) {
   }, [open, tab]);
   function rowActions(row, allowPhoto = false) {
     return <div className={`cameraEventsRowActions${allowPhoto ? " withPhoto" : ""}`}>
-      {allowPhoto ? <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.openPhoto")} aria-label={`${t("cameraEvents.openPhoto")}: ${row.camera_name}`} disabled={busy} onClick={() => setDetail(row)}><EventActionIcon action="photo"/></button> : null}
+      {allowPhoto ? <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.openPhoto")} aria-label={`${t("cameraEvents.openPhoto")}: ${row.camera_name}`} disabled={busy} onClick={() => openPhoto(row)}><EventActionIcon action="photo"/></button> : null}
       <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.watchNow")} aria-label={`${t("cameraEvents.watchNow")}: ${row.camera_name}`} disabled={busy || !row.camera_id} onClick={() => openEvent(row, "live")}><EventActionIcon action="live"/></button>
       {archive ? <button type="button" className="cameraEventsIconButton" title={t("cameraEvents.watchEvent")} aria-label={`${t("cameraEvents.watchEvent")}: ${row.camera_name}`} disabled={busy || !row.camera_id} onClick={() => openEvent(row, "archive")}><EventActionIcon action="archive"/></button> : null}</div>;
   }

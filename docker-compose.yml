@@ -189,7 +189,11 @@ services:
       - ./release:/app/release:ro
       - ./.km-vms-release.json:/app/.km-vms-release.json:ro
       - ./.km-vms-source.json:/app/.km-vms-source.json:ro
-      - ${SURVEILLANCE_ROOT}:/storage/archive
+      - type: bind
+        source: ${SURVEILLANCE_ROOT}
+        target: /storage/archive
+        bind:
+          create_host_path: false
       - ${KMVMS_HOST_DB_BACKUP_ROOT:-${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
     networks:
       - vms-net
@@ -271,7 +275,11 @@ services:
       LIVE_START_TIMEOUT_SECONDS: 20
       LIVE_MAX_CONCURRENT_TRANSCODES: 0
     volumes:
-      - ${SURVEILLANCE_ROOT}:/storage/archive
+      - type: bind
+        source: ${SURVEILLANCE_ROOT}
+        target: /storage/archive
+        bind:
+          create_host_path: false
       - ${KMVMS_HOST_DB_BACKUP_ROOT:-${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/install-control:/install-control
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-control:/update-control
@@ -409,6 +417,7 @@ services:
       dockerfile: Dockerfile
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-recorder
     restart: always
+    stop_grace_period: 90s
     depends_on:
       api:
         condition: service_healthy
@@ -426,7 +435,11 @@ services:
       LIVE_HWACCEL_MODE: ${LIVE_HWACCEL_MODE:-auto}
       AI_EVENT_ROOT: /storage/ai-events
     volumes:
-      - ${SURVEILLANCE_ROOT}:/storage/archive
+      - type: bind
+        source: ${SURVEILLANCE_ROOT}
+        target: /storage/archive
+        bind:
+          create_host_path: false
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/previews/.ai-events:/storage/ai-events
     networks:
       - vms-net

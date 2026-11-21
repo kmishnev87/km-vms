@@ -383,13 +383,19 @@ function cameraSourceWarnings(domain, items) {
     const cameras = asArray(issue.cameras);
     if (!cameras.length) continue;
     const ai = issue.kind === "ai";
+    const unreachable = !ai && issue.cause === "unreachable";
+    const cameraCount = cameras.filter((camera) => !camera.dependent).length;
     pushBanner(items, {
-      id: `camera-source-${issue.kind}-${issue.camera_id}`,
+      id: unreachable ? "camera-source-unreachable" : `camera-source-${issue.kind}-${issue.camera_id}`,
       domain: "cameras", severity: "warning", affected_count: cameras.length,
       source_issue: issue,
-      title: ai ? "AI не анализирует видео" : "Приём событий камеры прерван",
-      action: { href: `${ai ? "/ai-recording" : "/cameras"}#camera-${issue.camera_id}`,
-        label: ai ? "Открыть AI и запись" : "Открыть камеру" },
+      title: ai ? "AI не анализирует видео" : unreachable
+        ? (cameraCount > 1 ? "Камеры недоступны" : "Камера недоступна")
+        : issue.cause === "subscription" ? "Сбой приёма событий" : "Нет ответа по каналу событий",
+      action: unreachable ? {
+        href: cameraCount > 1 ? "/cameras" : `/cameras#camera-${issue.camera_id}`,
+        label: cameraCount > 1 ? "Открыть камеры" : "Открыть камеру",
+      } : { href: `/ai-recording#camera-${issue.camera_id}`, label: "Открыть AI и запись" },
     });
   }
 }

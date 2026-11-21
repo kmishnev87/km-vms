@@ -22,6 +22,7 @@ from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
     ROOT_RESOLUTION_PROBLEMS,
     VIDEO_EXTENSIONS,
+    archive_mount_offline,
     archive_root_for_segment,
     archive_root_physical_volume_id,
     archive_root_public_status,
@@ -107,7 +108,8 @@ def _segment_relative(segment: RecordingSegment, root: Path) -> tuple[str | None
 
 
 def _path_checks(root: Path) -> dict:
-    exists = root.exists()
+    offline = archive_mount_offline(root)
+    exists = not offline and root.exists()
     is_dir = root.is_dir() if exists else False
     readable = os.access(root, os.R_OK) if exists else False
     writable = os.access(root, os.W_OK) if exists else False
@@ -140,7 +142,7 @@ def _path_checks(root: Path) -> dict:
         "permission_error": error if error and "not_" in error else None,
         "last_error": error,
         "status": status,
-        "storage_root_realpath": _safe_realpath(root),
+        "storage_root_realpath": None if offline else _safe_realpath(root),
     }
 
 

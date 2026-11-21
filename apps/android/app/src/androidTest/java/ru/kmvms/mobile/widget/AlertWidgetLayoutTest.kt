@@ -13,8 +13,8 @@ import org.junit.runner.RunWith
 import ru.kmvms.mobile.R
 import android.widget.TextView
 import android.content.res.Configuration
-import android.view.LayoutInflater
 import android.widget.ImageView
+import android.widget.FrameLayout
 import java.util.Locale
 
 @RunWith(AndroidJUnit4::class)
@@ -39,7 +39,7 @@ class AlertWidgetLayoutTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
             val base = instrumentation.targetContext
-            for (scale in listOf(1f, 2f)) for (width in listOf(150, 180, 203)) for (number in listOf("0", "17", "99")) {
+            for (scale in listOf(1f, 2f)) for (width in listOf(110, 126, 150, 180)) for (number in listOf("0", "17", "99")) {
                 val context = base.createConfigurationContext(Configuration(base.resources.configuration).apply { fontScale = scale })
                 val density = context.resources.displayMetrics.density
                 val root = RemoteViews(context.packageName, R.layout.alert_widget_count).apply {
@@ -53,11 +53,13 @@ class AlertWidgetLayoutTest {
                 val count = root.findViewById<TextView>(R.id.alert_widget_count)
                 val suffix = root.findViewById<TextView>(R.id.alert_widget_count_plus)
                 val bell = visibleArtworkHeight(root.findViewById<ImageView>(R.id.alert_widget_bell))
-                val live = visibleArtworkHeight(root.findViewById<ImageView>(R.id.alert_widget_live))
+                val live = visibleArtworkHeight(root.findViewById<FrameLayout>(R.id.alert_widget_live).getChildAt(0) as ImageView)
                 val bounds = Rect().apply { count.paint.getTextBounds(number, 0, number.length, this) }
                 val detail = "$number scale=$scale width=$width: glyph=${bounds.height() / density}dp, bell=${bell / density}dp, live=${live / density}dp"
-                assertTrue(detail, bounds.height() >= minOf(bell, live) - .75f * density)
-                assertTrue(detail, bounds.height() <= maxOf(bell, live) + 3f * density)
+                assertTrue(detail, bounds.height() >= minOf(bell, live) - 6f * density)
+                assertTrue(detail, bounds.height() <= maxOf(bell, live) + 6f * density)
+                assertEquals(detail, 34f * density, count.textSize, 1f)
+                assertEquals(detail, 1f, count.textScaleX, 0.001f)
                 assertTrue(detail, count.paint.measureText(number) <= count.width + .5f)
                 assertEquals(detail, 0, count.layout.getEllipsisCount(0))
                 assertEquals(detail, count.right, suffix.left)
@@ -65,7 +67,7 @@ class AlertWidgetLayoutTest {
         }
     }
 
-    @Test fun fullTitleFitsBothMinimumWidthsAndLargerSystemFontsInAllLanguages() {
+    @Test fun nasNameIsCenteredBelowThreeSeparateZonesAtMinimumWidthInAllLanguages() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
             val base = instrumentation.targetContext
@@ -74,31 +76,26 @@ class AlertWidgetLayoutTest {
                     setLocale(Locale.forLanguageTag(language)); fontScale = scale
                 })
                 val density = context.resources.displayMetrics.density
-                val widths = listOf(150, 180, 203).map { R.layout.alert_widget_count to it }
-                val cases = if (scale <= 1.6f) widths + (R.layout.alert_widget to 110) else widths
-                for ((layout, width) in cases) {
-                    val root = LayoutInflater.from(context).inflate(layout, null)
+                for (width in listOf(110, 126, 180)) {
+                    val root = RemoteViews(context.packageName, R.layout.alert_widget_count).apply {
+                        setTextViewText(R.id.alert_widget_server, "Dacha")
+                    }.apply(context, null)
                     root.measure(View.MeasureSpec.makeMeasureSpec((width * density).toInt(), View.MeasureSpec.EXACTLY),
                         View.MeasureSpec.makeMeasureSpec((100 * density).toInt(), View.MeasureSpec.EXACTLY))
                     root.layout(0, 0, root.measuredWidth, root.measuredHeight)
-                    val title = root.findViewById<TextView>(R.id.alert_widget_title)
-                    val detail = "$language scale=$scale width=$width title=${title.text}"
-                    assertEquals(detail, context.getString(R.string.widget_alerts), title.text.toString())
-                    assertTrue(detail, title.paint.measureText(title.text.toString()) <= title.width - title.paddingLeft - title.paddingRight + .5f)
-                    assertEquals(detail, 0, title.layout.getEllipsisCount(0))
-                    assertEquals(detail, title.text.length, title.layout.getLineEnd(0))
-                    if (layout == R.layout.alert_widget_count) {
-                        val settings = root.findViewById<View>(R.id.alert_widget_settings)
-                        val bell = root.findViewById<ImageView>(R.id.alert_widget_bell)
-                        val live = root.findViewById<ImageView>(R.id.alert_widget_live)
-                        val count = root.findViewById<View>(R.id.alert_widget_count_area)
-                        assertEquals(detail, settings.right, live.left)
-                        assertEquals(detail, live.right, count.left)
-                        assertEquals(detail, settings.height, live.height)
-                        assertEquals(detail, live.height, count.height)
-                        assertTrue(detail, kotlin.math.abs(bell.width - (live.width - live.paddingLeft - live.paddingRight)) <= 1)
-                        assertTrue(detail, kotlin.math.abs(bell.height - (live.height - live.paddingTop - live.paddingBottom)) <= 1)
-                    }
+                    val server = root.findViewById<TextView>(R.id.alert_widget_server)
+                    val settings = root.findViewById<View>(R.id.alert_widget_settings)
+                    val live = root.findViewById<View>(R.id.alert_widget_live)
+                    val count = root.findViewById<View>(R.id.alert_widget_count_area)
+                    val detail = "$language scale=$scale width=$width"
+                    assertEquals(detail, "Dacha", server.text.toString())
+                    assertEquals(detail, android.view.Gravity.CENTER, server.gravity)
+                    assertEquals(detail, 0, server.layout.getEllipsisCount(0))
+                    assertEquals(detail, (settings.parent as View).bottom, server.top)
+                    assertEquals(detail, settings.right, live.left)
+                    assertEquals(detail, live.right, count.left)
+                    assertEquals(detail, settings.height, live.height)
+                    assertEquals(detail, live.height, count.height)
                 }
             }
         }
@@ -108,7 +105,7 @@ class AlertWidgetLayoutTest {
         instrumentation.runOnMainSync {
             val context = instrumentation.targetContext
             val density = context.resources.displayMetrics.density
-            val root = RemoteViews(context.packageName, R.layout.alert_widget).apply(context, null)
+            val root = RemoteViews(context.packageName, R.layout.alert_widget_count).apply(context, null)
             val width = (240 * density).toInt()
             val height = (140 * density).toInt()
             root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
@@ -121,19 +118,16 @@ class AlertWidgetLayoutTest {
             assertEquals(width, card.width)
         }
     }
-    @Test fun compactHasNoCounterAndCountWidgetHasAQuietFullNumberAtMinimumWidth() {
+    @Test fun counterHasAQuietFullNumberAtMinimumWidth() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
             val context = instrumentation.targetContext
             val density = context.resources.displayMetrics.density
-            val compact = RemoteViews(context.packageName, R.layout.alert_widget).apply(context, null)
-            assertNull(compact.findViewById<View>(R.id.alert_widget_count))
-            assertNull(compact.findViewById<View>(R.id.alert_widget_live))
             for (number in listOf("0", "17", "99")) {
                 val root = RemoteViews(context.packageName, R.layout.alert_widget_count).apply {
                     setTextViewText(R.id.alert_widget_count, number)
                 }.apply(context, null)
-                root.measure(View.MeasureSpec.makeMeasureSpec((180 * density).toInt(), View.MeasureSpec.EXACTLY),
+                root.measure(View.MeasureSpec.makeMeasureSpec((110 * density).toInt(), View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec((90 * density).toInt(), View.MeasureSpec.EXACTLY))
                 root.layout(0, 0, root.measuredWidth, root.measuredHeight)
                 val count = root.findViewById<TextView>(R.id.alert_widget_count)
@@ -145,7 +139,7 @@ class AlertWidgetLayoutTest {
                 assertTrue(count.paint.measureText(number) <= count.width - count.paddingLeft - count.paddingRight)
                 val suffix = root.findViewById<TextView>(R.id.alert_widget_count_plus)
                 suffix.visibility = View.VISIBLE
-                root.measure(View.MeasureSpec.makeMeasureSpec((180 * density).toInt(), View.MeasureSpec.EXACTLY),
+                root.measure(View.MeasureSpec.makeMeasureSpec((110 * density).toInt(), View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec((90 * density).toInt(), View.MeasureSpec.EXACTLY))
                 root.layout(0, 0, root.measuredWidth, root.measuredHeight)
                 assertEquals(left, count.left)

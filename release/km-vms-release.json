@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "1.0.6",
-  "tag": "v1.0.6",
-  "title": "KM VMS 1.0.6 — Multi-disk recording and safer archive moves",
-  "summary": "Assign cameras to different archive folders or disks and browse all footage in one timeline. This release adds optional storage failover, safer folder removal, and better event images on Android 0.8.18.",
+  "version": "1.0.7",
+  "tag": "v1.0.7",
+  "title": "KM VMS 1.0.7 — Reliable alerts and storage recovery",
+  "summary": "See event photos on Huawei, keep mobile alerts through temporary DNS failures, and start KM VMS when an archive volume is missing. Includes Android 0.8.19.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v1.0.6",
+  "source_ref": "v1.0.7",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,51 +20,55 @@
     "target_version": 16
   },
   "changelog": [
-    "Record to multiple archive folders at once. Set destinations in Cameras or Storage and view all footage together in Recordings and Chronology.",
-    "When a camera changes folders, choose whether to move its existing footage in the background. Completion appears as a brief notification without shifting the Storage page.",
-    "Retire an archive folder from a single dialog. Choose a replacement for assigned cameras, then move the recordings or separately confirm exactly how many will be deleted.",
-    "Optional failover records to the healthy volume with the most free space, then returns after recovery. It is off by default and doesn't move old footage.",
-    "If a NAS AI scene change opens a PTZ episode, the photo waits at least one second, but recording doesn't. An opening object detection still takes the normal snapshot.",
-    "Android 0.8.18 allows more time to load a photo before posting one alert, retains text fallback, and gives the 3×1 widget counter the same visual height as its icons.",
-    "The web event snapshot button works for both sources without closing event history. Storage controls and the Next recording button are aligned."
+    "Expand an Android alert on Huawei to see the event photo. The Live and Recording actions remain available.",
+    "Temporary DNS failures no longer disable mobile push. NAS retries delivery; Android can recover an incorrectly disabled registration without overriding your choice.",
+    "One 2×1 widget replaces the two previous layouts. It shows the NAS name and provides separate controls for notification settings, Live, and unread events.",
+    "Android opens System Health from Settings. The AI & Recording tile remains on Home; duplicate icons were removed.",
+    "Opening an event snapshot in web or Android history marks only that event as read for the current user.",
+    "System Health distinguishes offline cameras, subscription failures, and event-only timeouts. Subscription warnings open the camera in AI & Recording.",
+    "A temporary queue failure no longer discards the first AI event of an episode. The recorder retries with its original time and photo.",
+    "KM VMS starts even when an archive volume is missing. Healthy volumes keep working, and optional failover allows recording without moving existing footage."
   ],
   "title_i18n": {
-    "en": "KM VMS 1.0.6 — Multi-disk recording and safer archive moves",
-    "ru": "KM VMS 1.0.6 — Запись на несколько дисков и безопасный перенос архива",
-    "zh-CN": "KM VMS 1.0.6 — 多盘录像与更安全的存档迁移"
+    "en": "KM VMS 1.0.7 — Reliable alerts and storage recovery",
+    "ru": "KM VMS 1.0.7 — Надёжные оповещения и восстановление хранилища",
+    "zh-CN": "KM VMS 1.0.7 — 更可靠的告警与存储恢复"
   },
   "summary_i18n": {
-    "en": "Assign cameras to different archive folders or disks and browse all footage in one timeline. This release adds optional storage failover, safer folder removal, and better event images on Android 0.8.18.",
-    "ru": "Назначайте камерам разные папки или диски архива и смотрите все записи на одной шкале. Добавлены опциональная аварийная запись, безопасное отключение папок и улучшения снимков в Android 0.8.18.",
-    "zh-CN": "可为摄像机分配不同的存档文件夹或磁盘，并在同一时间线上查看录像。本版新增可选的存储故障转移、更安全的文件夹移除，并改进 Android 0.8.18 的事件图片。"
+    "en": "See event photos on Huawei, keep mobile alerts through temporary DNS failures, and start KM VMS when an archive volume is missing. Includes Android 0.8.19.",
+    "ru": "Снимки в оповещениях Huawei, сохранение мобильной доставки при временном сбое DNS и запуск KM VMS без архивного тома. Включает APK 0.8.19.",
+    "zh-CN": "在华为手机上查看事件图片，临时 DNS 故障不再关闭移动推送，缺少存档卷时仍可启动 KM VMS。包含 Android 0.8.19。"
   },
   "changelog_i18n": {
     "en": [
-      "Record to multiple archive folders at once. Set destinations in Cameras or Storage and view all footage together in Recordings and Chronology.",
-      "When a camera changes folders, choose whether to move its existing footage in the background. Completion appears as a brief notification without shifting the Storage page.",
-      "Retire an archive folder from a single dialog. Choose a replacement for assigned cameras, then move the recordings or separately confirm exactly how many will be deleted.",
-      "Optional failover records to the healthy volume with the most free space, then returns after recovery. It is off by default and doesn't move old footage.",
-      "If a NAS AI scene change opens a PTZ episode, the photo waits at least one second, but recording doesn't. An opening object detection still takes the normal snapshot.",
-      "Android 0.8.18 allows more time to load a photo before posting one alert, retains text fallback, and gives the 3×1 widget counter the same visual height as its icons.",
-      "The web event snapshot button works for both sources without closing event history. Storage controls and the Next recording button are aligned."
+      "Expand an Android alert on Huawei to see the event photo. The Live and Recording actions remain available.",
+      "Temporary DNS failures no longer disable mobile push. NAS retries delivery; Android can recover an incorrectly disabled registration without overriding your choice.",
+      "One 2×1 widget replaces the two previous layouts. It shows the NAS name and provides separate controls for notification settings, Live, and unread events.",
+      "Android opens System Health from Settings. The AI & Recording tile remains on Home; duplicate icons were removed.",
+      "Opening an event snapshot in web or Android history marks only that event as read for the current user.",
+      "System Health distinguishes offline cameras, subscription failures, and event-only timeouts. Subscription warnings open the camera in AI & Recording.",
+      "A temporary queue failure no longer discards the first AI event of an episode. The recorder retries with its original time and photo.",
+      "KM VMS starts even when an archive volume is missing. Healthy volumes keep working, and optional failover allows recording without moving existing footage."
     ],
     "ru": [
-      "Несколько папок архива готовы к записи одновременно. Назначайте их покамерно или общей таблицей; старые и новые файлы видны вместе в «Записях» и «Хронологии».",
-      "При смене папки можно перенести старые записи в фоне. О завершении сообщает короткое всплывающее сообщение без сдвига блоков «Хранилища».",
-      "При отключении папки с камерами можно сразу выбрать ей замену. Старые записи переносятся по выбору; их удаление требует отдельного подтверждения с точным количеством.",
-      "Аварийная запись выбирает исправный том с наибольшим свободным местом и возвращается после восстановления. По умолчанию она выключена; старые записи не переносит.",
-      "Если эпизод PTZ открыло событие «Крупная смена сцены» от AI на NAS, снимок ждёт не менее секунды, но запись не задерживается. Для первого обнаружения объекта задержки нет.",
-      "Android 0.8.18 чуть дольше ждёт загрузки снимка перед единственным оповещением. Без кадра приходит текст. Высота цифр счётчика виджета 3×1 согласована с иконками.",
-      "Кнопка снимка в вебе работает для обоих источников и не закрывает историю событий. Элементы «Хранилища» и значок перехода к следующей записи выровнены."
+      "На Huawei снимок события отображается после раскрытия уведомления. Кнопки «Онлайн» и «Запись» остаются.",
+      "Временный сбой DNS больше не отключает доставку на телефон. NAS повторяет отправку, а Android может восстановить ошибочно снятую регистрацию, не отменяя ручное выключение.",
+      "Один виджет 2×1 заменяет два прежних. Видно имя NAS; отдельно открываются настройки оповещений, «Онлайн» и непросмотренные события.",
+      "В Android «Состояние системы» открывается из настроек. Плитка «AI и запись» осталась на главной; дублирующие значки убраны.",
+      "Открытие снимка в истории веба или Android отмечает прочитанным только это событие и только для текущего пользователя.",
+      "«Состояние системы» отличает недоступную камеру от сбоя подписки и от отсутствия ответа только по каналу событий. Сбой подписки ведёт к камере в «AI и запись».",
+      "Временный сбой очереди больше не отбрасывает первое AI-событие эпизода. Recorder повторяет передачу с исходным моментом и снимком.",
+      "KM VMS запускается без архивного тома. Исправные тома работают, а при включённой аварийной записи возможен переход на другой том без переноса старых записей."
     ],
     "zh-CN": [
-      "多个存档文件夹可同时录制。可按摄像机分配，也可在存储页面批量修改。新旧录像仍可在录像列表和时间线中一起查看。",
-      "更换摄像机的存档文件夹时可选择后台迁移现有录像。完成时短暂提示，不改变存储页面布局。",
-      "可在同一对话框移除存档文件夹并为关联摄像机选择替代文件夹。可选择迁移录像，或单独确认要删除的准确数量。",
-      "可选存储故障转移启用后，新录像写入剩余空间最多的健康存储卷，原位置恢复后自动返回。默认关闭，不迁移已有录像。",
-      "如果 NAS AI 检测到的重大场景变化开启 PTZ 事件，至少等待一秒再取图，录像不延迟。若事件由对象检测开启，则按正常方式取图。",
-      "Android 0.8.18 在发布一条通知前给图片更多加载时间，图片不可用时仍发送文字通知。3×1 小组件的数字与图标视觉高度一致。",
-      "网页的事件图片按钮适用于两种来源，打开图片时不会关闭事件历史。存储控件和下一段录像图标已对齐。"
+      "在华为手机上展开通知即可查看事件图片，仍可打开实时画面或录像。",
+      "临时 DNS 故障不再关闭手机推送。NAS 会重试，Android 可恢复误停用的注册，但不会重新开启用户主动关闭的通知。",
+      "一个 2×1 小组件替代原有两个布局，显示 NAS 名称，并分别打开通知设置、实时画面和未读事件。",
+      "Android 从设置首页进入系统状态。主页保留 AI 与录像入口，并移除重复图标。",
+      "在网页或 Android 历史中打开图片时，仅为当前用户将对应事件标记为已读。",
+      "系统状态可区分摄像机离线、在线摄像机订阅故障和仅事件通道无响应。订阅故障可跳到该摄像机的 AI 与录像设置。",
+      "临时队列故障不会丢弃 AI 事件片段的首次触发。录像服务会保留原始时间和图片后重试。",
+      "缺少存档卷时 KM VMS 仍可启动。健康卷继续工作，启用存储故障转移后可写入其他卷，不移动既有录像。"
     ]
   }
 }

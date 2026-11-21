@@ -3285,11 +3285,110 @@ def converge_unhandled_restore_failure(
     return _restore_operation_handler().converge_unhandled_restore_failure(request, reason_code=reason_code)
 
 
+def archive_provision_pending(install_control: Path) -> bool:
+    request = install_control / "storage-root-provision-request.control"
+    if not request.is_file():
+        return False
+    if request.is_symlink() or request.stat().st_size > 4096:
+        return True
+    values = dict(line.split("=", 1) for line in request.read_text(encoding="utf-8").splitlines() if "=" in line)
+    try:
+        if not values.get("request_id") or int(values.get("expires_at", 0)) <= time.time():
+            return False
+    except ValueError:
+        return True
+    result = read_json(install_control / "storage-root-provision-result.json") or {}
+    return (result.get("request_id") != values["request_id"] or result.get("root_id") != values.get("root_id")
+            or result.get("status") not in {"completed", "failed"})
+
+
+@contextmanager
+def archive_recovery_mutation_guard(app_dir: Path):
+    control = app_dir / "data/install-control"
+    if control.is_symlink() or not control.is_dir():
+        yield False
+        return
+    path = control / "archive-root-mutation.lock"
+    owner = "archive-mount-" + uuid.uuid4().hex
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        yield False
+        return
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            # Same exclusion as operator-driven archive activation/removal.
+            json.dump({"owner": owner, "purpose": "archive_mount_recovery",
+                       "operation_id": None, "acquired_at": utcnow()}, stream)
+        yield not archive_provision_pending(control)
+    finally:
+        if (read_json(path) or {}).get("owner") == owner:
+            path.unlink(missing_ok=True)
+
+
+class ArchiveMountRecovery:
+    # This piggybacks on the existing helper loop, not a new process/timer.
+    # No Docker or host probes while a healthy plan is unchanged.
+    def __init__(self):
+        self.next_check = 0.0
+        self.last_evidence = None
+        self.pending = True
+        self.returning = None
+        self.failures = 0
+        self.bridge = None
+        self.boot_recovery = True
+        self.started_at = time.monotonic()
+
+    def tick(self, *, now=None):
+        now = time.monotonic() if now is None else now
+        if now < self.next_check:
+            return
+        self.next_check = now + 15
+        try:
+            app_dir = compose_app_dir()
+            evidence = app_dir / "data/update-runtime/archive-authority/mount-evidence.json"
+            stamp = evidence.stat().st_mtime_ns if evidence.exists() else None
+            if not self.pending and stamp == self.last_evidence:
+                return
+            with admission_guard():
+                if request_may_need_execution() or restore_request_may_need_execution():
+                    return
+                with archive_recovery_mutation_guard(app_dir) as acquired:
+                    if not acquired:
+                        return
+                    if self.bridge is None:
+                        spec = importlib.util.spec_from_file_location(
+                            "km_vms_archive_recovery_bridge", Path(__file__).with_name("km-vms-update-helper-bridge.py")
+                        )
+                        if spec is None or spec.loader is None:
+                            raise RuntimeError("archive_recovery_bridge_unavailable")
+                        module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(module)
+                        self.bridge = module
+                    self.pending, self.returning = self.bridge.reconcile_archive_mounts(
+                        app_dir, resolve_helper_project_name(app_dir), returning=self.returning,
+                        now=now, boot_recovery=self.boot_recovery and now - self.started_at < 600,
+                    )
+                    self.last_evidence = evidence.stat().st_mtime_ns if evidence.exists() else None
+                    if not self.pending or self.returning:
+                        self.boot_recovery = False
+            self.failures = 0
+            if self.pending:
+                self.next_check = now + (30 if self.returning else 60)
+        except Exception:
+            if self.failures == 0:
+                print("archive_mount_recovery=deferred", file=sys.stderr, flush=True)
+            self.failures = min(4, self.failures + 1)
+            self.pending = True
+            self.next_check = now + min(300, 30 * 2 ** self.failures)
+
+
 def main() -> int:
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     RESTORE_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     RESTORE_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
     MAINTENANCE_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    archive_recovery = ArchiveMountRecovery()
     while True:
         try:
             if (CONTROL_DIR / "diagnostic-logs" / "request.json").is_file():
@@ -3343,6 +3442,7 @@ def main() -> int:
             continue
         try:
             if not request_may_need_execution():
+                archive_recovery.tick()
                 time.sleep(POLL_SECONDS)
                 continue
         except HelperError:
